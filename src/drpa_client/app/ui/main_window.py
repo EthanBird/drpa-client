@@ -10,6 +10,7 @@ from PySide6.QtCore import QDate, QObject, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QAbstractScrollArea,
     QCheckBox,
     QComboBox,
     QDateEdit,
@@ -25,7 +26,11 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QHeaderView,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
+    QSplitter,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -238,7 +243,11 @@ class DashboardPage(Page):
         self.health_stats = QLabel()
         self.recent_runs = QTableWidget(0, 4)
         self.recent_runs.setHorizontalHeaderLabels(["时间", "脚本包", "状态", "退出码"])
-        self.recent_runs.horizontalHeader().setStretchLastSection(True)
+        self.recent_runs.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.recent_runs.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.recent_runs.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.recent_runs.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.recent_runs.verticalHeader().setVisible(False)
         self.recent_runs.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         hero = Card()
@@ -360,7 +369,13 @@ class PackagesPage(Page):
 
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["名称", "ID", "版本", "Manifest Runtime", "安装策略", "目录"])
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
@@ -587,15 +602,20 @@ class TasksPage(Page):
         self.param_widgets: dict[str, QWidget] = {}
 
         card = Card()
-        body = QHBoxLayout()
-        body.setSpacing(18)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
 
         self.package_list = QListWidget()
         self.package_list.setObjectName("PackageList")
-        self.package_list.setMinimumWidth(300)
-        self.package_list.setMaximumWidth(360)
+        self.package_list.setMinimumWidth(260)
 
-        left_panel = QVBoxLayout()
+        left_widget = QWidget()
+        left_widget.setObjectName("TaskLeftPanel")
+        left_widget.setMinimumWidth(280)
+        left_widget.setMaximumWidth(360)
+        left_panel = QVBoxLayout(left_widget)
+        left_panel.setContentsMargins(0, 0, 0, 0)
+        left_panel.setSpacing(10)
         list_title = QLabel("可运行脚本包")
         list_title.setObjectName("SectionTitle")
         self.package_hint = QLabel("选择一个脚本包后，右侧会显示参数和运行日志。")
@@ -606,7 +626,20 @@ class TasksPage(Page):
         left_panel.addWidget(self.package_list, 1)
         left_panel.addWidget(self.refresh_button)
 
-        right_panel = QVBoxLayout()
+        right_widget = QWidget()
+        right_panel = QVBoxLayout(right_widget)
+        right_panel.setContentsMargins(0, 0, 0, 0)
+        right_panel.setSpacing(12)
+
+        detail_scroll = QScrollArea()
+        detail_scroll.setObjectName("ContentScroll")
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setMinimumHeight(280)
+        detail_content = QWidget()
+        detail_layout = QVBoxLayout(detail_content)
+        detail_layout.setContentsMargins(2, 2, 10, 2)
+        detail_layout.setSpacing(12)
+
         self.selected_title = QLabel("尚未选择脚本包")
         self.selected_title.setObjectName("SectionTitle")
         self.selected_description = QLabel("请从左侧列表选择要运行的 RPA 脚本包。")
@@ -614,11 +647,23 @@ class TasksPage(Page):
         self.selected_description.setWordWrap(True)
         self.param_table = QTableWidget(0, 5)
         self.param_table.setHorizontalHeaderLabels(["参数名", "类型", "必填", "默认值", "说明"])
-        self.param_table.horizontalHeader().setStretchLastSection(True)
+        self.param_table.setMinimumHeight(150)
+        self.param_table.setMaximumHeight(260)
+        self.param_table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
+        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.param_table.verticalHeader().setVisible(False)
+        self.param_table.setWordWrap(True)
         self.param_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.param_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.param_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.form = QFormLayout()
         self.form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self.run_button = QPushButton("运行")
         self.run_button.setObjectName("PrimaryButton")
@@ -632,20 +677,28 @@ class TasksPage(Page):
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(260)
+        self.log.setMinimumHeight(180)
+        self.log.setMaximumHeight(320)
 
-        right_panel.addWidget(self.selected_title)
-        right_panel.addWidget(self.selected_description)
-        right_panel.addWidget(QLabel("参数表"))
-        right_panel.addWidget(self.param_table)
-        right_panel.addWidget(QLabel("运行参数"))
-        right_panel.addLayout(self.form)
+        detail_layout.addWidget(self.selected_title)
+        detail_layout.addWidget(self.selected_description)
+        detail_layout.addWidget(QLabel("参数表"))
+        detail_layout.addWidget(self.param_table)
+        detail_layout.addWidget(QLabel("运行参数"))
+        detail_layout.addLayout(self.form)
+        detail_layout.addStretch(1)
+        detail_scroll.setWidget(detail_content)
+
+        right_panel.addWidget(detail_scroll, 3)
         right_panel.addLayout(buttons)
         right_panel.addWidget(self.log, 1)
 
-        body.addLayout(left_panel)
-        body.addLayout(right_panel, 1)
-        card.layout.addLayout(body)
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([320, 820])
+        card.layout.addWidget(splitter)
         self.content.addWidget(card, 1)
 
         self.package_list.currentRowChanged.connect(self._render_params)
@@ -719,6 +772,7 @@ class TasksPage(Page):
                     widget.setEchoMode(QLineEdit.EchoMode.Password)
                 if param.default is not None:
                     widget.setText(str(param.default))
+            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             widget.setToolTip(param.description)
             self.param_widgets[param.name] = widget
             label = f"{param.label}{' *' if param.required else ''}"
@@ -737,6 +791,7 @@ class TasksPage(Page):
             ]
             for column, value in enumerate(values):
                 self.param_table.setItem(row, column, QTableWidgetItem(value))
+        self.param_table.resizeRowsToContents()
 
     def _selected_package(self) -> InstalledPackage | None:
         index = self.package_list.currentRow()
@@ -1099,7 +1154,15 @@ class HistoryPage(Page):
         self.table.setHorizontalHeaderLabels(
             ["开始时间", "脚本包", "版本", "状态", "退出码", "结束时间", "输出目录", "日志文件"]
         )
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
