@@ -4,12 +4,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QDate, QObject, Qt, QThread, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDateEdit,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -21,7 +23,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QScrollArea,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from drpa_client.core.database import RunStore
 from drpa_client.core.models import InstalledPackage, TaskEvent
 from drpa_client.core.package_manager import PackageManager
 from drpa_client.core.paths import get_data_dir
@@ -43,7 +46,8 @@ class MainWindow(QMainWindow):
         self.resize(1180, 760)
 
         self.package_manager = PackageManager()
-        self.task_runner = TaskRunner()
+        self.run_store = RunStore()
+        self.task_runner = TaskRunner(run_store=self.run_store)
 
         root = QWidget()
         root_layout = QHBoxLayout(root)
@@ -53,15 +57,17 @@ class MainWindow(QMainWindow):
         self.sidebar = Sidebar()
         self.stack = QStackedWidget()
 
-        self.dashboard_page = DashboardPage(self.package_manager)
+        self.dashboard_page = DashboardPage(self.package_manager, self.run_store)
         self.packages_page = PackagesPage(self.package_manager)
         self.tasks_page = TasksPage(self.package_manager, self.task_runner)
+        self.history_page = HistoryPage(self.run_store)
         self.settings_page = SettingsPage()
 
         for page in (
             self.dashboard_page,
             self.packages_page,
             self.tasks_page,
+            self.history_page,
             self.settings_page,
         ):
             self.stack.addWidget(page)
@@ -72,6 +78,7 @@ class MainWindow(QMainWindow):
 
         self.sidebar.currentRowChanged.connect(self._change_page)
         self.packages_page.packages_changed.connect(self._refresh_all)
+        self.tasks_page.run_finished.connect(self._refresh_history)
         self.sidebar.setCurrentRow(0)
 
     def _change_page(self, index: int) -> None:
@@ -80,10 +87,17 @@ class MainWindow(QMainWindow):
             self.dashboard_page.refresh()
         elif index == 2:
             self.tasks_page.refresh_packages()
+        elif index == 3:
+            self.history_page.refresh()
 
     def _refresh_all(self) -> None:
         self.dashboard_page.refresh()
         self.tasks_page.refresh_packages()
+        self.history_page.refresh()
+
+    def _refresh_history(self) -> None:
+        self.dashboard_page.refresh()
+        self.history_page.refresh()
 
 
 class Sidebar(QListWidget):
@@ -93,7 +107,7 @@ class Sidebar(QListWidget):
         self.setFixedWidth(220)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setSpacing(8)
-        for title in ("首页", "脚本包", "运行任务", "设置"):
+        for title in ("首页", "脚本包", "运行任务", "运行历史", "设置"):
             item = QListWidgetItem(title)
             item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
             item.setSizeHint(item.sizeHint().expandedTo(item.sizeHint() * 1.6))
@@ -126,18 +140,32 @@ class Card(QFrame):
 
 
 class DashboardPage(Page):
-    def __init__(self, package_manager: PackageManager):
+    def __init__(self, package_manager: PackageManager, run_store: RunStore):
         super().__init__("DRPA Client", "轻量级 Python RPA Worker，支持脚本包安装、依赖隔离和跨平台运行。")
         self.package_manager = package_manager
-        self.stats = QLabel()
-        self.stats.setObjectName("HeroNumber")
+        self.run_store = run_store
+        self.package_stats = QLabel()
+        self.package_stats.setObjectName("HeroNumber")
+        self.run_stats = QLabel()
+        self.run_stats.setObjectName("HeroNumber")
+        self.health_stats = QLabel()
 
         card = Card()
-        card.layout.addWidget(QLabel("当前状态"))
-        card.layout.addWidget(self.stats)
+        stats_row = QHBoxLayout()
+        package_box = QVBoxLayout()
+        package_box.addWidget(QLabel("已安装脚本包"))
+        package_box.addWidget(self.package_stats)
+        run_box = QVBoxLayout()
+        run_box.addWidget(QLabel("历史运行次数"))
+        run_box.addWidget(self.run_stats)
+        stats_row.addLayout(package_box)
+        stats_row.addLayout(run_box)
+        stats_row.addStretch(1)
+        card.layout.addLayout(stats_row)
+        card.layout.addWidget(self.health_stats)
         card.layout.addWidget(
             QLabel(
-                "已内置脚本包 manifest、独立 venv、离线 wheels、JSON Lines 任务事件和 PySide6 桌面框架。"
+                "当前版本已具备脚本包安装、独立 venv、离线 wheels、运行历史、进程树停止和 PySide6 桌面框架。"
             )
         )
         self.content.addWidget(card)
@@ -145,8 +173,13 @@ class DashboardPage(Page):
         self.refresh()
 
     def refresh(self) -> None:
-        count = len(self.package_manager.list_installed())
-        self.stats.setText(f"{count} 个脚本包已安装")
+        package_count = len(self.package_manager.list_installed())
+        total_runs = len(self.run_store.list_runs(limit=10000))
+        failed_runs = self.run_store.count_by_status(["failed"])
+        success_runs = self.run_store.count_by_status(["success"])
+        self.package_stats.setText(str(package_count))
+        self.run_stats.setText(str(total_runs))
+        self.health_stats.setText(f"成功 {success_runs} 次 / 失败 {failed_runs} 次")
 
 
 class PackagesPage(Page):
@@ -161,14 +194,18 @@ class PackagesPage(Page):
         toolbar = QHBoxLayout()
         self.install_button = QPushButton("安装脚本包")
         self.install_button.setObjectName("PrimaryButton")
+        self.rebuild_button = QPushButton("重建环境")
+        self.uninstall_button = QPushButton("卸载")
         self.install_dependencies = QCheckBox("安装依赖")
         self.install_dependencies.setChecked(True)
         toolbar.addWidget(self.install_button)
+        toolbar.addWidget(self.rebuild_button)
+        toolbar.addWidget(self.uninstall_button)
         toolbar.addWidget(self.install_dependencies)
         toolbar.addStretch(1)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["名称", "ID", "版本", "目录"])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["名称", "ID", "版本", "Runtime", "目录"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -184,6 +221,8 @@ class PackagesPage(Page):
         self.content.addWidget(card, 1)
 
         self.install_button.clicked.connect(self._choose_package)
+        self.rebuild_button.clicked.connect(self._rebuild_selected)
+        self.uninstall_button.clicked.connect(self._uninstall_selected)
         self.refresh()
 
     def refresh(self) -> None:
@@ -194,6 +233,7 @@ class PackagesPage(Page):
                 package.manifest.name,
                 package.manifest.id,
                 package.manifest.version,
+                package.manifest.runtime.isolation,
                 str(package.root_dir),
             ]
             for column, value in enumerate(values):
@@ -212,6 +252,8 @@ class PackagesPage(Page):
 
     def _install_package(self, path: Path) -> None:
         self.install_button.setEnabled(False)
+        self.rebuild_button.setEnabled(False)
+        self.uninstall_button.setEnabled(False)
         self.install_log.append(f"开始安装：{path}")
         self.worker_thread = QThread()
         self.worker = PackageInstallWorker(
@@ -232,14 +274,69 @@ class PackagesPage(Page):
 
     def _install_finished(self, package_name: str) -> None:
         self.install_button.setEnabled(True)
+        self.rebuild_button.setEnabled(True)
+        self.uninstall_button.setEnabled(True)
         self.install_log.append(f"安装完成：{package_name}")
         self.refresh()
         self.packages_changed.emit()
 
     def _install_failed(self, message: str) -> None:
         self.install_button.setEnabled(True)
+        self.rebuild_button.setEnabled(True)
+        self.uninstall_button.setEnabled(True)
         self.install_log.append(f"安装失败：{message}")
         QMessageBox.critical(self, "安装失败", message)
+
+    def _selected_package(self) -> InstalledPackage | None:
+        row = self.table.currentRow()
+        packages = self.package_manager.list_installed()
+        if row < 0 or row >= len(packages):
+            return None
+        return packages[row]
+
+    def _rebuild_selected(self) -> None:
+        package = self._selected_package()
+        if package is None:
+            QMessageBox.information(self, "请选择脚本包", "请先在表格中选择一个脚本包。")
+            return
+        self.install_button.setEnabled(False)
+        self.rebuild_button.setEnabled(False)
+        self.uninstall_button.setEnabled(False)
+        self.install_log.append(f"开始重建环境：{package.display_name}")
+        self.worker_thread = QThread()
+        self.worker = PackageInstallWorker(
+            self.package_manager,
+            package=package,
+            install_dependencies=self.install_dependencies.isChecked(),
+            mode="rebuild",
+        )
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.message.connect(self.install_log.append)
+        self.worker.finished.connect(self._install_finished)
+        self.worker.failed.connect(self._install_failed)
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.failed.connect(self.worker_thread.quit)
+        self.worker_thread.finished.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.start()
+
+    def _uninstall_selected(self) -> None:
+        package = self._selected_package()
+        if package is None:
+            QMessageBox.information(self, "请选择脚本包", "请先在表格中选择一个脚本包。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "确认卸载",
+            f"确定卸载 {package.display_name}？这会删除脚本包目录和虚拟环境。",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.package_manager.uninstall(package)
+        self.install_log.append(f"已卸载：{package.display_name}")
+        self.refresh()
+        self.packages_changed.emit()
 
 
 class PackageInstallWorker(QObject):
@@ -247,22 +344,48 @@ class PackageInstallWorker(QObject):
     finished = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, manager: PackageManager, path: Path, install_dependencies: bool):
+    def __init__(
+        self,
+        manager: PackageManager,
+        path: Path | None = None,
+        install_dependencies: bool = True,
+        package: InstalledPackage | None = None,
+        mode: str = "install",
+    ):
         super().__init__()
         self.manager = manager
         self.path = path
         self.install_dependencies = install_dependencies
+        self.package = package
+        self.mode = mode
 
     def run(self) -> None:
         try:
-            self.message.emit("正在解压和校验 manifest...")
-            package = self.manager.install_archive(self.path, self.install_dependencies)
+            if self.mode == "rebuild":
+                if self.package is None:
+                    raise RuntimeError("重建环境缺少脚本包")
+                package = self.manager.rebuild_environment(
+                    self.package,
+                    self.install_dependencies,
+                    log=self.message.emit,
+                )
+            else:
+                if self.path is None:
+                    raise RuntimeError("安装缺少脚本包路径")
+                self.message.emit("正在解压和校验 manifest...")
+                package = self.manager.install_archive(
+                    self.path,
+                    self.install_dependencies,
+                    log=self.message.emit,
+                )
             self.finished.emit(package.display_name)
         except Exception as exc:  # noqa: BLE001 - surfaced to UI
             self.failed.emit(str(exc))
 
 
 class TasksPage(Page):
+    run_finished = Signal()
+
     def __init__(self, package_manager: PackageManager, task_runner: TaskRunner):
         super().__init__("运行任务", "选择脚本包、填写参数并启动 RPA，实时查看结构化日志。")
         self.package_manager = package_manager
@@ -327,6 +450,25 @@ class TasksPage(Page):
                 widget: QWidget = QCheckBox()
                 if param.default is not None:
                     widget.setChecked(bool(param.default))
+            elif param.type == "integer":
+                widget = QSpinBox()
+                widget.setRange(-2_147_483_648, 2_147_483_647)
+                if param.default is not None:
+                    widget.setValue(int(param.default))
+            elif param.type == "number":
+                widget = QDoubleSpinBox()
+                widget.setRange(-1_000_000_000, 1_000_000_000)
+                widget.setDecimals(4)
+                if param.default is not None:
+                    widget.setValue(float(param.default))
+            elif param.type == "date":
+                widget = QDateEdit()
+                widget.setCalendarPopup(True)
+                widget.setDisplayFormat("yyyy-MM-dd")
+                if param.default:
+                    widget.setDate(QDate.fromString(str(param.default), "yyyy-MM-dd"))
+                else:
+                    widget.setDate(QDate.currentDate())
             else:
                 widget = QLineEdit()
                 if param.type == "password":
@@ -349,14 +491,36 @@ class TasksPage(Page):
         for name, widget in self.param_widgets.items():
             if isinstance(widget, QCheckBox):
                 params[name] = widget.isChecked()
+            elif isinstance(widget, QSpinBox):
+                params[name] = widget.value()
+            elif isinstance(widget, QDoubleSpinBox):
+                params[name] = widget.value()
+            elif isinstance(widget, QDateEdit):
+                params[name] = widget.date().toString("yyyy-MM-dd")
             elif isinstance(widget, QLineEdit):
                 params[name] = widget.text()
         return params
+
+    def _validate_params(self, package: InstalledPackage) -> bool:
+        params = self._collect_params()
+        missing = []
+        for param in package.manifest.params:
+            if not param.required:
+                continue
+            value = params.get(param.name)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                missing.append(param.label)
+        if missing:
+            QMessageBox.warning(self, "参数不完整", "请填写必填参数：" + "、".join(missing))
+            return False
+        return True
 
     def _run(self) -> None:
         package = self._selected_package()
         if package is None:
             QMessageBox.warning(self, "无法运行", "请先安装脚本包")
+            return
+        if not self._validate_params(package):
             return
         self.log.clear()
         self.run_button.setEnabled(False)
@@ -391,6 +555,7 @@ class TasksPage(Page):
             self.run_button.setEnabled(True)
             self.stop_button.setEnabled(False)
             self.current_task = None
+            self.run_finished.emit()
         else:
             self.log.append(json.dumps(payload, ensure_ascii=False))
 
@@ -400,6 +565,50 @@ class TaskEventBridge(QObject):
 
     def emit_event(self, event: TaskEvent) -> None:
         self.event.emit(event)
+
+
+class HistoryPage(Page):
+    def __init__(self, run_store: RunStore):
+        super().__init__("运行历史", "查看最近任务运行状态、日志路径和输出目录。")
+        self.run_store = run_store
+
+        toolbar = QHBoxLayout()
+        self.refresh_button = QPushButton("刷新")
+        toolbar.addWidget(self.refresh_button)
+        toolbar.addStretch(1)
+
+        self.table = QTableWidget(0, 8)
+        self.table.setHorizontalHeaderLabels(
+            ["开始时间", "脚本包", "版本", "状态", "退出码", "结束时间", "输出目录", "日志文件"]
+        )
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+        card = Card()
+        card.layout.addLayout(toolbar)
+        card.layout.addWidget(self.table)
+        self.content.addWidget(card, 1)
+
+        self.refresh_button.clicked.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self) -> None:
+        runs = self.run_store.list_runs()
+        self.table.setRowCount(len(runs))
+        for row, run in enumerate(runs):
+            values = [
+                run.started_at,
+                run.package_name,
+                run.package_version,
+                run.status,
+                "" if run.exit_code is None else str(run.exit_code),
+                run.finished_at or "",
+                str(run.output_dir),
+                str(run.log_file),
+            ]
+            for column, value in enumerate(values):
+                self.table.setItem(row, column, QTableWidgetItem(value))
 
 
 class SettingsPage(Page):

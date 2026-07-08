@@ -64,3 +64,18 @@ class InstalledPackage:
 class TaskEvent:
     type: str
     payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class TaskRunRecord:
+    id: str
+    package_id: str
+    package_name: str
+    package_version: str
+    status: str
+    params: dict[str, Any]
+    output_dir: Path
+    log_file: Path
+    started_at: str
+    finished_at: str | None = None
+    exit_code: int | None = None

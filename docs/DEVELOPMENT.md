@@ -28,6 +28,9 @@ DRPA Client 当前定位为一款轻量级 Python RPA 桌面客户端：
 | SDK Context | 已实现 | 提供 `ctx.log`、`ctx.params`、`ctx.progress()`、`ctx.output_file()`、`ctx.browser()` |
 | DrissionPage 集成 | 已预留并实现入口 | `ctx.browser()` 创建 DrissionPage `ChromiumPage` |
 | 示例脚本包 | 已实现 | `examples/hello_web_bot` |
+| SQLite 运行历史 | 已实现 | `RunStore` 持久化任务状态、日志和输出路径 |
+| 包管理操作 | 已实现 | 支持卸载脚本包和重建脚本包 venv |
+| 进程树停止 | 已实现 | 使用 psutil 终止任务进程及其子进程 |
 
 ## 2. 项目结构
 
@@ -53,6 +56,7 @@ DRPA Client 当前定位为一款轻量级 Python RPA 桌面客户端：
 │       │       └── themes/
 │       │           └── dark.qss
 │       ├── core/
+│       │   ├── database.py
 │       │   ├── manifest.py
 │       │   ├── models.py
 │       │   ├── package_manager.py
@@ -103,10 +107,11 @@ src/drpa_client/app/ui/themes/dark.qss
 | 文件 | 职责 |
 | --- | --- |
 | `models.py` | 共享数据模型，例如 `PackageManifest`、`InstalledPackage`、`TaskEvent` |
+| `database.py` | SQLite 运行历史存储，例如 `RunStore` |
 | `manifest.py` | 读取和校验 `manifest.yaml` |
-| `package_manager.py` | 安装、列出、查找脚本包 |
+| `package_manager.py` | 安装、列出、查找、卸载脚本包，重建包环境 |
 | `runtime_manager.py` | 创建 venv、安装依赖、处理平台化 wheels |
-| `task_runner.py` | 启动用户脚本子进程，接收结构化事件 |
+| `task_runner.py` | 启动用户脚本子进程，接收结构化事件，更新运行历史 |
 | `paths.py` | 管理跨平台数据目录 |
 
 ### 2.3 `runtime`
@@ -862,45 +867,37 @@ Linux 需要重点处理：
 - Chromium/Chrome 检测。
 - 沙盒和权限问题。
 
-## 12. 数据与持久化规划
+## 12. 数据与持久化
 
-当前首版主要依赖文件结构和 `install.lock`。
+当前实现同时使用文件结构、`install.lock` 和 SQLite：
 
-后续建议引入 SQLite，管理：
+- 脚本包安装状态：仍使用 `install.lock`，方便包目录可迁移和排障。
+- 任务运行历史：使用 `drpa-client.sqlite3`，方便按时间倒序查询和统计。
+
+当前已实现表：
+
+```text
+task_runs
+```
+
+后续建议继续扩展 SQLite，管理：
 
 ```text
 packages
 package_versions
 tasks
-task_runs
 schedules
 settings
 credentials
 ```
 
-建议表：
+当前 `task_runs` 表：
 
 ```sql
-packages(
-  id text primary key,
-  name text not null,
-  latest_version text,
-  created_at text
-);
-
-package_versions(
-  package_id text not null,
-  version text not null,
-  manifest_json text not null,
-  package_dir text not null,
-  venv_dir text,
-  installed_at text not null,
-  primary key(package_id, version)
-);
-
 task_runs(
   id text primary key,
   package_id text not null,
+  package_name text not null,
   package_version text not null,
   status text not null,
   params_json text,

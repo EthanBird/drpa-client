@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import zipfile
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,7 +24,12 @@ class PackageManager:
         self.packages_dir = self.data_dir / "packages"
         self.runtime_manager = runtime_manager or RuntimeManager()
 
-    def install_archive(self, archive_path: Path, install_dependencies: bool = True) -> InstalledPackage:
+    def install_archive(
+        self,
+        archive_path: Path,
+        install_dependencies: bool = True,
+        log: Callable[[str], None] | None = None,
+    ) -> InstalledPackage:
         if not archive_path.exists():
             raise PackageInstallError(f"脚本包不存在：{archive_path}")
         if archive_path.suffix.lower() not in {".rpaz", ".zip"}:
@@ -32,15 +38,19 @@ class PackageManager:
         staging_dir = self.data_dir / "cache" / f"install-{datetime.now(UTC).timestamp():.0f}"
         staging_dir.mkdir(parents=True, exist_ok=False)
         try:
+            _log(log, f"解压脚本包：{archive_path}")
             with zipfile.ZipFile(archive_path) as archive:
                 _safe_extract(archive, staging_dir)
+            _log(log, "读取 manifest.yaml")
             manifest = load_manifest(staging_dir)
 
             package_root = self.packages_dir / manifest.id
             package_dir = package_root / manifest.version / "package"
             if package_dir.exists():
+                _log(log, f"覆盖已安装版本：{manifest.id} {manifest.version}")
                 shutil.rmtree(package_dir.parent)
             package_dir.parent.mkdir(parents=True, exist_ok=True)
+            _log(log, f"复制脚本包到：{package_dir}")
             shutil.move(str(staging_dir), str(package_dir))
 
             venv_dir = None
@@ -51,7 +61,10 @@ class PackageManager:
                     manifest=manifest,
                     venv_dir=venv_dir,
                     install_dependencies=install_dependencies,
+                    log=log,
                 )
+            else:
+                _log(log, "脚本包使用 shared runtime，不创建独立 venv")
 
             installed = InstalledPackage(
                 manifest=manifest,
@@ -61,6 +74,7 @@ class PackageManager:
                 installed_at=datetime.now(UTC).isoformat(),
             )
             self._write_install_lock(installed)
+            _log(log, "写入 install.lock")
             return installed
         except (zipfile.BadZipFile, ManifestError, OSError) as exc:
             raise PackageInstallError(str(exc)) from exc
@@ -87,6 +101,32 @@ class PackageManager:
         if not candidates:
             return None
         return sorted(candidates, key=lambda item: item.installed_at)[-1]
+
+    def uninstall(self, package: InstalledPackage) -> None:
+        if package.root_dir.exists():
+            shutil.rmtree(package.root_dir)
+
+    def rebuild_environment(
+        self,
+        package: InstalledPackage,
+        install_dependencies: bool = True,
+        log: Callable[[str], None] | None = None,
+    ) -> InstalledPackage:
+        if package.manifest.runtime.isolation != "venv" or package.venv_dir is None:
+            _log(log, "当前脚本包使用 shared runtime，无需重建 venv")
+            return package
+        if package.venv_dir.exists():
+            _log(log, f"删除旧虚拟环境：{package.venv_dir}")
+            shutil.rmtree(package.venv_dir)
+        self.runtime_manager.ensure_environment(
+            package_dir=package.package_dir,
+            manifest=package.manifest,
+            venv_dir=package.venv_dir,
+            install_dependencies=install_dependencies,
+            log=log,
+        )
+        _log(log, "虚拟环境重建完成")
+        return package
 
     def _write_install_lock(self, installed: InstalledPackage) -> None:
         payload = {
@@ -120,3 +160,8 @@ def _safe_extract(archive: zipfile.ZipFile, target_dir: Path) -> None:
         if target_root != destination and target_root not in destination.parents:
             raise PackageInstallError(f"脚本包包含非法路径：{member.filename}")
     archive.extractall(target_root)
+
+
+def _log(callback: Callable[[str], None] | None, message: str) -> None:
+    if callback is not None:
+        callback(message)
