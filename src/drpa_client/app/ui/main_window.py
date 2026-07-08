@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QDate, QObject, Qt, QThread, Signal
+from PySide6.QtCore import QDate, QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -36,6 +36,7 @@ from drpa_client.core.default_packages import default_package_path
 from drpa_client.core.models import InstalledPackage, TaskEvent
 from drpa_client.core.package_manager import PackageManager
 from drpa_client.core.paths import get_data_dir
+from drpa_client.core.recorder import BrowserRecorderSession, RecorderPackageGenerator, Recording
 from drpa_client.core.task_runner import RunningTask, TaskRunner
 
 
@@ -60,6 +61,7 @@ class MainWindow(QMainWindow):
         self.dashboard_page = DashboardPage(self.package_manager, self.run_store)
         self.packages_page = PackagesPage(self.package_manager)
         self.tasks_page = TasksPage(self.package_manager, self.task_runner)
+        self.recorder_page = RecorderPage()
         self.history_page = HistoryPage(self.run_store)
         self.settings_page = SettingsPage()
 
@@ -67,6 +69,7 @@ class MainWindow(QMainWindow):
             self.dashboard_page,
             self.packages_page,
             self.tasks_page,
+            self.recorder_page,
             self.history_page,
             self.settings_page,
         ):
@@ -87,7 +90,7 @@ class MainWindow(QMainWindow):
             self.dashboard_page.refresh()
         elif index == 2:
             self.tasks_page.refresh_packages()
-        elif index == 3:
+        elif index == 4:
             self.history_page.refresh()
 
     def _refresh_all(self) -> None:
@@ -107,7 +110,7 @@ class Sidebar(QListWidget):
         self.setFixedWidth(220)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setSpacing(8)
-        for title in ("首页", "脚本包", "运行任务", "运行历史", "设置"):
+        for title in ("首页", "脚本包", "运行任务", "浏览器录制", "运行历史", "设置"):
             item = QListWidgetItem(title)
             item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
             item.setSizeHint(item.sizeHint().expandedTo(item.sizeHint() * 1.6))
@@ -622,6 +625,157 @@ class TaskEventBridge(QObject):
 
     def emit_event(self, event: TaskEvent) -> None:
         self.event.emit(event)
+
+
+def _recorded_event_label(event) -> str:
+    target = event.target or {}
+    for key in ("label", "text", "placeholder"):
+        value = target.get(key)
+        if value:
+            return str(value)
+    attributes = target.get("attributes") or {}
+    for key in ("data-testid", "aria-label", "name", "id"):
+        value = attributes.get(key)
+        if value:
+            return str(value)
+    return event.id
+
+
+class RecorderPage(Page):
+    def __init__(self):
+        super().__init__("浏览器录制", "录制浏览器操作，生成需要人工修订的 .rpaz 草稿脚本包。")
+        self.session: BrowserRecorderSession | None = None
+        self.recording: Recording | None = None
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(700)
+        self.poll_timer.timeout.connect(self._poll_events)
+
+        card = Card()
+        form = QFormLayout()
+        self.start_url = QLineEdit("https://www.bing.com")
+        self.headless = QCheckBox("无头录制")
+        self.package_id = QLineEdit()
+        self.package_id.setPlaceholderText("可选，例如 recorded_bing_search")
+        form.addRow("起始 URL", self.start_url)
+        form.addRow("Package ID", self.package_id)
+        form.addRow("", self.headless)
+
+        buttons = QHBoxLayout()
+        self.start_button = QPushButton("开始录制")
+        self.start_button.setObjectName("PrimaryButton")
+        self.stop_button = QPushButton("停止并生成草稿包")
+        self.stop_button.setEnabled(False)
+        self.import_button = QPushButton("从 recording.json 生成")
+        buttons.addWidget(self.start_button)
+        buttons.addWidget(self.stop_button)
+        buttons.addWidget(self.import_button)
+        buttons.addStretch(1)
+
+        self.event_table = QTableWidget(0, 4)
+        self.event_table.setHorizontalHeaderLabels(["事件", "URL", "目标", "置信度"])
+        self.event_table.horizontalHeader().setStretchLastSection(True)
+        self.event_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.event_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMinimumHeight(180)
+        self.log.setPlaceholderText("录制器日志和生成结果会显示在这里。")
+
+        card.layout.addLayout(form)
+        card.layout.addLayout(buttons)
+        card.layout.addWidget(QLabel("事件时间线"))
+        card.layout.addWidget(self.event_table)
+        card.layout.addWidget(self.log)
+        self.content.addWidget(card, 1)
+
+        self.start_button.clicked.connect(self._start_recording)
+        self.stop_button.clicked.connect(self._stop_recording)
+        self.import_button.clicked.connect(self._generate_from_file)
+
+    def _start_recording(self) -> None:
+        if not self.start_url.text().strip():
+            QMessageBox.warning(self, "缺少 URL", "请填写起始 URL。")
+            return
+        try:
+            self.session = BrowserRecorderSession(
+                self.start_url.text().strip(),
+                headless=self.headless.isChecked(),
+            )
+            self.session.start()
+        except Exception as exc:  # noqa: BLE001 - surfaced to UI
+            QMessageBox.critical(self, "录制启动失败", str(exc))
+            self.session = None
+            return
+        self.event_table.setRowCount(0)
+        self.log.append("录制已启动，请在浏览器中操作。")
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.import_button.setEnabled(False)
+        self.poll_timer.start()
+
+    def _poll_events(self) -> None:
+        if self.session is None:
+            return
+        events = self.session.poll_events()
+        for event in events:
+            self._append_event(event.type, event.url, _recorded_event_label(event), event.confidence)
+
+    def _stop_recording(self) -> None:
+        if self.session is None:
+            return
+        self.poll_timer.stop()
+        try:
+            self.recording = self.session.stop()
+            self.session = None
+            archive = self._generate_archive(self.recording)
+        except Exception as exc:  # noqa: BLE001 - surfaced to UI
+            QMessageBox.critical(self, "生成失败", str(exc))
+            return
+        finally:
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+            self.import_button.setEnabled(True)
+        self.log.append(f"已生成草稿脚本包：{archive}")
+
+    def _generate_from_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 recording.json",
+            str(Path.home()),
+            "Recording JSON (*.json)",
+        )
+        if not path:
+            return
+        try:
+            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.recording = Recording.from_dict(raw)
+            self.event_table.setRowCount(0)
+            for event in self.recording.events:
+                self._append_event(event.type, event.url, _recorded_event_label(event), event.confidence)
+            archive = self._generate_archive(self.recording)
+        except Exception as exc:  # noqa: BLE001 - surfaced to UI
+            QMessageBox.critical(self, "生成失败", str(exc))
+            return
+        self.log.append(f"已从 recording.json 生成草稿脚本包：{archive}")
+
+    def _generate_archive(self, recording: Recording) -> Path:
+        output_dir = QFileDialog.getExistingDirectory(
+            self,
+            "选择草稿包输出目录",
+            str(get_data_dir() / "outputs"),
+        )
+        if not output_dir:
+            raise RuntimeError("已取消选择输出目录")
+        package_id = self.package_id.text().strip() or None
+        generator = RecorderPackageGenerator(Path(output_dir))
+        return generator.generate(recording, package_id=package_id)
+
+    def _append_event(self, event_type: str, url: str, label: str, confidence: str) -> None:
+        row = self.event_table.rowCount()
+        self.event_table.insertRow(row)
+        for column, value in enumerate((event_type, url, label, confidence)):
+            self.event_table.setItem(row, column, QTableWidgetItem(value))
 
 
 class HistoryPage(Page):

@@ -718,3 +718,32 @@ GUI 安装这种包时可以显示提示：
 - 验证码和 MFA 只能生成 TODO。
 
 只要规范清晰、草稿结构稳定、人工修订入口明确，这个录制器就能显著降低编写 RPA 脚本包的门槛。
+
+## 15. 当前 MVP 实现状态
+
+已实现第一阶段基础骨架：
+
+| 模块 | 状态 | 说明 |
+| --- | --- | --- |
+| 录制事件模型 | 已实现 | `core/recorder/models.py` 定义 `Recording`、`RecordingEvent`、`SelectorCandidate` |
+| JS Recorder Agent | 已实现 | `resources/recorder/agent.js` 捕获 click/input/change/submit |
+| 浏览器录制会话 | 初版实现 | `BrowserRecorderSession` 可启动 DrissionPage、注入 JS、拉取事件队列 |
+| 草稿包生成器 | 已实现 | `RecorderPackageGenerator` 生成 `.rpaz`、`manifest.yaml`、`main.py`、`recording.json`、`selectors.json`、`recorder_notes.md` |
+| GUI 入口 | 初版实现 | “浏览器录制”页面支持开始/停止录制，以及从 `recording.json` 生成草稿包 |
+| 测试 fixture | 已实现 | `tests/fixtures/recording_login.json` 覆盖登录录制草稿包生成 |
+
+当前限制：
+
+- 直接启动录制会话仍是 MVP，复杂页面跳转、iframe、shadow DOM 尚未增强。
+- GUI 暂未提供事件编辑、选择器替换和参数化面板。
+- 生成脚本仍偏草稿，必须人工检查 TODO 和选择器稳定性。
+- 录制器还未加入运行回放对比能力。
+
+下一步建议：
+
+1. 增加录制事件编辑器。
+2. 增加选择器候选选择 UI。
+3. 增加参数化面板。
+4. 增加保存/加载 recording 项目目录。
+5. 增加生成代码预览。
+6. 增加一次性“生成并安装草稿包”按钮。
