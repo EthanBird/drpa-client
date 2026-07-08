@@ -31,11 +31,18 @@ class RuntimeManager:
         install_dependencies: bool = True,
     ) -> Path:
         self._validate_python_version(manifest.runtime.python)
+        needs_pip = install_dependencies and self._requires_pip(package_dir, manifest.dependencies)
         if not venv_dir.exists():
-            venv.EnvBuilder(with_pip=True, clear=False).create(venv_dir)
+            try:
+                venv.EnvBuilder(with_pip=needs_pip, clear=False).create(venv_dir)
+            except venv.Error as exc:
+                raise RuntimeErrorDetails(
+                    "无法创建脚本包虚拟环境。Linux 系统请确认安装包内置 Python 支持 venv，"
+                    "或系统已安装 python3-venv/ensurepip。"
+                ) from exc
 
         python = self.python_executable(venv_dir)
-        if install_dependencies:
+        if needs_pip:
             self.install_dependencies(python, package_dir, manifest.dependencies)
         return python
 
@@ -101,6 +108,10 @@ class RuntimeManager:
                 path = Path(match)
                 directories.add(str(path if path.is_dir() else path.parent))
         return sorted(directories)
+
+    def _requires_pip(self, package_dir: Path, dependencies: DependencySpec) -> bool:
+        requirements_path = package_dir / (dependencies.requirements or "requirements.txt")
+        return bool(dependencies.pip) or requirements_path.exists()
 
     def _run_pip(self, python: Path, args: list[str], cwd: Path) -> None:
         env = os.environ.copy()
