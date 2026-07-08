@@ -125,7 +125,8 @@ DRPA Client
 ├── 示例脚本包
 │   ├── Hello Web Bot
 │   ├── Bing 每日一图
-│   └── Bilibili 搜索
+│   ├── Bilibili 搜索
+│   └── 营销销户派工
 ├── 浏览器录制器（规划）
 │   ├── 录制浏览器事件
 │   ├── 生成 recording.json
@@ -268,6 +269,7 @@ DRPA Client
 | Hello Web Bot | `hello_web_bot` | 验证参数、日志、进度和输出文件 |
 | Bing 每日一图 | `bing_daily_image` | 访问 Bing 图片接口，下载每日一图和元数据 |
 | Bilibili 搜索 | `bilibili_search` | 使用 DrissionPage 打开 Bilibili 搜索页并导出结果 |
+| 营销销户派工 | `marketing_cancel_order_dispatch` | 根据业务参数处理销户工单派工和作业计划 |
 
 示例脚本包用途：
 
@@ -284,6 +286,8 @@ examples/bing_daily_image/
 examples/bing_daily_image.rpaz
 examples/bilibili_search/
 examples/bilibili_search.rpaz
+examples/marketing_cancel_order_dispatch/
+examples/marketing_cancel_order_dispatch.rpaz
 ```
 
 ### 5.7 设置

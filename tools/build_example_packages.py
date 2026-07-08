@@ -5,7 +5,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXAMPLE_PACKAGES = ("hello_web_bot", "bing_daily_image", "bilibili_search")
+EXAMPLE_PACKAGES = (
+    "hello_web_bot",
+    "bing_daily_image",
+    "bilibili_search",
+    "marketing_cancel_order_dispatch",
+)
 
 
 def main() -> int:

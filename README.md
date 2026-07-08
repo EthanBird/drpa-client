@@ -25,7 +25,7 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 - 脚本包卸载和环境重建
 - 列表式任务运行界面
 - Monaco Web 代码编辑器入口
-- examples 示例脚本包：Hello、Bing 每日一图、Bilibili 搜索
+- examples 示例脚本包：Hello、Bing 每日一图、Bilibili 搜索、营销销户派工
 - 浏览器录制 MVP：录制事件模型、JS Agent、草稿 `.rpaz` 生成器；作为高级功能默认隐藏，可在设置中启用
 - AI skill：构建 `.rpaz` 代码包，指定 Python 3.11.9
 - 面向 DrissionPage 的 SDK 入口
@@ -134,6 +134,8 @@ examples/bing_daily_image/
 examples/bing_daily_image.rpaz
 examples/bilibili_search/
 examples/bilibili_search.rpaz
+examples/marketing_cancel_order_dispatch/
+examples/marketing_cancel_order_dispatch.rpaz
 ```
 
 在 GUI 的“脚本包”页面点击“安装脚本包”，默认会打开当前运行/安装目录，方便直接选择 `examples/*.rpaz`。
@@ -142,6 +144,7 @@ examples/bilibili_search.rpaz
 
 - `bing_daily_image`：访问 Bing 每日一图接口，下载图片和 JSON 元数据。
 - `bilibili_search`：使用 DrissionPage 打开 Bilibili 搜索页，按关键词导出搜索结果。
+- `marketing_cancel_order_dispatch`：整理自营销销户派工脚本，使用参数表配置人员、计划时间和业务字段。
 
 如需重新生成 examples 下的 `.rpaz`：
 
