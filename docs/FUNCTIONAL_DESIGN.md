@@ -295,6 +295,10 @@ examples/marketing_cancel_order_dispatch.rpaz
 当前支持：
 
 - 展示数据目录。
+- 主题切换：
+  - 暗色主题
+  - 亮色主题
+  - 主题由 QSS 文件驱动。
 - 浏览器录制高级功能开关。默认关闭，因此默认导航不显示“浏览器录制”。
 - 检测本地 Python 环境，包括当前 Python、PATH 中的 `python3.11`、`python3`、`python` 等。
 - 配置脚本包安装运行环境策略：
@@ -306,7 +310,6 @@ examples/marketing_cancel_order_dispatch.rpaz
 
 - 浏览器路径。
 - 默认下载目录。
-- 主题切换。
 - 脚本仓库配置。
 - 更完整的 Python runtime 诊断。
 

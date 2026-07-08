@@ -11,7 +11,7 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 当前首版聚焦：
 
 - Windows / Linux 跨平台桌面客户端
-- PySide6 美观暗色 UI
+- PySide6 美观 UI，支持暗色/亮色 QSS 主题切换
 - `.rpaz` 脚本包安装
 - 单个 `.py` 文件直接导入为脚本包
 - `manifest.yaml` 参数定义

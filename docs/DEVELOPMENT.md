@@ -712,10 +712,13 @@ TasksPage
 
 ### 8.2 主题
 
-暗色主题位于：
+主题由 QSS 文件驱动。
+
+当前主题文件：
 
 ```text
 src/drpa_client/app/ui/themes/dark.qss
+src/drpa_client/app/ui/themes/light.qss
 ```
 
 当前视觉方向：
@@ -726,11 +729,19 @@ src/drpa_client/app/ui/themes/dark.qss
 - 圆角输入框和表格。
 - 左侧导航高亮。
 
+主题加载入口：
+
+```text
+src/drpa_client/app/ui/theme.py
+```
+
+应用启动时读取 `SettingsStore().load().theme`，并加载对应 QSS。设置页保存主题后会立即重新应用样式。
+
 后续美化建议：
 
 1. 引入图标。
-2. 增加浅色主题。
-3. 增加主题切换。
+2. 增加更多主题变量。
+3. 支持跟随系统主题。
 4. 增加 Toast 通知。
 5. 增加空状态插画。
 6. 增加安装进度弹窗。

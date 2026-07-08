@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QApplication,
 )
 
 try:
@@ -47,6 +48,7 @@ from drpa_client.core.recorder import BrowserRecorderSession, RecorderPackageGen
 from drpa_client.core.runtime_manager import RuntimeManager
 from drpa_client.core.settings import AppSettings, SettingsStore
 from drpa_client.core.task_runner import RunningTask, TaskRunner
+from drpa_client.app.ui.theme import apply_theme
 
 
 def default_open_dir() -> str:
@@ -1104,6 +1106,9 @@ class SettingsPage(Page):
         card.layout.addWidget(data_dir)
 
         self.recorder_enabled = QCheckBox("启用高级功能：浏览器录制")
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("暗色主题", "dark")
+        self.theme_combo.addItem("亮色主题", "light")
         self.runtime_mode = QComboBox()
         self.runtime_mode.addItem("每个脚本包新建 venv（默认，隔离性最好）", "new_venv")
         self.runtime_mode.addItem("共享当前 DRPA Python 环境", "shared")
@@ -1114,6 +1119,7 @@ class SettingsPage(Page):
 
         runtime_form = QFormLayout()
         runtime_form.addRow("", self.recorder_enabled)
+        runtime_form.addRow("界面主题", self.theme_combo)
         runtime_form.addRow("运行环境策略", self.runtime_mode)
         venv_row = QHBoxLayout()
         venv_row.addWidget(self.existing_venv_path, 1)
@@ -1147,6 +1153,8 @@ class SettingsPage(Page):
     def load(self) -> None:
         settings = self.settings_store.load()
         self.recorder_enabled.setChecked(settings.advanced_recorder_enabled)
+        theme_index = self.theme_combo.findData(settings.theme)
+        self.theme_combo.setCurrentIndex(max(theme_index, 0))
         index = self.runtime_mode.findData(settings.runtime_mode)
         self.runtime_mode.setCurrentIndex(max(index, 0))
         self.existing_venv_path.setText(settings.existing_venv_path)
@@ -1157,11 +1165,15 @@ class SettingsPage(Page):
             advanced_recorder_enabled=self.recorder_enabled.isChecked(),
             runtime_mode=self.runtime_mode.currentData(),
             existing_venv_path=self.existing_venv_path.text().strip(),
+            theme=self.theme_combo.currentData(),
         )
         if settings.runtime_mode == "existing_venv" and not settings.existing_venv_path:
             QMessageBox.warning(self, "缺少 venv", "选择“使用已有 venv”时必须配置 venv 路径。")
             return
         self.settings_store.save(settings)
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, settings.theme)
         self.settings_changed.emit()
         QMessageBox.information(self, "设置已保存", "设置已保存，导航和后续脚本包安装会使用新配置。")
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
 from drpa_client.app.ui.main_window import MainWindow
+from drpa_client.app.ui.theme import apply_theme
+from drpa_client.core.settings import SettingsStore
 
 
 def main() -> int:
@@ -13,9 +14,7 @@ def main() -> int:
     app.setApplicationName("DRPA Client")
     app.setOrganizationName("drpa")
 
-    theme_path = Path(__file__).resolve().parent / "ui" / "themes" / "dark.qss"
-    if theme_path.exists():
-        app.setStyleSheet(theme_path.read_text(encoding="utf-8"))
+    apply_theme(app, SettingsStore().load().theme)
 
     window = MainWindow()
     window.show()
