@@ -2,6 +2,8 @@
 
 DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让用户安装一次 GUI 程序后，可以直接导入并运行 Python 脚本包。
 
+详细开发说明见：[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
+
 当前首版聚焦：
 
 - Windows / Linux 跨平台桌面客户端
