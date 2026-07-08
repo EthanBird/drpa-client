@@ -6,6 +6,7 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 
 - [功能设计文档](docs/FUNCTIONAL_DESIGN.md)
 - [开发文档](docs/DEVELOPMENT.md)
+- [浏览器录制与脚本包生成设计规范](docs/BROWSER_RECORDER_DESIGN.md)
 
 当前首版聚焦：
 

@@ -118,6 +118,11 @@ DRPA Client
 │   └── 实时日志
 ├── 默认脚本包
 │   └── Bing 每日一图
+├── 浏览器录制器（规划）
+│   ├── 录制浏览器事件
+│   ├── 生成 recording.json
+│   ├── 编辑事件和选择器
+│   └── 导出草稿 .rpaz
 ├── 运行历史
 │   ├── 运行状态
 │   ├── 开始/结束时间
@@ -252,6 +257,24 @@ src/drpa_client/resources/default_packages/bing_daily_image.rpaz
 - 主题切换。
 - 脚本仓库配置。
 - Python runtime 诊断。
+
+## 5.7 浏览器录制器规划
+
+浏览器录制器用于把用户在浏览器中的操作转成结构化录制事件，再生成一个需要人工修订的 `.rpaz` 草稿脚本包。
+
+设计文档见：
+
+```text
+docs/BROWSER_RECORDER_DESIGN.md
+```
+
+核心原则：
+
+- 录制结果是草稿，不是生产级最终脚本。
+- 选择器需要评分和候选列表。
+- 密码、token、验证码等敏感值必须脱敏或生成 TODO。
+- 生成包必须包含 `recording.json`、`recorder_notes.md` 和带 TODO 的 `main.py`。
+- GUI 需要提供事件时间线、选择器修订、参数化和代码预览。
 
 ## 6. 核心用户流程
 

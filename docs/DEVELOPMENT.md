@@ -31,6 +31,7 @@ DRPA Client 当前定位为一款轻量级 Python RPA 桌面客户端：
 | SQLite 运行历史 | 已实现 | `RunStore` 持久化任务状态、日志和输出路径 |
 | 包管理操作 | 已实现 | 支持卸载脚本包和重建脚本包 venv |
 | 进程树停止 | 已实现 | 使用 psutil 终止任务进程及其子进程 |
+| 浏览器录制器 | 规划中 | 详见 `docs/BROWSER_RECORDER_DESIGN.md` |
 
 ## 2. 项目结构
 
@@ -118,6 +119,21 @@ src/drpa_client/app/ui/themes/dark.qss
 | `runtime_manager.py` | 创建 venv、安装依赖、处理平台化 wheels |
 | `task_runner.py` | 启动用户脚本子进程，接收结构化事件，更新运行历史 |
 | `paths.py` | 管理跨平台数据目录 |
+
+后续浏览器录制器建议新增：
+
+| 模块 | 职责 |
+| --- | --- |
+| `core/recorder/session.py` | 启动和管理 DrissionPage 录制会话 |
+| `core/recorder/events.py` | 定义录制事件模型和 schema |
+| `core/recorder/generator.py` | 将录制文件生成 `.rpaz` 草稿包 |
+| `app/ui/pages/recorder.py` | 录制器 GUI 页面 |
+
+完整规范见：
+
+```text
+docs/BROWSER_RECORDER_DESIGN.md
+```
 
 ### 2.3 `runtime`
 
