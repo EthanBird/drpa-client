@@ -1,0 +1,33 @@
+id: hello_web_bot
+name: Hello Web Bot
+version: 0.1.0
+entry: main.py
+description: 示例 RPA 脚本包，演示参数、日志、进度和输出文件。
+author: drpa-client
+
+runtime:
+  python: ">=3.11"
+  isolation: venv
+
+dependencies:
+  strategy: offline-first
+  pip: []
+  local:
+    common:
+      - wheels/common/*.whl
+    windows:
+      - wheels/windows/*.whl
+    linux:
+      - wheels/linux/*.whl
+
+params:
+  - name: username
+    label: 用户名
+    type: string
+    required: true
+    default: demo
+
+  - name: headless
+    label: 无头浏览器
+    type: boolean
+    default: true
