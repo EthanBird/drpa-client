@@ -26,9 +26,11 @@ wheelhouse/windows-amd64/
 
 Runtime behavior:
 
+- Dependency installation is offline-only. DRPA Client always runs pip with `--no-index`.
 - During dependency installation, DRPA Client adds the matching platform wheelhouse directory to pip `--find-links`.
 - Package-local wheels are still supported through `manifest.yaml -> dependencies.local`.
-- If a script package uses `strategy: offline-only`, pip runs with `--no-index` and installs only from package-local wheels plus this global wheelhouse.
+- Wheel priority is global install-directory wheelhouse first, package-local wheels second.
+- DRPA Client generates a constraints file from this global wheelhouse so global wheel versions win over same-name wheels embedded in a `.rpaz`.
 
 Regenerate command:
 

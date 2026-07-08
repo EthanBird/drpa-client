@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
 from .models import DependencySpec, PackageManifest
@@ -104,21 +105,23 @@ class RuntimeManager:
         log: Callable[[str], None] | None = None,
     ) -> None:
         find_links = self._collect_find_links(package_dir, dependencies)
+        if not find_links and (dependencies.pip or self._requirements_path(package_dir, dependencies).exists()):
+            raise RuntimeErrorDetails("未找到本地 wheelhouse，禁止联网安装依赖")
         requirements_path = package_dir / (dependencies.requirements or "requirements.txt")
         has_requirements = requirements_path.exists()
 
         wheel_args = [arg for link in find_links for arg in ("--find-links", link)]
-
-        if dependencies.strategy == "offline-only":
-            index_args = ["--no-index"]
-        else:
-            index_args = []
+        index_args = ["--no-index"]
+        constraint_args = self._global_constraints_args(package_dir)
+        _log(log, "离线安装模式：已禁用 pip 联网索引 (--no-index)")
+        if find_links:
+            _log(log, "wheelhouse 查找顺序：" + " -> ".join(find_links))
 
         if has_requirements:
             _log(log, f"安装 requirements：{requirements_path}")
             self._run_pip(
                 python,
-                ["install", *index_args, *wheel_args, "-r", str(requirements_path)],
+                ["install", *index_args, *wheel_args, *constraint_args, "-r", str(requirements_path)],
                 package_dir,
                 log=log,
             )
@@ -127,7 +130,7 @@ class RuntimeManager:
             _log(log, f"安装 manifest 依赖：{', '.join(dependencies.pip)}")
             self._run_pip(
                 python,
-                ["install", *index_args, *wheel_args, *dependencies.pip],
+                ["install", *index_args, *wheel_args, *constraint_args, *dependencies.pip],
                 package_dir,
                 log=log,
             )
@@ -209,6 +212,13 @@ class RuntimeManager:
         return {key: str(value) for key, value in raw.items()}
 
     def _collect_find_links(self, package_dir: Path, dependencies: DependencySpec) -> list[str]:
+        directories: list[Path] = []
+        seen: set[Path] = set()
+        for path in self._global_wheelhouse_dirs():
+            if path not in seen:
+                directories.append(path)
+                seen.add(path)
+
         patterns = list(dependencies.local_common)
         system = platform.system().lower()
         if system == "windows":
@@ -216,31 +226,41 @@ class RuntimeManager:
         elif system == "linux":
             patterns.extend(dependencies.local_linux)
 
-        directories: set[str] = set()
         for pattern in patterns:
-            matches = glob.glob(str(package_dir / pattern))
+            matches = sorted(glob.glob(str(package_dir / pattern)))
             for match in matches:
                 path = Path(match)
-                directories.add(str(path if path.is_dir() else path.parent))
-        for path in self._global_wheelhouse_dirs():
-            directories.add(str(path))
-        return sorted(directories)
+                directory = path if path.is_dir() else path.parent
+                if directory not in seen:
+                    directories.append(directory)
+                    seen.add(directory)
+        return [str(path) for path in directories]
 
     def _global_wheelhouse_dirs(self) -> list[Path]:
-        root = _find_repo_root(Path(__file__).resolve())
-        if root is None:
-            return []
         system = platform.system().lower()
         platform_dir = "windows-amd64" if system == "windows" else "linux-x86_64"
-        candidates = [
-            root / "wheelhouse" / "common",
-            root / "wheelhouse" / platform_dir,
-        ]
-        return [path for path in candidates if path.exists()]
+        directories: list[Path] = []
+        seen: set[Path] = set()
+        for root in _candidate_install_roots(Path(__file__).resolve()):
+            for path in (root / "wheelhouse" / "common", root / "wheelhouse" / platform_dir):
+                if path.exists() and path not in seen:
+                    directories.append(path)
+                    seen.add(path)
+        return directories
 
     def _requires_pip(self, package_dir: Path, dependencies: DependencySpec) -> bool:
-        requirements_path = package_dir / (dependencies.requirements or "requirements.txt")
-        return bool(dependencies.pip) or requirements_path.exists()
+        return bool(dependencies.pip) or self._requirements_path(package_dir, dependencies).exists()
+
+    def _requirements_path(self, package_dir: Path, dependencies: DependencySpec) -> Path:
+        return package_dir / (dependencies.requirements or "requirements.txt")
+
+    def _global_constraints_args(self, package_dir: Path) -> list[str]:
+        constraints = _global_wheel_constraints(self._global_wheelhouse_dirs())
+        if not constraints:
+            return []
+        path = package_dir / ".drpa-wheelhouse-constraints.txt"
+        path.write_text("\n".join(constraints) + "\n", encoding="utf-8")
+        return ["-c", str(path)]
 
     def _run_pip(
         self,
@@ -281,8 +301,39 @@ def _log(callback: Callable[[str], None] | None, message: str) -> None:
         callback(message)
 
 
-def _find_repo_root(start: Path) -> Path | None:
-    for path in (start, *start.parents):
-        if (path / "wheelhouse").exists() or (path / "pyproject.toml").exists():
-            return path
-    return None
+def _candidate_install_roots(start: Path) -> list[Path]:
+    candidates: list[Path] = []
+    raw_candidates = [
+        Path.cwd(),
+        Path(sys.executable).resolve().parent,
+        Path(sys.argv[0]).resolve().parent if sys.argv and sys.argv[0] else None,
+        start,
+        *start.parents,
+    ]
+    seen: set[Path] = set()
+    for item in raw_candidates:
+        if item is None:
+            continue
+        path = item.resolve()
+        if path.is_file():
+            path = path.parent
+        if path not in seen:
+            candidates.append(path)
+            seen.add(path)
+    return candidates
+
+
+def _global_wheel_constraints(wheel_dirs: list[Path]) -> list[str]:
+    versions: dict[str, Version] = {}
+    names: dict[str, str] = {}
+    for directory in wheel_dirs:
+        for wheel in sorted(directory.glob("*.whl")):
+            try:
+                name, version, _, _ = parse_wheel_filename(wheel.name)
+            except Exception:
+                continue
+            normalized = canonicalize_name(str(name))
+            if normalized not in versions or version > versions[normalized]:
+                versions[normalized] = version
+                names[normalized] = str(name)
+    return [f"{names[key]}=={versions[key]}" for key in sorted(versions)]

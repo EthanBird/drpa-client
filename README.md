@@ -104,7 +104,7 @@ params:
 - `wheels/windows/*.whl`：仅 Windows 安装
 - `wheels/linux/*.whl`：仅 Linux 安装
 
-安装时会按 manifest 中的 `dependencies.local` 收集这些目录，并传给 pip 的 `--find-links`。如果 `strategy` 为 `offline-only`，会附加 `--no-index`，确保只从脚本包资源中安装。
+安装依赖时一律禁用联网索引，pip 始终使用 `--no-index`。manifest 中的 `strategy` 只保留兼容语义，不允许联网安装。
 
 仓库还提供全局 wheelhouse：
 
@@ -114,6 +114,13 @@ wheelhouse/windows-amd64/
 ```
 
 安装依赖时，DRPA Client 会根据当前平台自动把对应目录加入 pip `--find-links`，因此常用依赖可以直接复用仓库里的完整 wheels。
+
+查找优先级：
+
+1. 安装/运行目录下的全局 `wheelhouse`
+2. `.rpaz` 包内的 `wheels/common`、`wheels/windows`、`wheels/linux`
+
+全局 wheelhouse 还会生成 constraints 文件，确保已有安装目录 wheels 的版本优先于脚本包内同名 wheels。
 
 ## 参数表与运行表单
 

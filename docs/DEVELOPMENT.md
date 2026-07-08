@@ -447,20 +447,30 @@ venv.EnvBuilder(with_pip=True)
 
 ### 5.2 wheels 搜索
 
-根据当前平台选择 `manifest.yaml` 中的本地 wheels：
+依赖安装强制离线，不允许 pip 访问网络索引。所有 pip 安装都会附加：
 
-```text
-common + windows
-common + linux
+```bash
+--no-index
 ```
+
+wheel 查找顺序：
+
+1. 安装/运行目录下的全局 wheelhouse：
+   - `wheelhouse/common`
+   - `wheelhouse/linux-x86_64`
+   - `wheelhouse/windows-amd64`
+2. 脚本包内的本地 wheels：
+   - `wheels/common`
+   - `wheels/windows`
+   - `wheels/linux`
 
 然后转换为 pip 参数：
 
 ```bash
-python -m pip install --find-links <dir1> --find-links <dir2> ...
+python -m pip install --no-index --find-links <global-dir> --find-links <package-dir> ...
 ```
 
-同时，RuntimeManager 会自动加入仓库级 wheelhouse：
+RuntimeManager 会自动加入仓库级 wheelhouse：
 
 ```text
 wheelhouse/linux-x86_64/
@@ -475,11 +485,7 @@ wheelhouse/windows-amd64/
 - openpyxl
 - 上述包的完整传递依赖
 
-如果策略是 `offline-only`，追加：
-
-```bash
---no-index
-```
+全局 wheelhouse 会生成 `.drpa-wheelhouse-constraints.txt`，用于锁定全局 wheelhouse 中已有包的版本。这样即使 `.rpaz` 包内也带了同名 wheel，安装目录下的 wheel 仍然优先。
 
 ### 5.3 后续建议
 
