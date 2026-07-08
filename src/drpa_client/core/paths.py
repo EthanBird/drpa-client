@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-
-try:
-    from platformdirs import user_data_dir
-except ImportError:  # pragma: no cover - used only in stripped-down runtimes
-    user_data_dir = None
 
 
 APP_NAME = "DRPA Client"
@@ -14,12 +8,18 @@ APP_AUTHOR = "drpa"
 
 
 def get_data_dir() -> Path:
-    override = os.getenv("DRPA_DATA_DIR")
-    if override:
-        return Path(override).expanduser().resolve()
-    if user_data_dir is not None:
-        return Path(user_data_dir(APP_NAME, APP_AUTHOR)).resolve()
-    return (Path.home() / ".drpa-client").resolve()
+    return get_project_root() / ".drpa-data"
+
+
+def get_project_root() -> Path:
+    for path in (Path.cwd().resolve(), *Path(__file__).resolve().parents):
+        if (path / "pyproject.toml").exists() or (path / "examples").exists():
+            return path
+    return Path.cwd().resolve()
+
+
+def get_project_venv_dir() -> Path:
+    return get_project_root() / ".venv"
 
 
 def ensure_data_layout(data_dir: Path | None = None) -> Path:

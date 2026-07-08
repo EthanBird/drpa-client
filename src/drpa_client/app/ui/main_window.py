@@ -51,7 +51,6 @@ from drpa_client.core.models import InstalledPackage, TaskEvent
 from drpa_client.core.package_manager import PackageManager
 from drpa_client.core.paths import get_data_dir
 from drpa_client.core.recorder import BrowserRecorderSession, RecorderPackageGenerator, Recording
-from drpa_client.core.runtime_manager import RuntimeManager
 from drpa_client.core.settings import AppSettings, SettingsStore
 from drpa_client.core.task_profiles import TaskProfile, TaskProfileStore
 from drpa_client.core.task_runner import RunningTask, TaskRunner
@@ -130,17 +129,16 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         event.acceptProposedAction()
-        self.stack.setCurrentWidget(self.packages_page)
+        self.stack.setCurrentWidget(self.tasks_page)
         self.sidebar.setCurrentRow(self.stack.currentIndex())
         for path in files:
-            self.packages_page.install_from_drop(path)
+            self.tasks_page.install_from_drop(path)
 
     def _rebuild_navigation(self) -> None:
         current = self.stack.currentWidget()
         pages: list[tuple[str, QWidget]] = [
             ("首页", self.dashboard_page),
-            ("脚本包", self.packages_page),
-            ("运行任务", self.tasks_page),
+            ("工作台", self.tasks_page),
             ("代码编辑", self.editor_page),
         ]
         if self.settings_store.load().advanced_recorder_enabled:
@@ -354,19 +352,10 @@ class PackagesPage(Page):
         self.uninstall_button = QPushButton("卸载")
         self.install_dependencies = QCheckBox("安装依赖")
         self.install_dependencies.setChecked(True)
-        self.runtime_mode_combo = QComboBox()
-        self.runtime_mode_combo.addItem("使用当前环境（不创建 venv）", "shared")
-        self.runtime_mode_combo.addItem("使用设置中的已有 venv", "existing_venv")
-        self.runtime_mode_combo.addItem("新建独立 venv", "new_venv")
-        settings = self.package_manager.settings_store.load()
-        index = self.runtime_mode_combo.findData(settings.runtime_mode)
-        self.runtime_mode_combo.setCurrentIndex(max(index, 0))
         toolbar.addWidget(self.install_button)
         toolbar.addWidget(self.rebuild_button)
         toolbar.addWidget(self.uninstall_button)
         toolbar.addWidget(self.install_dependencies)
-        toolbar.addWidget(QLabel("Runtime"))
-        toolbar.addWidget(self.runtime_mode_combo)
         toolbar.addStretch(1)
 
         self.table = QTableWidget(0, 6)
@@ -433,8 +422,6 @@ class PackagesPage(Page):
         self._install_package(path)
 
     def _install_package(self, path: Path) -> None:
-        if not self._validate_runtime_choice():
-            return
         self.install_button.setEnabled(False)
         self.rebuild_button.setEnabled(False)
         self.uninstall_button.setEnabled(False)
@@ -444,7 +431,6 @@ class PackagesPage(Page):
             self.package_manager,
             path,
             self.install_dependencies.isChecked(),
-            runtime_mode=self.runtime_mode_combo.currentData(),
         )
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
@@ -456,14 +442,6 @@ class PackagesPage(Page):
         self.worker_thread.finished.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
         self.worker_thread.start()
-
-    def _validate_runtime_choice(self) -> bool:
-        if self.runtime_mode_combo.currentData() != "existing_venv":
-            return True
-        if self.package_manager.settings_store.load().existing_venv_path:
-            return True
-        QMessageBox.warning(self, "缺少已有 venv", "请先到设置页配置已有 venv 路径，或选择其他 Runtime 策略。")
-        return False
 
     def _install_finished(self, package_name: str) -> None:
         self.install_button.setEnabled(True)
@@ -501,7 +479,6 @@ class PackagesPage(Page):
             self.package_manager,
             package=package,
             install_dependencies=self.install_dependencies.isChecked(),
-            runtime_mode=self.runtime_mode_combo.currentData(),
             mode="rebuild",
         )
         self.worker.moveToThread(self.worker_thread)
@@ -543,7 +520,6 @@ class PackageInstallWorker(QObject):
         manager: PackageManager,
         path: Path | None = None,
         install_dependencies: bool = True,
-        runtime_mode: str | None = None,
         package: InstalledPackage | None = None,
         mode: str = "install",
     ):
@@ -551,7 +527,6 @@ class PackageInstallWorker(QObject):
         self.manager = manager
         self.path = path
         self.install_dependencies = install_dependencies
-        self.runtime_mode = runtime_mode
         self.package = package
         self.mode = mode
 
@@ -573,8 +548,6 @@ class PackageInstallWorker(QObject):
                     package = self.manager.install_python_file(
                         self.path,
                         install_dependencies=False,
-                        runtime_mode=self.runtime_mode,
-                        existing_venv_path=self.manager.settings_store.load().existing_venv_path,
                         log=self.message.emit,
                     )
                 else:
@@ -582,8 +555,6 @@ class PackageInstallWorker(QObject):
                     package = self.manager.install_archive(
                         self.path,
                         self.install_dependencies,
-                        runtime_mode=self.runtime_mode,
-                        existing_venv_path=self.manager.settings_store.load().existing_venv_path,
                         log=self.message.emit,
                     )
             self.finished.emit(package.display_name)
@@ -603,6 +574,8 @@ class TasksPage(Page):
         self.profiles: list[TaskProfile] = []
         self.running_tasks: dict[str, RunningTask] = {}
         self.run_logs: dict[str, list[str]] = {}
+        self.worker: PackageInstallWorker | None = None
+        self.worker_thread: QThread | None = None
         self.event_bridge = TaskEventBridge()
         self.param_widgets: dict[str, QWidget] = {}
         self.current_profile_id: str | None = None
@@ -627,9 +600,15 @@ class TasksPage(Page):
         list_title.setObjectName("SectionTitle")
         self.package_hint = QLabel("选择一个脚本包后，右侧会显示参数和运行日志。")
         self.package_hint.setObjectName("MutedText")
+        self.install_button = QPushButton("安装脚本包 / 导入 py")
+        self.install_button.setObjectName("PrimaryButton")
+        self.install_dependencies = QCheckBox("安装依赖到项目 .venv")
+        self.install_dependencies.setChecked(True)
         self.refresh_button = QPushButton("刷新列表")
         left_panel.addWidget(list_title)
         left_panel.addWidget(self.package_hint)
+        left_panel.addWidget(self.install_button)
+        left_panel.addWidget(self.install_dependencies)
         left_panel.addWidget(self.package_list, 1)
         left_panel.addWidget(self.refresh_button)
 
@@ -761,6 +740,7 @@ class TasksPage(Page):
         self.content.addWidget(card, 1)
 
         self.package_list.currentRowChanged.connect(self._render_params)
+        self.install_button.clicked.connect(self._choose_package)
         self.refresh_button.clicked.connect(self.refresh_packages)
         self.profile_table.currentCellChanged.connect(self._profile_selected)
         self.run_table.currentCellChanged.connect(self._run_selected)
@@ -773,6 +753,57 @@ class TasksPage(Page):
         self.event_bridge.event.connect(self._handle_event)
         self.refresh_packages()
         self.refresh_profiles()
+
+    def _choose_package(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择脚本包或 Python 文件",
+            default_open_dir(),
+            "RPA Packages or Python Files (*.rpaz *.zip *.py)",
+        )
+        if path:
+            self._install_package(Path(path))
+
+    def install_from_drop(self, path: Path) -> None:
+        if path.suffix.lower() not in {".rpaz", ".zip"}:
+            self.log.append(f"[install] 忽略不支持的拖拽文件：{path}")
+            return
+        self.log.append(f"[install] 拖拽安装：{path}")
+        self._install_package(path)
+
+    def _install_package(self, path: Path) -> None:
+        if self.worker_thread is not None and self.worker_thread.isRunning():
+            self.log.append(f"[install] 当前正在安装，暂不处理：{path}")
+            return
+        self.install_button.setEnabled(False)
+        self.log.append(f"[install] 开始安装：{path}")
+        self.worker_thread = QThread()
+        self.worker = PackageInstallWorker(
+            self.package_manager,
+            path,
+            self.install_dependencies.isChecked(),
+        )
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.message.connect(lambda text: self.log.append(f"[install] {text}"))
+        self.worker.finished.connect(self._install_finished)
+        self.worker.failed.connect(self._install_failed)
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.failed.connect(self.worker_thread.quit)
+        self.worker_thread.finished.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.start()
+
+    def _install_finished(self, package_name: str) -> None:
+        self.install_button.setEnabled(True)
+        self.log.append(f"[install] 安装完成：{package_name}")
+        self.refresh_packages()
+        self.run_finished.emit()
+
+    def _install_failed(self, message: str) -> None:
+        self.install_button.setEnabled(True)
+        self.log.append(f"[install] 安装失败：{message}")
+        QMessageBox.critical(self, "安装失败", message)
 
     def refresh_packages(self) -> None:
         self.packages = self.package_manager.list_installed()
@@ -1451,9 +1482,8 @@ class SettingsPage(Page):
     settings_changed = Signal()
 
     def __init__(self, settings_store: SettingsStore):
-        super().__init__("设置", "管理高级功能、本地 Python 检测和脚本包运行环境策略。")
+        super().__init__("设置", "管理主题和高级功能。运行环境由项目 .venv 自动托管。")
         self.settings_store = settings_store
-        self.runtime_manager = RuntimeManager()
 
         card = Card()
         data_dir = QLabel(str(get_data_dir()))
@@ -1466,44 +1496,24 @@ class SettingsPage(Page):
         self.theme_combo = QComboBox()
         self.theme_combo.addItem("暗色主题", "dark")
         self.theme_combo.addItem("亮色主题", "light")
-        self.runtime_mode = QComboBox()
-        self.runtime_mode.addItem("每个脚本包新建 venv（默认，隔离性最好）", "new_venv")
-        self.runtime_mode.addItem("共享当前 DRPA Python 环境", "shared")
-        self.runtime_mode.addItem("使用已有 venv", "existing_venv")
-        self.existing_venv_path = QLineEdit()
-        self.existing_venv_path.setPlaceholderText("选择已有 venv 目录，例如 /path/to/.venv")
-        self.choose_venv_button = QPushButton("选择 venv")
 
         runtime_form = QFormLayout()
         runtime_form.addRow("", self.recorder_enabled)
         runtime_form.addRow("界面主题", self.theme_combo)
-        runtime_form.addRow("运行环境策略", self.runtime_mode)
-        venv_row = QHBoxLayout()
-        venv_row.addWidget(self.existing_venv_path, 1)
-        venv_row.addWidget(self.choose_venv_button)
-        runtime_form.addRow("已有 venv", venv_row)
         card.layout.addLayout(runtime_form)
 
         buttons = QHBoxLayout()
         self.save_button = QPushButton("保存设置")
         self.save_button.setObjectName("PrimaryButton")
-        self.detect_button = QPushButton("检测本地 Python")
         buttons.addWidget(self.save_button)
-        buttons.addWidget(self.detect_button)
         buttons.addStretch(1)
         card.layout.addLayout(buttons)
-
-        self.python_table = QTableWidget(0, 4)
-        self.python_table.setHorizontalHeaderLabels(["Python", "版本", "是否 venv", "Prefix"])
-        self.python_table.horizontalHeader().setStretchLastSection(True)
-        self.python_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        card.layout.addWidget(QLabel("本地 Python 环境"))
-        card.layout.addWidget(self.python_table)
+        card.layout.addWidget(
+            QLabel("脚本依赖统一安装到项目 .venv，数据统一保存在项目 .drpa-data，用户无需选择 Python 环境。")
+        )
 
         self.content.addWidget(card)
         self.content.addStretch(1)
-        self.choose_venv_button.clicked.connect(self._choose_venv)
-        self.detect_button.clicked.connect(self.detect_python)
         self.save_button.clicked.connect(self.save)
         self.load()
 
@@ -1512,42 +1522,15 @@ class SettingsPage(Page):
         self.recorder_enabled.setChecked(settings.advanced_recorder_enabled)
         theme_index = self.theme_combo.findData(settings.theme)
         self.theme_combo.setCurrentIndex(max(theme_index, 0))
-        index = self.runtime_mode.findData(settings.runtime_mode)
-        self.runtime_mode.setCurrentIndex(max(index, 0))
-        self.existing_venv_path.setText(settings.existing_venv_path)
-        self.detect_python()
 
     def save(self) -> None:
         settings = AppSettings(
             advanced_recorder_enabled=self.recorder_enabled.isChecked(),
-            runtime_mode=self.runtime_mode.currentData(),
-            existing_venv_path=self.existing_venv_path.text().strip(),
             theme=self.theme_combo.currentData(),
         )
-        if settings.runtime_mode == "existing_venv" and not settings.existing_venv_path:
-            QMessageBox.warning(self, "缺少 venv", "选择“使用已有 venv”时必须配置 venv 路径。")
-            return
         self.settings_store.save(settings)
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, settings.theme)
         self.settings_changed.emit()
         QMessageBox.information(self, "设置已保存", "设置已保存，导航和后续脚本包安装会使用新配置。")
-
-    def _choose_venv(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "选择已有 venv 目录", str(Path.home()))
-        if path:
-            self.existing_venv_path.setText(path)
-
-    def detect_python(self) -> None:
-        items = self.runtime_manager.detect_python_environments()
-        self.python_table.setRowCount(len(items))
-        for row, item in enumerate(items):
-            values = [
-                item.get("executable", ""),
-                item.get("version", ""),
-                item.get("is_venv", ""),
-                item.get("prefix", ""),
-            ]
-            for column, value in enumerate(values):
-                self.python_table.setItem(row, column, QTableWidgetItem(value))

@@ -16,7 +16,7 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
 from .models import DependencySpec, PackageManifest
-from .settings import RuntimeMode
+from .paths import get_project_venv_dir
 
 
 class RuntimeErrorDetails(RuntimeError):
@@ -32,33 +32,13 @@ class RuntimeManager:
         package_dir: Path,
         manifest: PackageManifest,
         package_root_dir: Path,
-        runtime_mode: RuntimeMode = "new_venv",
+        runtime_mode: str = "project_venv",
         existing_venv_path: str = "",
         install_dependencies: bool = True,
         log: Callable[[str], None] | None = None,
     ) -> tuple[Path, Path | None, bool]:
-        if manifest.runtime.isolation != "venv" or runtime_mode == "shared":
-            python = self.base_python
-            _log(log, f"使用共享 Python 环境：{python}")
-            self._validate_python_version(manifest.runtime.python)
-            if install_dependencies:
-                self.install_dependencies(python, package_dir, manifest.dependencies, log=log)
-            return python, None, False
-
-        if runtime_mode == "existing_venv":
-            if not existing_venv_path:
-                raise RuntimeErrorDetails("已选择使用已有 venv，但未配置 venv 路径")
-            venv_dir = Path(existing_venv_path).expanduser().resolve()
-            python = self.python_executable(venv_dir)
-            if not python.exists():
-                raise RuntimeErrorDetails(f"已有 venv 中找不到 Python：{python}")
-            _log(log, f"使用已有 venv：{venv_dir}")
-            self._validate_python_executable_version(python, manifest.runtime.python)
-            if install_dependencies:
-                self.install_dependencies(python, package_dir, manifest.dependencies, log=log)
-            return python, venv_dir, False
-
-        venv_dir = package_root_dir / "venv"
+        venv_dir = get_project_venv_dir()
+        _log(log, f"使用项目统一 venv：{venv_dir}")
         python = self.ensure_environment(
             package_dir=package_dir,
             manifest=manifest,
@@ -66,7 +46,7 @@ class RuntimeManager:
             install_dependencies=install_dependencies,
             log=log,
         )
-        return python, venv_dir, True
+        return python, venv_dir, False
 
     def ensure_environment(
         self,
@@ -89,6 +69,16 @@ class RuntimeManager:
                 ) from exc
 
         python = self.python_executable(venv_dir)
+        if needs_pip and not self._has_pip(python):
+            _log(log, f"项目 venv 缺少 pip，重建虚拟环境：{venv_dir}")
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            try:
+                venv.EnvBuilder(with_pip=True, clear=True).create(venv_dir)
+            except venv.Error as exc:
+                raise RuntimeErrorDetails(
+                    "无法创建带 pip 的项目虚拟环境。请确认运行时 Python 支持 ensurepip。"
+                ) from exc
+            python = self.python_executable(venv_dir)
         if needs_pip:
             self.install_dependencies(python, package_dir, manifest.dependencies, log=log)
         elif install_dependencies:
@@ -210,6 +200,15 @@ class RuntimeManager:
         except json.JSONDecodeError:
             return None
         return {key: str(value) for key, value in raw.items()}
+
+    def _has_pip(self, python: Path) -> bool:
+        result = subprocess.run(
+            [str(python), "-m", "pip", "--version"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode == 0
 
     def _collect_find_links(self, package_dir: Path, dependencies: DependencySpec) -> list[str]:
         directories: list[Path] = []

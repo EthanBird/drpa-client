@@ -16,16 +16,15 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 - 任意界面拖拽 `.rpaz` / `.zip` 直接安装
 - 单个 `.py` 文件直接导入为脚本包
 - `manifest.yaml` 参数定义
-- 每个脚本包独立 venv
-- 安装时可选 Runtime 策略：共享当前 Python、使用已有 venv、新建 venv
+- 项目统一 `.venv`，用户无感创建和复用
+- 项目目录 `.drpa-data` 保存脚本包、任务配置、日志和输出
 - 支持脚本包内置 wheels 离线依赖
 - 仓库内置 Python 3.11/cp311 的 Windows/Linux wheelhouse：DrissionPage、requests、pandas、openpyxl 及完整依赖
 - 子进程运行脚本
 - JSON Lines 实时任务日志
 - 文件管理式任务配置：保存多个任务配置并支持多个运行实例并发执行
 - SQLite 运行历史
-- 脚本包卸载和环境重建
-- 列表式任务运行界面
+- 镜像/容器式工作台：脚本包像镜像，任务配置和运行实例像容器
 - Monaco Web 代码编辑器入口
 - examples 示例脚本包：Hello、Bing 每日一图、Bilibili 搜索、营销销户派工
 - 浏览器录制 MVP：录制事件模型、JS Agent、草稿 `.rpaz` 生成器；作为高级功能默认隐藏，可在设置中启用
@@ -147,9 +146,9 @@ examples/marketing_cancel_order_dispatch/
 examples/marketing_cancel_order_dispatch.rpaz
 ```
 
-在 GUI 的“脚本包”页面点击“安装脚本包”，默认会打开当前运行/安装目录，方便直接选择 `examples/*.rpaz`。
+在 GUI 的“工作台”页面点击“安装脚本包 / 导入 py”，默认会打开当前运行/安装目录，方便直接选择 `examples/*.rpaz`。
 
-也可以在任意页面直接拖拽 `.rpaz` 或 `.zip` 到窗口中安装，程序会自动切换到“脚本包”页面并执行安装。
+也可以在任意页面直接拖拽 `.rpaz` 或 `.zip` 到窗口中安装，程序会自动切换到“工作台”页面并执行安装。
 
 其中：
 

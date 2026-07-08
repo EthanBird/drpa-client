@@ -42,7 +42,7 @@ DRPA Client 是一款轻量级 Python RPA 桌面运行器，目标用户包括�
 
 ### 2.4 可维护
 
-- 每个脚本包独立 venv。
+- 项目统一 `.venv`，脚本包共享运行环境，用户无感创建和复用。
 - 任务通过子进程运行。
 - 安装、运行、日志、产物有清晰目录结构。
 - 失败可诊断，环境可重建。
@@ -174,8 +174,8 @@ DRPA Client
 - 在任意页面拖拽 `.rpaz` 或 `.zip` 到主窗口即可安装。
 - 直接导入单个 `.py` 文件，自动生成 `manifest.yaml` 和脚本包目录。
 - 读取 `manifest.yaml`。
-- 安装到数据目录。
-- 创建独立 venv。
+- 安装到项目 `.drpa-data`。
+- 依赖安装到项目统一 `.venv`。
 - 安装依赖。
 - 使用包内 wheels。
 - 使用仓库级 wheelhouse，例如 DrissionPage、requests、pandas、openpyxl 及其完整依赖。
@@ -311,11 +311,7 @@ examples/marketing_cancel_order_dispatch.rpaz
   - 亮色主题
   - 主题由 QSS 文件驱动。
 - 浏览器录制高级功能开关。默认关闭，因此默认导航不显示“浏览器录制”。
-- 检测本地 Python 环境，包括当前 Python、PATH 中的 `python3.11`、`python3`、`python` 等。
-- 配置脚本包安装运行环境策略：
-  - 共享当前 DRPA Python 环境，默认，不创建 venv。
-  - 使用已有 venv。
-  - 每个脚本包新建 venv。
+- 运行环境由项目 `.venv` 自动托管，用户无需选择 Python 环境。
 
 后续需要补充：
 

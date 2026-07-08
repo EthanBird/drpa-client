@@ -12,7 +12,7 @@ from .manifest import ManifestError, load_manifest
 from .models import InstalledPackage
 from .paths import ensure_data_layout
 from .runtime_manager import RuntimeManager
-from .settings import RuntimeMode, SettingsStore
+from .settings import SettingsStore
 
 
 class PackageInstallError(RuntimeError):
@@ -35,8 +35,6 @@ class PackageManager:
         self,
         archive_path: Path,
         install_dependencies: bool = True,
-        runtime_mode: RuntimeMode | None = None,
-        existing_venv_path: str | None = None,
         log: Callable[[str], None] | None = None,
     ) -> InstalledPackage:
         if not archive_path.exists():
@@ -53,8 +51,6 @@ class PackageManager:
             return self._install_staging(
                 staging_dir,
                 install_dependencies=install_dependencies,
-                runtime_mode=runtime_mode,
-                existing_venv_path=existing_venv_path,
                 log=log,
             )
         except (zipfile.BadZipFile, ManifestError, OSError) as exc:
@@ -67,8 +63,6 @@ class PackageManager:
         self,
         file_path: Path,
         install_dependencies: bool = False,
-        runtime_mode: RuntimeMode | None = None,
-        existing_venv_path: str | None = None,
         log: Callable[[str], None] | None = None,
     ) -> InstalledPackage:
         if not file_path.exists():
@@ -89,8 +83,6 @@ class PackageManager:
             return self._install_staging(
                 staging_dir,
                 install_dependencies=install_dependencies,
-                runtime_mode=runtime_mode,
-                existing_venv_path=existing_venv_path,
                 log=log,
             )
         except (ManifestError, OSError) as exc:
@@ -130,10 +122,10 @@ class PackageManager:
         log: Callable[[str], None] | None = None,
     ) -> InstalledPackage:
         if package.manifest.runtime.isolation != "venv" or package.venv_dir is None:
-            _log(log, "当前脚本包使用 shared runtime，无需重建 venv")
+            _log(log, "当前脚本包未记录 venv，无需重建")
             return package
         if not package.venv_owned:
-            _log(log, f"当前脚本包使用已有 venv，不会删除外部环境：{package.venv_dir}")
+            _log(log, f"当前脚本包使用项目统一 venv，不会删除共享环境：{package.venv_dir}")
             self.runtime_manager.install_dependencies(
                 self.runtime_manager.python_executable(package.venv_dir),
                 package.package_dir,
@@ -186,17 +178,10 @@ class PackageManager:
         self,
         staging_dir: Path,
         install_dependencies: bool,
-        runtime_mode: RuntimeMode | None = None,
-        existing_venv_path: str | None = None,
         log: Callable[[str], None] | None = None,
     ) -> InstalledPackage:
         _log(log, "读取 manifest.yaml")
         manifest = load_manifest(staging_dir)
-        settings = self.settings_store.load()
-        selected_runtime_mode = runtime_mode or settings.runtime_mode
-        selected_existing_venv = (
-            existing_venv_path if existing_venv_path is not None else settings.existing_venv_path
-        )
 
         package_root = self.packages_dir / manifest.id
         package_dir = package_root / manifest.version / "package"
@@ -211,8 +196,6 @@ class PackageManager:
             package_dir=package_dir,
             manifest=manifest,
             package_root_dir=package_dir.parent,
-            runtime_mode=selected_runtime_mode,
-            existing_venv_path=selected_existing_venv,
             install_dependencies=install_dependencies,
             log=log,
         )
@@ -222,7 +205,7 @@ class PackageManager:
             root_dir=package_dir.parent,
             package_dir=package_dir,
             venv_dir=venv_dir,
-            runtime_mode=selected_runtime_mode,
+            runtime_mode="project_venv",
             venv_owned=venv_owned,
             installed_at=datetime.now(UTC).isoformat(),
         )

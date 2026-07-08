@@ -21,7 +21,7 @@ DRPA Client 当前定位为一款轻量级 Python RPA 桌面客户端：
 | PySide6 GUI | 已实现 | 首页、脚本包页、运行页、设置页和暗色主题 |
 | 脚本包导入 | 已实现 | 支持 `.rpaz` 和 `.zip` |
 | manifest 解析 | 已实现 | 使用 `manifest.yaml` 描述包信息、参数和依赖 |
-| 每包 venv | 已实现 | 每个脚本包可拥有独立 Python 虚拟环境 |
+| 项目统一 venv | 已实现 | 所有脚本包共享项目 `.venv`，用户无感创建和复用 |
 | 离线 wheels | 已预留并实现基础安装 | 支持 `wheels/common`、`wheels/windows`、`wheels/linux` |
 | 子进程运行 | 已实现 | GUI 不直接 import 用户脚本 |
 | JSON Lines 事件 | 已实现 | 日志、进度、产物、状态通过 stdout 传回 GUI |
@@ -120,8 +120,8 @@ src/drpa_client/app/ui/themes/dark.qss
 | `runtime_manager.py` | 创建 venv、安装依赖、处理平台化 wheels |
 | `task_runner.py` | 启动用户脚本子进程，接收结构化事件，更新运行历史 |
 | `task_profiles.py` | 保存任务配置文件，支持多任务管理 |
-| `paths.py` | 管理跨平台数据目录 |
-| `settings.py` | 保存高级功能开关和 runtime 策略 |
+| `paths.py` | 管理项目目录下 `.drpa-data` 和 `.venv` |
+| `settings.py` | 保存高级功能开关和主题设置 |
 
 后续浏览器录制器建议新增：
 
@@ -287,9 +287,9 @@ params:
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `python` | `>=3.11` | Python 版本约束，使用 PEP 440 specifier |
-| `isolation` | `venv` | 当前支持 `venv` 和 `shared`，推荐 `venv` |
+| `isolation` | `venv` | 保留兼容字段；当前统一使用项目 `.venv` |
 
-当前实现优先支持每包独立 venv。这样可以避免不同脚本包之间依赖冲突。
+当前实现统一使用项目根目录 `.venv`。脚本包安装时把依赖安装进这个项目 venv，运行时也始终使用该 venv。
 
 ### 3.4 `dependencies`
 
@@ -359,10 +359,10 @@ PackageManager.install_python_file(path)
 
 ### 4.1 安装目录
 
-数据目录由 `platformdirs` 决定，也可以通过环境变量覆盖：
+数据目录固定在项目目录下：
 
-```bash
-DRPA_DATA_DIR=/tmp/drpa-client-data drpa-client
+```text
+.drpa-data/
 ```
 
 典型安装结构：
@@ -425,24 +425,9 @@ RuntimeManager.ensure_environment(...)
 
 ### 5.1 venv 创建
 
-当前默认每个脚本包创建独立 venv。
+当前所有脚本包共享项目根目录 `.venv`。
 
-为了兼容部分 Linux 环境缺少 `ensurepip` 的情况，代码会先判断脚本包是否真的需要 pip：
-
-- 如果没有 `requirements.txt`
-- 且 `dependencies.pip` 为空
-
-则创建不带 pip 的 venv：
-
-```python
-venv.EnvBuilder(with_pip=False)
-```
-
-如果脚本包需要安装依赖，则创建带 pip 的 venv：
-
-```python
-venv.EnvBuilder(with_pip=True)
-```
+首次安装需要依赖的脚本包时会创建带 pip 的项目 `.venv`。如果先安装了无依赖脚本导致 `.venv` 不带 pip，后续安装有依赖脚本时会自动重建为带 pip 的项目 `.venv`。
 
 如果 Linux 系统缺少 `python3-venv/ensurepip`，需要在产品安装包或环境准备阶段解决。
 
@@ -793,10 +778,10 @@ C:\...
 /home/...
 ```
 
-数据目录使用：
+数据目录固定在项目根目录：
 
-```python
-platformdirs.user_data_dir()
+```text
+.drpa-data/
 ```
 
 ### 9.2 Python 命令
@@ -832,25 +817,15 @@ ensurepip
 - 自带 pip。
 - 不依赖系统 Python。
 
-### 5.4 Runtime 策略
+### 5.4 项目统一 venv
 
-设置页支持三种脚本包运行环境策略：
+DRPA Client 不再让用户选择 Python 环境。安装和运行都使用项目根目录下的：
 
-| 策略 | 说明 | 适用场景 |
-| --- | --- | --- |
-| `shared` | 使用当前 DRPA Python 环境，不创建 venv | 默认，适合已有环境 |
-| `existing_venv` | 使用用户指定的已有 venv | 多个脚本包共享同一环境 |
-| `new_venv` | 每个脚本包创建独立 venv | 需要强隔离时手动选择 |
+```text
+.venv/
+```
 
-当使用已有 venv 时，`install.lock` 会记录 `venv_owned=false`，重建环境不会删除这个外部 venv，只会尝试重新安装依赖。
-
-设置页还支持检测本地 Python：
-
-- 当前 DRPA Python。
-- `VIRTUAL_ENV`。
-- PATH 中的 `python3.11`、`python3`、`python`、`python3.12`。
-
-检测结果用于用户判断应该选择哪个 runtime，但不会自动切换，必须由用户在设置中保存。
+这个 venv 由应用自动创建、自动复用。所有脚本包依赖集中安装，所有任务运行集中复用，减少重复 venv 和用户配置成本。
 
 ### 9.4 浏览器
 
@@ -945,8 +920,6 @@ with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
     for path in source.rglob("*"):
         if path.is_file():
             zf.write(path, path.relative_to(source))
-
-os.environ["DRPA_DATA_DIR"] = "/tmp/drpa-client-test-data"
 
 from drpa_client.core.package_manager import PackageManager
 from drpa_client.core.task_runner import TaskRunner
@@ -1066,7 +1039,7 @@ Python 脚本包本质上可以执行任意代码，因此安全边界要明确�
 
 - 安全解压，防 Zip Slip。
 - 入口脚本路径越界检查。
-- 每包独立 venv。
+- 项目统一 venv。
 
 后续建议：
 
@@ -1178,9 +1151,9 @@ build/
 
 因为用户脚本可能崩溃、阻塞、修改全局状态或依赖不同版本的第三方库。子进程运行更稳定，也更容易停止和记录日志。
 
-### 16.2 为什么每个脚本包独立 venv？
+### 16.2 为什么使用项目统一 venv？
 
-RPA 脚本经常依赖不同版本的浏览器库、Excel 库、OCR 库等。每包 venv 能降低依赖冲突风险，便于卸载和重建。
+当前产品目标是用户无感运行脚本包。项目统一 `.venv` 可以避免每个脚本包反复创建环境，依赖集中安装和复用，界面上也不需要暴露 Python 环境选择。
 
 ### 16.3 为什么 `.rpaz` 本质还是 zip？
 
