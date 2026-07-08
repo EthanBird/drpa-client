@@ -16,6 +16,9 @@ Primary packages included:
 - openpyxl
 
 The wheelhouse also includes transitive dependencies required by those packages.
+Windows-specific conditional dependencies are included as well, for example:
+
+- colorama, required by click on Windows
 
 Platform directories:
 
