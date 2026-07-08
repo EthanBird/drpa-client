@@ -65,8 +65,13 @@ DRPA Client 当前定位为一款轻量级 Python RPA 桌面客户端：
 │       │   └── task_runner.py
 │       ├── runtime/
 │       │   └── bootstrap.py
+│       ├── resources/
+│       │   └── default_packages/
+│       │       └── bing_daily_image.rpaz
 │       └── sdk/
 │           └── context.py
+├── tools/
+│   └── build_default_packages.py
 └── tests/
     └── test_manifest.py
 ```
@@ -151,6 +156,28 @@ def main(ctx):
 ```
 
 SDK 的目标是让业务脚本不需要知道 GUI、数据库、子进程协议等内部实现。
+
+### 2.5 `resources`
+
+`resources` 保存应用内置资源。
+
+当前内置默认脚本包：
+
+```text
+src/drpa_client/resources/default_packages/bing_daily_image.rpaz
+```
+
+该包源码位于：
+
+```text
+examples/bing_daily_image/
+```
+
+重新构建默认包：
+
+```bash
+python3 tools/build_default_packages.py
+```
 
 ## 3. 脚本包协议
 
@@ -592,6 +619,26 @@ Stack
   - TasksPage
   - SettingsPage
 ```
+
+任务运行页使用列表式布局，不使用下拉框：
+
+```text
+TasksPage
+  ├── 左侧：PackageList
+  │   ├── 已安装脚本包列表
+  │   └── 刷新列表
+  └── 右侧：RunDetail
+      ├── 脚本包名称/描述/Runtime
+      ├── manifest 参数表单
+      ├── 运行/停止按钮
+      └── 实时日志
+```
+
+这样做的原因：
+
+- 下拉框只适合少量简单选项，不适合管理脚本包。
+- 列表可以展示更多上下文，例如 ID、版本、最近运行状态。
+- 后续可扩展搜索、收藏、分组、图标和脚本包状态。
 
 ### 8.2 主题
 

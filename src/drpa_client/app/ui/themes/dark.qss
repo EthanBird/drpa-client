@@ -45,10 +45,44 @@ QWidget {
   font-weight: 700;
 }
 
+#SectionTitle {
+  color: #f8fafc;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+#MutedText {
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
 #Card {
   background: #111c30;
   border: 1px solid #22314a;
   border-radius: 20px;
+}
+
+#PackageList {
+  background: #0b1220;
+  border: 1px solid #26364f;
+  border-radius: 14px;
+  padding: 8px;
+}
+
+#PackageList::item {
+  color: #cbd5e1;
+  border-radius: 12px;
+  padding: 14px 12px;
+  margin: 4px;
+}
+
+#PackageList::item:selected {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+#PackageList::item:hover:!selected {
+  background: #162033;
 }
 
 QPushButton {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from importlib import resources
 from typing import Any
 
 from PySide6.QtCore import QDate, QObject, Qt, QThread, Signal
@@ -9,7 +10,6 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
-    QComboBox,
     QDateEdit,
     QDoubleSpinBox,
     QFileDialog,
@@ -37,6 +37,16 @@ from drpa_client.core.models import InstalledPackage, TaskEvent
 from drpa_client.core.package_manager import PackageManager
 from drpa_client.core.paths import get_data_dir
 from drpa_client.core.task_runner import RunningTask, TaskRunner
+
+
+def default_package_path(filename: str) -> Path:
+    cache_dir = get_data_dir() / "cache" / "default-packages"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    target = cache_dir / filename
+    package_resource = resources.files("drpa_client.resources.default_packages").joinpath(filename)
+    with package_resource.open("rb") as source, target.open("wb") as destination:
+        destination.write(source.read())
+    return target
 
 
 class MainWindow(QMainWindow):
@@ -194,11 +204,13 @@ class PackagesPage(Page):
         toolbar = QHBoxLayout()
         self.install_button = QPushButton("安装脚本包")
         self.install_button.setObjectName("PrimaryButton")
+        self.install_default_button = QPushButton("安装默认 Bing 每日一图")
         self.rebuild_button = QPushButton("重建环境")
         self.uninstall_button = QPushButton("卸载")
         self.install_dependencies = QCheckBox("安装依赖")
         self.install_dependencies.setChecked(True)
         toolbar.addWidget(self.install_button)
+        toolbar.addWidget(self.install_default_button)
         toolbar.addWidget(self.rebuild_button)
         toolbar.addWidget(self.uninstall_button)
         toolbar.addWidget(self.install_dependencies)
@@ -221,6 +233,7 @@ class PackagesPage(Page):
         self.content.addWidget(card, 1)
 
         self.install_button.clicked.connect(self._choose_package)
+        self.install_default_button.clicked.connect(self._install_default_bing_package)
         self.rebuild_button.clicked.connect(self._rebuild_selected)
         self.uninstall_button.clicked.connect(self._uninstall_selected)
         self.refresh()
@@ -252,6 +265,7 @@ class PackagesPage(Page):
 
     def _install_package(self, path: Path) -> None:
         self.install_button.setEnabled(False)
+        self.install_default_button.setEnabled(False)
         self.rebuild_button.setEnabled(False)
         self.uninstall_button.setEnabled(False)
         self.install_log.append(f"开始安装：{path}")
@@ -274,6 +288,7 @@ class PackagesPage(Page):
 
     def _install_finished(self, package_name: str) -> None:
         self.install_button.setEnabled(True)
+        self.install_default_button.setEnabled(True)
         self.rebuild_button.setEnabled(True)
         self.uninstall_button.setEnabled(True)
         self.install_log.append(f"安装完成：{package_name}")
@@ -282,10 +297,18 @@ class PackagesPage(Page):
 
     def _install_failed(self, message: str) -> None:
         self.install_button.setEnabled(True)
+        self.install_default_button.setEnabled(True)
         self.rebuild_button.setEnabled(True)
         self.uninstall_button.setEnabled(True)
         self.install_log.append(f"安装失败：{message}")
         QMessageBox.critical(self, "安装失败", message)
+
+    def _install_default_bing_package(self) -> None:
+        package_path = default_package_path("bing_daily_image.rpaz")
+        if not package_path.exists():
+            QMessageBox.critical(self, "默认包缺失", f"找不到默认脚本包：{package_path}")
+            return
+        self._install_package(package_path)
 
     def _selected_package(self) -> InstalledPackage | None:
         row = self.table.currentRow()
@@ -300,6 +323,7 @@ class PackagesPage(Page):
             QMessageBox.information(self, "请选择脚本包", "请先在表格中选择一个脚本包。")
             return
         self.install_button.setEnabled(False)
+        self.install_default_button.setEnabled(False)
         self.rebuild_button.setEnabled(False)
         self.uninstall_button.setEnabled(False)
         self.install_log.append(f"开始重建环境：{package.display_name}")
@@ -396,7 +420,31 @@ class TasksPage(Page):
         self.param_widgets: dict[str, QWidget] = {}
 
         card = Card()
-        self.package_combo = QComboBox()
+        body = QHBoxLayout()
+        body.setSpacing(18)
+
+        self.package_list = QListWidget()
+        self.package_list.setObjectName("PackageList")
+        self.package_list.setMinimumWidth(300)
+        self.package_list.setMaximumWidth(360)
+
+        left_panel = QVBoxLayout()
+        list_title = QLabel("可运行脚本包")
+        list_title.setObjectName("SectionTitle")
+        self.package_hint = QLabel("选择一个脚本包后，右侧会显示参数和运行日志。")
+        self.package_hint.setObjectName("MutedText")
+        self.refresh_button = QPushButton("刷新列表")
+        left_panel.addWidget(list_title)
+        left_panel.addWidget(self.package_hint)
+        left_panel.addWidget(self.package_list, 1)
+        left_panel.addWidget(self.refresh_button)
+
+        right_panel = QVBoxLayout()
+        self.selected_title = QLabel("尚未选择脚本包")
+        self.selected_title.setObjectName("SectionTitle")
+        self.selected_description = QLabel("请从左侧列表选择要运行的 RPA 脚本包。")
+        self.selected_description.setObjectName("MutedText")
+        self.selected_description.setWordWrap(True)
         self.form = QFormLayout()
         self.form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
@@ -414,14 +462,19 @@ class TasksPage(Page):
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(260)
 
-        card.layout.addWidget(QLabel("脚本包"))
-        card.layout.addWidget(self.package_combo)
-        card.layout.addLayout(self.form)
-        card.layout.addLayout(buttons)
-        card.layout.addWidget(self.log)
+        right_panel.addWidget(self.selected_title)
+        right_panel.addWidget(self.selected_description)
+        right_panel.addLayout(self.form)
+        right_panel.addLayout(buttons)
+        right_panel.addWidget(self.log, 1)
+
+        body.addLayout(left_panel)
+        body.addLayout(right_panel, 1)
+        card.layout.addLayout(body)
         self.content.addWidget(card, 1)
 
-        self.package_combo.currentIndexChanged.connect(self._render_params)
+        self.package_list.currentRowChanged.connect(self._render_params)
+        self.refresh_button.clicked.connect(self.refresh_packages)
         self.run_button.clicked.connect(self._run)
         self.stop_button.clicked.connect(self._stop)
         self.event_bridge.event.connect(self._handle_event)
@@ -429,11 +482,17 @@ class TasksPage(Page):
 
     def refresh_packages(self) -> None:
         self.packages = self.package_manager.list_installed()
-        self.package_combo.blockSignals(True)
-        self.package_combo.clear()
+        current_row = self.package_list.currentRow()
+        self.package_list.blockSignals(True)
+        self.package_list.clear()
         for package in self.packages:
-            self.package_combo.addItem(package.display_name, package.manifest.id)
-        self.package_combo.blockSignals(False)
+            item = QListWidgetItem(f"{package.manifest.name}\n{package.manifest.id} · {package.manifest.version}")
+            item.setToolTip(package.manifest.description or package.display_name)
+            item.setData(Qt.ItemDataRole.UserRole, package.manifest.id)
+            self.package_list.addItem(item)
+        self.package_list.blockSignals(False)
+        if self.packages:
+            self.package_list.setCurrentRow(min(max(current_row, 0), len(self.packages) - 1))
         self._render_params()
 
     def _render_params(self) -> None:
@@ -442,8 +501,16 @@ class TasksPage(Page):
         self.param_widgets.clear()
         package = self._selected_package()
         if package is None:
+            self.selected_title.setText("尚未选择脚本包")
+            self.selected_description.setText("请先在左侧列表选择要运行的 RPA 脚本包。")
             self.form.addRow(QLabel("尚未安装脚本包"))
             return
+
+        self.selected_title.setText(package.display_name)
+        description = package.manifest.description or "这个脚本包没有填写描述。"
+        self.selected_description.setText(
+            f"{description}\nID: {package.manifest.id} · Runtime: {package.manifest.runtime.isolation}"
+        )
 
         for param in package.manifest.params:
             if param.type == "boolean":
@@ -481,7 +548,7 @@ class TasksPage(Page):
             self.form.addRow(label, widget)
 
     def _selected_package(self) -> InstalledPackage | None:
-        index = self.package_combo.currentIndex()
+        index = self.package_list.currentRow()
         if index < 0 or index >= len(self.packages):
             return None
         return self.packages[index]

@@ -8,3 +8,4 @@ venv/
 dist/
 build/
 *.rpaz
+!src/drpa_client/resources/default_packages/*.rpaz

@@ -19,6 +19,8 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 - JSON Lines 实时任务日志
 - SQLite 运行历史
 - 脚本包卸载和环境重建
+- 列表式任务运行界面
+- 内置默认脚本包：Bing 每日一图
 - 面向 DrissionPage 的 SDK 入口
 
 ## 快速运行
@@ -107,6 +109,28 @@ zip -r ../hello_web_bot.rpaz .
 ```
 
 然后在 GUI 的“脚本包”页面导入 `examples/hello_web_bot.rpaz`。
+
+## 默认脚本包
+
+应用内置了一个默认脚本包：
+
+```text
+src/drpa_client/resources/default_packages/bing_daily_image.rpaz
+```
+
+它的源码位于：
+
+```text
+examples/bing_daily_image/
+```
+
+在 GUI 的“脚本包”页面点击“安装默认 Bing 每日一图”即可安装。该脚本会访问 Bing 图片接口，下载每日一图和 JSON 元数据到任务输出目录。
+
+如需重新生成默认 `.rpaz`：
+
+```bash
+python3 tools/build_default_packages.py
+```
 
 ## 脚本 SDK
 

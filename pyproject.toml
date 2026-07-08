@@ -34,7 +34,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 drpa_client = [
-  "app/ui/themes/*.qss"
+  "app/ui/themes/*.qss",
+  "resources/default_packages/*.rpaz"
 ]
 
 [tool.ruff]
