@@ -16,8 +16,9 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 - 单个 `.py` 文件直接导入为脚本包
 - `manifest.yaml` 参数定义
 - 每个脚本包独立 venv
-- 可在设置中选择新建 venv、共享当前 Python 或使用已有 venv
+- 安装时可选 Runtime 策略：共享当前 Python、使用已有 venv、新建 venv
 - 支持脚本包内置 wheels 离线依赖
+- 仓库内置 Python 3.11/cp311 的 Windows/Linux wheelhouse：DrissionPage、requests、pandas、openpyxl 及完整依赖
 - 子进程运行脚本
 - JSON Lines 实时任务日志
 - SQLite 运行历史
@@ -104,6 +105,15 @@ params:
 - `wheels/linux/*.whl`：仅 Linux 安装
 
 安装时会按 manifest 中的 `dependencies.local` 收集这些目录，并传给 pip 的 `--find-links`。如果 `strategy` 为 `offline-only`，会附加 `--no-index`，确保只从脚本包资源中安装。
+
+仓库还提供全局 wheelhouse：
+
+```text
+wheelhouse/linux-x86_64/
+wheelhouse/windows-amd64/
+```
+
+安装依赖时，DRPA Client 会根据当前平台自动把对应目录加入 pip `--find-links`，因此常用依赖可以直接复用仓库里的完整 wheels。
 
 ## 参数表与运行表单
 

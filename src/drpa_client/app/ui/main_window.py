@@ -312,14 +312,23 @@ class PackagesPage(Page):
         self.uninstall_button = QPushButton("卸载")
         self.install_dependencies = QCheckBox("安装依赖")
         self.install_dependencies.setChecked(True)
+        self.runtime_mode_combo = QComboBox()
+        self.runtime_mode_combo.addItem("使用当前环境（不创建 venv）", "shared")
+        self.runtime_mode_combo.addItem("使用设置中的已有 venv", "existing_venv")
+        self.runtime_mode_combo.addItem("新建独立 venv", "new_venv")
+        settings = self.package_manager.settings_store.load()
+        index = self.runtime_mode_combo.findData(settings.runtime_mode)
+        self.runtime_mode_combo.setCurrentIndex(max(index, 0))
         toolbar.addWidget(self.install_button)
         toolbar.addWidget(self.rebuild_button)
         toolbar.addWidget(self.uninstall_button)
         toolbar.addWidget(self.install_dependencies)
+        toolbar.addWidget(QLabel("Runtime"))
+        toolbar.addWidget(self.runtime_mode_combo)
         toolbar.addStretch(1)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["名称", "ID", "版本", "Runtime", "目录"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["名称", "ID", "版本", "Manifest Runtime", "安装策略", "目录"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -348,6 +357,7 @@ class PackagesPage(Page):
                 package.manifest.id,
                 package.manifest.version,
                 package.manifest.runtime.isolation,
+                package.runtime_mode,
                 str(package.root_dir),
             ]
             for column, value in enumerate(values):
@@ -365,6 +375,8 @@ class PackagesPage(Page):
         self._install_package(Path(path))
 
     def _install_package(self, path: Path) -> None:
+        if not self._validate_runtime_choice():
+            return
         self.install_button.setEnabled(False)
         self.rebuild_button.setEnabled(False)
         self.uninstall_button.setEnabled(False)
@@ -374,6 +386,7 @@ class PackagesPage(Page):
             self.package_manager,
             path,
             self.install_dependencies.isChecked(),
+            runtime_mode=self.runtime_mode_combo.currentData(),
         )
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
@@ -385,6 +398,14 @@ class PackagesPage(Page):
         self.worker_thread.finished.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
         self.worker_thread.start()
+
+    def _validate_runtime_choice(self) -> bool:
+        if self.runtime_mode_combo.currentData() != "existing_venv":
+            return True
+        if self.package_manager.settings_store.load().existing_venv_path:
+            return True
+        QMessageBox.warning(self, "缺少已有 venv", "请先到设置页配置已有 venv 路径，或选择其他 Runtime 策略。")
+        return False
 
     def _install_finished(self, package_name: str) -> None:
         self.install_button.setEnabled(True)
@@ -422,6 +443,7 @@ class PackagesPage(Page):
             self.package_manager,
             package=package,
             install_dependencies=self.install_dependencies.isChecked(),
+            runtime_mode=self.runtime_mode_combo.currentData(),
             mode="rebuild",
         )
         self.worker.moveToThread(self.worker_thread)
@@ -463,6 +485,7 @@ class PackageInstallWorker(QObject):
         manager: PackageManager,
         path: Path | None = None,
         install_dependencies: bool = True,
+        runtime_mode: str | None = None,
         package: InstalledPackage | None = None,
         mode: str = "install",
     ):
@@ -470,6 +493,7 @@ class PackageInstallWorker(QObject):
         self.manager = manager
         self.path = path
         self.install_dependencies = install_dependencies
+        self.runtime_mode = runtime_mode
         self.package = package
         self.mode = mode
 
@@ -491,6 +515,8 @@ class PackageInstallWorker(QObject):
                     package = self.manager.install_python_file(
                         self.path,
                         install_dependencies=False,
+                        runtime_mode=self.runtime_mode,
+                        existing_venv_path=self.manager.settings_store.load().existing_venv_path,
                         log=self.message.emit,
                     )
                 else:
@@ -498,6 +524,8 @@ class PackageInstallWorker(QObject):
                     package = self.manager.install_archive(
                         self.path,
                         self.install_dependencies,
+                        runtime_mode=self.runtime_mode,
+                        existing_venv_path=self.manager.settings_store.load().existing_venv_path,
                         log=self.message.emit,
                     )
             self.finished.emit(package.display_name)

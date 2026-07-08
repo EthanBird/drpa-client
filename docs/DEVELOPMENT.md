@@ -460,6 +460,21 @@ common + linux
 python -m pip install --find-links <dir1> --find-links <dir2> ...
 ```
 
+同时，RuntimeManager 会自动加入仓库级 wheelhouse：
+
+```text
+wheelhouse/linux-x86_64/
+wheelhouse/windows-amd64/
+```
+
+当前 wheelhouse 面向 Python 3.11 / cp311，包含：
+
+- DrissionPage
+- requests
+- pandas
+- openpyxl
+- 上述包的完整传递依赖
+
 如果策略是 `offline-only`，追加：
 
 ```bash
@@ -805,9 +820,9 @@ ensurepip
 
 | 策略 | 说明 | 适用场景 |
 | --- | --- | --- |
-| `new_venv` | 每个脚本包创建独立 venv | 默认，隔离性最好 |
-| `shared` | 使用当前 DRPA Python 环境 | 开发调试或受控环境 |
+| `shared` | 使用当前 DRPA Python 环境，不创建 venv | 默认，适合已有环境 |
 | `existing_venv` | 使用用户指定的已有 venv | 多个脚本包共享同一环境 |
+| `new_venv` | 每个脚本包创建独立 venv | 需要强隔离时手动选择 |
 
 当使用已有 venv 时，`install.lock` 会记录 `venv_owned=false`，重建环境不会删除这个外部 venv，只会尝试重新安装依赖。
 

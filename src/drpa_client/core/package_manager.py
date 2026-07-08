@@ -12,7 +12,7 @@ from .manifest import ManifestError, load_manifest
 from .models import InstalledPackage
 from .paths import ensure_data_layout
 from .runtime_manager import RuntimeManager
-from .settings import SettingsStore
+from .settings import RuntimeMode, SettingsStore
 
 
 class PackageInstallError(RuntimeError):
@@ -35,6 +35,8 @@ class PackageManager:
         self,
         archive_path: Path,
         install_dependencies: bool = True,
+        runtime_mode: RuntimeMode | None = None,
+        existing_venv_path: str | None = None,
         log: Callable[[str], None] | None = None,
     ) -> InstalledPackage:
         if not archive_path.exists():
@@ -48,7 +50,13 @@ class PackageManager:
             _log(log, f"解压脚本包：{archive_path}")
             with zipfile.ZipFile(archive_path) as archive:
                 _safe_extract(archive, staging_dir)
-            return self._install_staging(staging_dir, install_dependencies=install_dependencies, log=log)
+            return self._install_staging(
+                staging_dir,
+                install_dependencies=install_dependencies,
+                runtime_mode=runtime_mode,
+                existing_venv_path=existing_venv_path,
+                log=log,
+            )
         except (zipfile.BadZipFile, ManifestError, OSError) as exc:
             raise PackageInstallError(str(exc)) from exc
         finally:
@@ -59,6 +67,8 @@ class PackageManager:
         self,
         file_path: Path,
         install_dependencies: bool = False,
+        runtime_mode: RuntimeMode | None = None,
+        existing_venv_path: str | None = None,
         log: Callable[[str], None] | None = None,
     ) -> InstalledPackage:
         if not file_path.exists():
@@ -76,7 +86,13 @@ class PackageManager:
                 _single_file_manifest(package_id, file_path.stem),
                 encoding="utf-8",
             )
-            return self._install_staging(staging_dir, install_dependencies=install_dependencies, log=log)
+            return self._install_staging(
+                staging_dir,
+                install_dependencies=install_dependencies,
+                runtime_mode=runtime_mode,
+                existing_venv_path=existing_venv_path,
+                log=log,
+            )
         except (ManifestError, OSError) as exc:
             raise PackageInstallError(str(exc)) from exc
         finally:
@@ -170,11 +186,17 @@ class PackageManager:
         self,
         staging_dir: Path,
         install_dependencies: bool,
+        runtime_mode: RuntimeMode | None = None,
+        existing_venv_path: str | None = None,
         log: Callable[[str], None] | None = None,
     ) -> InstalledPackage:
         _log(log, "读取 manifest.yaml")
         manifest = load_manifest(staging_dir)
         settings = self.settings_store.load()
+        selected_runtime_mode = runtime_mode or settings.runtime_mode
+        selected_existing_venv = (
+            existing_venv_path if existing_venv_path is not None else settings.existing_venv_path
+        )
 
         package_root = self.packages_dir / manifest.id
         package_dir = package_root / manifest.version / "package"
@@ -189,8 +211,8 @@ class PackageManager:
             package_dir=package_dir,
             manifest=manifest,
             package_root_dir=package_dir.parent,
-            runtime_mode=settings.runtime_mode,
-            existing_venv_path=settings.existing_venv_path,
+            runtime_mode=selected_runtime_mode,
+            existing_venv_path=selected_existing_venv,
             install_dependencies=install_dependencies,
             log=log,
         )
@@ -200,7 +222,7 @@ class PackageManager:
             root_dir=package_dir.parent,
             package_dir=package_dir,
             venv_dir=venv_dir,
-            runtime_mode=settings.runtime_mode,
+            runtime_mode=selected_runtime_mode,
             venv_owned=venv_owned,
             installed_at=datetime.now(UTC).isoformat(),
         )

@@ -222,7 +222,21 @@ class RuntimeManager:
             for match in matches:
                 path = Path(match)
                 directories.add(str(path if path.is_dir() else path.parent))
+        for path in self._global_wheelhouse_dirs():
+            directories.add(str(path))
         return sorted(directories)
+
+    def _global_wheelhouse_dirs(self) -> list[Path]:
+        root = _find_repo_root(Path(__file__).resolve())
+        if root is None:
+            return []
+        system = platform.system().lower()
+        platform_dir = "windows-amd64" if system == "windows" else "linux-x86_64"
+        candidates = [
+            root / "wheelhouse" / "common",
+            root / "wheelhouse" / platform_dir,
+        ]
+        return [path for path in candidates if path.exists()]
 
     def _requires_pip(self, package_dir: Path, dependencies: DependencySpec) -> bool:
         requirements_path = package_dir / (dependencies.requirements or "requirements.txt")
@@ -265,3 +279,10 @@ class RuntimeManager:
 def _log(callback: Callable[[str], None] | None, message: str) -> None:
     if callback is not None:
         callback(message)
+
+
+def _find_repo_root(start: Path) -> Path | None:
+    for path in (start, *start.parents):
+        if (path / "wheelhouse").exists() or (path / "pyproject.toml").exists():
+            return path
+    return None

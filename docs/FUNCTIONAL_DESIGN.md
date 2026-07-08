@@ -173,6 +173,7 @@ DRPA Client
 - 创建独立 venv。
 - 安装依赖。
 - 使用包内 wheels。
+- 使用仓库级 wheelhouse，例如 DrissionPage、requests、pandas、openpyxl 及其完整依赖。
 - 覆盖安装相同版本。
 - 卸载脚本包。
 - 重建脚本包虚拟环境。
@@ -293,9 +294,9 @@ examples/bilibili_search.rpaz
 - 浏览器录制高级功能开关。默认关闭，因此默认导航不显示“浏览器录制”。
 - 检测本地 Python 环境，包括当前 Python、PATH 中的 `python3.11`、`python3`、`python` 等。
 - 配置脚本包安装运行环境策略：
-  - 每个脚本包新建 venv。
-  - 共享当前 DRPA Python 环境。
+  - 共享当前 DRPA Python 环境，默认，不创建 venv。
   - 使用已有 venv。
+  - 每个脚本包新建 venv。
 
 后续需要补充：
 

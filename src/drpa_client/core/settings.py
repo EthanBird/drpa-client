@@ -14,7 +14,7 @@ RuntimeMode = Literal["new_venv", "shared", "existing_venv"]
 @dataclass(frozen=True)
 class AppSettings:
     advanced_recorder_enabled: bool = False
-    runtime_mode: RuntimeMode = "new_venv"
+    runtime_mode: RuntimeMode = "shared"
     existing_venv_path: str = ""
 
 
@@ -43,4 +43,4 @@ class SettingsStore:
 def _runtime_mode(value: object) -> RuntimeMode:
     if value in {"new_venv", "shared", "existing_venv"}:
         return value
-    return "new_venv"
+    return "shared"
