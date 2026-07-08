@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QDate, QObject, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -61,11 +61,23 @@ def default_open_dir() -> str:
     return str(executable.parent)
 
 
+def _drop_install_files(urls) -> list[Path]:
+    files: list[Path] = []
+    for url in urls:
+        if not url.isLocalFile():
+            continue
+        path = Path(url.toLocalFile())
+        if path.suffix.lower() in {".rpaz", ".zip"}:
+            files.append(path)
+    return files
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DRPA Client")
         self.resize(1180, 760)
+        self.setAcceptDrops(True)
 
         self.settings_store = SettingsStore()
         self.package_manager = PackageManager(settings_store=self.settings_store)
@@ -98,6 +110,23 @@ class MainWindow(QMainWindow):
         self.settings_page.settings_changed.connect(self._rebuild_navigation)
         self._rebuild_navigation()
         self.sidebar.setCurrentRow(0)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if _drop_install_files(event.mimeData().urls()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        files = _drop_install_files(event.mimeData().urls())
+        if not files:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.stack.setCurrentWidget(self.packages_page)
+        self.sidebar.setCurrentRow(self.stack.currentIndex())
+        for path in files:
+            self.packages_page.install_from_drop(path)
 
     def _rebuild_navigation(self) -> None:
         current = self.stack.currentWidget()
@@ -375,6 +404,16 @@ class PackagesPage(Page):
         if not path:
             return
         self._install_package(Path(path))
+
+    def install_from_drop(self, path: Path) -> None:
+        if path.suffix.lower() not in {".rpaz", ".zip"}:
+            self.install_log.append(f"忽略不支持的拖拽文件：{path}")
+            return
+        if self.worker_thread is not None and self.worker_thread.isRunning():
+            self.install_log.append(f"当前正在安装，暂不处理拖拽文件：{path}")
+            return
+        self.install_log.append(f"拖拽安装：{path}")
+        self._install_package(path)
 
     def _install_package(self, path: Path) -> None:
         if not self._validate_runtime_choice():

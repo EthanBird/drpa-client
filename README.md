@@ -13,6 +13,7 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 - Windows / Linux 跨平台桌面客户端
 - PySide6 美观 UI，支持暗色/亮色 QSS 主题切换
 - `.rpaz` 脚本包安装
+- 任意界面拖拽 `.rpaz` / `.zip` 直接安装
 - 单个 `.py` 文件直接导入为脚本包
 - `manifest.yaml` 参数定义
 - 每个脚本包独立 venv
@@ -146,6 +147,8 @@ examples/marketing_cancel_order_dispatch.rpaz
 ```
 
 在 GUI 的“脚本包”页面点击“安装脚本包”，默认会打开当前运行/安装目录，方便直接选择 `examples/*.rpaz`。
+
+也可以在任意页面直接拖拽 `.rpaz` 或 `.zip` 到窗口中安装，程序会自动切换到“脚本包”页面并执行安装。
 
 其中：
 
