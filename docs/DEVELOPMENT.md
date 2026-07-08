@@ -119,6 +119,7 @@ src/drpa_client/app/ui/themes/dark.qss
 | `package_manager.py` | 安装、列出、查找、卸载脚本包，重建包环境 |
 | `runtime_manager.py` | 创建 venv、安装依赖、处理平台化 wheels |
 | `task_runner.py` | 启动用户脚本子进程，接收结构化事件，更新运行历史 |
+| `task_profiles.py` | 保存任务配置文件，支持多任务管理 |
 | `paths.py` | 管理跨平台数据目录 |
 | `settings.py` | 保存高级功能开关和 runtime 策略 |
 

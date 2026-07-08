@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -52,6 +53,7 @@ from drpa_client.core.paths import get_data_dir
 from drpa_client.core.recorder import BrowserRecorderSession, RecorderPackageGenerator, Recording
 from drpa_client.core.runtime_manager import RuntimeManager
 from drpa_client.core.settings import AppSettings, SettingsStore
+from drpa_client.core.task_profiles import TaskProfile, TaskProfileStore
 from drpa_client.core.task_runner import RunningTask, TaskRunner
 from drpa_client.app.ui.theme import apply_theme
 
@@ -593,18 +595,23 @@ class TasksPage(Page):
     run_finished = Signal()
 
     def __init__(self, package_manager: PackageManager, task_runner: TaskRunner):
-        super().__init__("运行任务", "选择脚本包、填写参数并启动 RPA，实时查看结构化日志。")
+        super().__init__("运行任务", "像管理文件一样管理任务配置，并支持多个运行实例并发执行。")
         self.package_manager = package_manager
         self.task_runner = task_runner
+        self.profile_store = TaskProfileStore()
         self.packages: list[InstalledPackage] = []
-        self.current_task: RunningTask | None = None
+        self.profiles: list[TaskProfile] = []
+        self.running_tasks: dict[str, RunningTask] = {}
+        self.run_logs: dict[str, list[str]] = {}
         self.event_bridge = TaskEventBridge()
         self.param_widgets: dict[str, QWidget] = {}
+        self.current_profile_id: str | None = None
 
         card = Card()
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
 
+        # Left: package "folders"
         self.package_list = QListWidget()
         self.package_list.setObjectName("PackageList")
         self.package_list.setMinimumWidth(260)
@@ -626,6 +633,44 @@ class TasksPage(Page):
         left_panel.addWidget(self.package_list, 1)
         left_panel.addWidget(self.refresh_button)
 
+        # Middle: task profile "files"
+        middle_widget = QWidget()
+        middle_widget.setMinimumWidth(320)
+        middle_panel = QVBoxLayout(middle_widget)
+        middle_panel.setContentsMargins(0, 0, 0, 0)
+        middle_panel.setSpacing(10)
+        profile_title = QLabel("任务配置")
+        profile_title.setObjectName("SectionTitle")
+        self.profile_hint = QLabel("保存后的任务配置会出现在这里，可分别运行。")
+        self.profile_hint.setObjectName("MutedText")
+        self.profile_hint.setWordWrap(True)
+        self.profile_table = QTableWidget(0, 4)
+        self.profile_table.setHorizontalHeaderLabels(["任务名", "脚本包", "版本", "状态"])
+        self.profile_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.profile_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.profile_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.profile_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.profile_table.verticalHeader().setVisible(False)
+        self.profile_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.profile_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+        profile_buttons = QHBoxLayout()
+        self.new_profile_button = QPushButton("新建")
+        self.save_profile_button = QPushButton("保存")
+        self.delete_profile_button = QPushButton("删除")
+        profile_buttons.addWidget(self.new_profile_button)
+        profile_buttons.addWidget(self.save_profile_button)
+        profile_buttons.addWidget(self.delete_profile_button)
+
+        self.run_profile_button = QPushButton("运行选中任务")
+        self.run_profile_button.setObjectName("PrimaryButton")
+        middle_panel.addWidget(profile_title)
+        middle_panel.addWidget(self.profile_hint)
+        middle_panel.addWidget(self.profile_table, 1)
+        middle_panel.addLayout(profile_buttons)
+        middle_panel.addWidget(self.run_profile_button)
+
+        # Right: selected package/profile details, params, run instances, logs.
         right_widget = QWidget()
         right_panel = QVBoxLayout(right_widget)
         right_panel.setContentsMargins(0, 0, 0, 0)
@@ -679,6 +724,15 @@ class TasksPage(Page):
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(180)
         self.log.setMaximumHeight(320)
+        self.run_table = QTableWidget(0, 4)
+        self.run_table.setHorizontalHeaderLabels(["运行ID", "任务", "状态", "退出码"])
+        self.run_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.run_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.run_table.verticalHeader().setVisible(False)
+        self.run_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.run_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         detail_layout.addWidget(self.selected_title)
         detail_layout.addWidget(self.selected_description)
@@ -691,22 +745,34 @@ class TasksPage(Page):
 
         right_panel.addWidget(detail_scroll, 3)
         right_panel.addLayout(buttons)
+        right_panel.addWidget(QLabel("运行实例"))
+        right_panel.addWidget(self.run_table, 1)
+        right_panel.addWidget(QLabel("选中运行日志"))
         right_panel.addWidget(self.log, 1)
 
         splitter.addWidget(left_widget)
+        splitter.addWidget(middle_widget)
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([320, 820])
+        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(2, 1)
+        splitter.setSizes([300, 360, 680])
         card.layout.addWidget(splitter)
         self.content.addWidget(card, 1)
 
         self.package_list.currentRowChanged.connect(self._render_params)
         self.refresh_button.clicked.connect(self.refresh_packages)
-        self.run_button.clicked.connect(self._run)
-        self.stop_button.clicked.connect(self._stop)
+        self.profile_table.currentCellChanged.connect(self._profile_selected)
+        self.run_table.currentCellChanged.connect(self._run_selected)
+        self.new_profile_button.clicked.connect(self._new_profile)
+        self.save_profile_button.clicked.connect(self._save_profile)
+        self.delete_profile_button.clicked.connect(self._delete_profile)
+        self.run_profile_button.clicked.connect(self._run_selected_profile)
+        self.run_button.clicked.connect(self._run_current_form)
+        self.stop_button.clicked.connect(self._stop_selected_run)
         self.event_bridge.event.connect(self._handle_event)
         self.refresh_packages()
+        self.refresh_profiles()
 
     def refresh_packages(self) -> None:
         self.packages = self.package_manager.list_installed()
@@ -722,6 +788,16 @@ class TasksPage(Page):
         if self.packages:
             self.package_list.setCurrentRow(min(max(current_row, 0), len(self.packages) - 1))
         self._render_params()
+        self.refresh_profiles()
+
+    def refresh_profiles(self) -> None:
+        self.profiles = self.profile_store.list_profiles()
+        self.profile_table.setRowCount(len(self.profiles))
+        for row, profile in enumerate(self.profiles):
+            status = self._profile_status(profile.id)
+            values = [profile.name, profile.package_id, profile.package_version, status]
+            for column, value in enumerate(values):
+                self.profile_table.setItem(row, column, QTableWidgetItem(value))
 
     def _render_params(self) -> None:
         while self.form.rowCount():
@@ -778,6 +854,22 @@ class TasksPage(Page):
             label = f"{param.label}{' *' if param.required else ''}"
             self.form.addRow(label, widget)
 
+    def _set_params(self, params: dict[str, Any]) -> None:
+        for name, value in params.items():
+            widget = self.param_widgets.get(name)
+            if widget is None:
+                continue
+            if isinstance(widget, QCheckBox):
+                widget.setChecked(bool(value))
+            elif isinstance(widget, QSpinBox):
+                widget.setValue(int(value))
+            elif isinstance(widget, QDoubleSpinBox):
+                widget.setValue(float(value))
+            elif isinstance(widget, QDateEdit):
+                widget.setDate(QDate.fromString(str(value), "yyyy-MM-dd"))
+            elif isinstance(widget, QLineEdit):
+                widget.setText(str(value))
+
     def _render_param_table(self, package: InstalledPackage) -> None:
         params = package.manifest.params
         self.param_table.setRowCount(len(params))
@@ -798,6 +890,12 @@ class TasksPage(Page):
         if index < 0 or index >= len(self.packages):
             return None
         return self.packages[index]
+
+    def _selected_profile(self) -> TaskProfile | None:
+        index = self.profile_table.currentRow()
+        if index < 0 or index >= len(self.profiles):
+            return None
+        return self.profiles[index]
 
     def _collect_params(self) -> dict[str, Any]:
         params: dict[str, Any] = {}
@@ -828,49 +926,206 @@ class TasksPage(Page):
             return False
         return True
 
-    def _run(self) -> None:
+    def _new_profile(self) -> None:
         package = self._selected_package()
         if package is None:
-            QMessageBox.warning(self, "无法运行", "请先安装脚本包")
+            QMessageBox.warning(self, "无法新建任务", "请先选择脚本包。")
             return
         if not self._validate_params(package):
             return
-        self.log.clear()
-        self.run_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.current_task = self.task_runner.start(
-            package,
-            self._collect_params(),
-            self.event_bridge.emit_event,
+        name, ok = QInputDialog.getText(self, "新建任务配置", "任务名称：", text=package.manifest.name)
+        if not ok or not name.strip():
+            return
+        profile = self.profile_store.save_profile(
+            name=name.strip(),
+            package_id=package.manifest.id,
+            package_version=package.manifest.version,
+            params=self._collect_params(),
         )
+        self.current_profile_id = profile.id
+        self.refresh_profiles()
+        self._select_profile(profile.id)
 
-    def _stop(self) -> None:
-        if self.current_task is not None:
-            self.current_task.stop()
-            self.log.append("[status] 已发送停止信号")
+    def _save_profile(self) -> None:
+        package = self._selected_package()
+        if package is None:
+            QMessageBox.warning(self, "无法保存任务", "请先选择脚本包。")
+            return
+        if not self._validate_params(package):
+            return
+        profile = self._selected_profile()
+        if profile is None:
+            self._new_profile()
+            return
+        saved = self.profile_store.save_profile(
+            profile_id=profile.id,
+            name=profile.name,
+            package_id=package.manifest.id,
+            package_version=package.manifest.version,
+            params=self._collect_params(),
+        )
+        self.current_profile_id = saved.id
+        self.refresh_profiles()
+        self._select_profile(saved.id)
+
+    def _delete_profile(self) -> None:
+        profile = self._selected_profile()
+        if profile is None:
+            return
+        answer = QMessageBox.question(self, "删除任务配置", f"确定删除任务配置 {profile.name}？")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.profile_store.delete_profile(profile.id)
+        self.current_profile_id = None
+        self.refresh_profiles()
+
+    def _profile_selected(self, *args) -> None:
+        profile = self._selected_profile()
+        if profile is None:
+            return
+        self.current_profile_id = profile.id
+        self._select_package(profile.package_id, profile.package_version)
+        self._set_params(profile.params)
+
+    def _run_current_form(self) -> None:
+        package = self._selected_package()
+        if package is None:
+            QMessageBox.warning(self, "无法运行", "请先选择脚本包。")
+            return
+        if not self._validate_params(package):
+            return
+        self._start_run(package, self._collect_params(), self._selected_profile())
+
+    def _run_selected_profile(self) -> None:
+        profile = self._selected_profile()
+        if profile is None:
+            QMessageBox.warning(self, "无法运行", "请先选择一个任务配置。")
+            return
+        package = self.package_manager.find(profile.package_id, profile.package_version)
+        if package is None:
+            QMessageBox.warning(self, "无法运行", f"找不到脚本包：{profile.package_id} {profile.package_version}")
+            return
+        self._start_run(package, profile.params, profile)
+
+    def _start_run(
+        self,
+        package: InstalledPackage,
+        params: dict[str, Any],
+        profile: TaskProfile | None,
+    ) -> None:
+        profile_name = profile.name if profile else f"{package.manifest.name} 临时运行"
+        task = self.task_runner.start(package, params, self.event_bridge.emit_event)
+        self.running_tasks[task.run_id] = task
+        self.run_logs[task.run_id] = [f"[status] 已启动：{profile_name}"]
+        self._append_run_row(task.run_id, profile_name, "running", "")
+        self._select_run(task.run_id)
+
+    def _stop_selected_run(self) -> None:
+        run_id = self._selected_run_id()
+        if not run_id:
+            return
+        task = self.running_tasks.get(run_id)
+        if task is not None:
+            task.stop()
+            self._append_log(run_id, "[status] 已发送停止信号")
 
     def _handle_event(self, event: TaskEvent) -> None:
         payload = event.payload
-        if event.type == "log":
-            self.log.append(f"[{payload.get('level', 'info')}] {payload.get('message', '')}")
-        elif event.type == "progress":
-            self.log.append(f"[progress] {payload.get('value')}% {payload.get('message', '')}")
-        elif event.type == "artifact":
-            self.log.append(f"[artifact] {payload.get('label', '')}: {payload.get('path', '')}")
-        elif event.type == "error":
-            self.log.append(f"[error] {payload.get('message', '')}")
-            if payload.get("traceback"):
-                self.log.append(str(payload["traceback"]))
-        elif event.type == "status":
-            self.log.append(f"[status] {payload.get('message', payload.get('value', ''))}")
-        elif event.type == "finished":
-            self.log.append(f"[finished] exit_code={payload.get('exit_code')}")
-            self.run_button.setEnabled(True)
-            self.stop_button.setEnabled(False)
-            self.current_task = None
+        run_id = str(payload.get("run_id", ""))
+        if not run_id:
+            return
+        message = self._format_event(event)
+        if message:
+            self._append_log(run_id, message)
+        if event.type == "finished":
+            self.running_tasks.pop(run_id, None)
+            self._update_run_row(run_id, "finished", str(payload.get("exit_code")))
+            self.refresh_profiles()
             self.run_finished.emit()
-        else:
-            self.log.append(json.dumps(payload, ensure_ascii=False))
+
+    def _format_event(self, event: TaskEvent) -> str:
+        payload = event.payload
+        if event.type == "log":
+            return f"[{payload.get('level', 'info')}] {payload.get('message', '')}"
+        if event.type == "progress":
+            return f"[progress] {payload.get('value')}% {payload.get('message', '')}"
+        if event.type == "artifact":
+            return f"[artifact] {payload.get('label', '')}: {payload.get('path', '')}"
+        if event.type == "error":
+            text = f"[error] {payload.get('message', '')}"
+            if payload.get("traceback"):
+                text += "\n" + str(payload["traceback"])
+            return text
+        if event.type == "status":
+            return f"[status] {payload.get('message', payload.get('value', ''))}"
+        if event.type == "finished":
+            return f"[finished] exit_code={payload.get('exit_code')}"
+        return json.dumps(payload, ensure_ascii=False)
+
+    def _append_log(self, run_id: str, message: str) -> None:
+        self.run_logs.setdefault(run_id, []).append(message)
+        if self._selected_run_id() == run_id:
+            self.log.append(message)
+
+    def _append_run_row(self, run_id: str, name: str, status: str, exit_code: str) -> None:
+        row = self.run_table.rowCount()
+        self.run_table.insertRow(row)
+        for column, value in enumerate((run_id, name, status, exit_code)):
+            self.run_table.setItem(row, column, QTableWidgetItem(value))
+
+    def _update_run_row(self, run_id: str, status: str, exit_code: str) -> None:
+        for row in range(self.run_table.rowCount()):
+            item = self.run_table.item(row, 0)
+            if item and item.text() == run_id:
+                self.run_table.setItem(row, 2, QTableWidgetItem(status))
+                self.run_table.setItem(row, 3, QTableWidgetItem(exit_code))
+                return
+
+    def _run_selected(self, *args) -> None:
+        run_id = self._selected_run_id()
+        self.log.clear()
+        if not run_id:
+            self.stop_button.setEnabled(False)
+            return
+        for line in self.run_logs.get(run_id, []):
+            self.log.append(line)
+        self.stop_button.setEnabled(run_id in self.running_tasks)
+
+    def _selected_run_id(self) -> str | None:
+        row = self.run_table.currentRow()
+        if row < 0:
+            return None
+        item = self.run_table.item(row, 0)
+        return item.text() if item else None
+
+    def _select_run(self, run_id: str) -> None:
+        for row in range(self.run_table.rowCount()):
+            item = self.run_table.item(row, 0)
+            if item and item.text() == run_id:
+                self.run_table.setCurrentCell(row, 0)
+                return
+
+    def _select_profile(self, profile_id: str) -> None:
+        for row, profile in enumerate(self.profiles):
+            if profile.id == profile_id:
+                self.profile_table.setCurrentCell(row, 0)
+                return
+
+    def _select_package(self, package_id: str, package_version: str) -> None:
+        for row, package in enumerate(self.packages):
+            if package.manifest.id == package_id and package.manifest.version == package_version:
+                self.package_list.setCurrentRow(row)
+                return
+
+    def _profile_status(self, profile_id: str) -> str:
+        for row in range(self.run_table.rowCount()):
+            name_item = self.run_table.item(row, 1)
+            status_item = self.run_table.item(row, 2)
+            if name_item and status_item:
+                profile = next((item for item in self.profiles if item.id == profile_id), None)
+                if profile and name_item.text() == profile.name and status_item.text() == "running":
+                    return "running"
+        return "saved"
 
 
 class TaskEventBridge(QObject):

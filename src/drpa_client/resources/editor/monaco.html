@@ -66,33 +66,60 @@
       return window.editor.getValue();
     }
 
-    const loader = document.createElement("script");
-    loader.src = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js";
-    loader.onload = function () {
-      require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs" } });
-      require(["vs/editor/editor.main"], function () {
-        window.editor = monaco.editor.create(document.getElementById("editor"), {
-          value: window.__DRPA_PENDING_VALUE__,
-          language: window.__DRPA_PENDING_LANGUAGE__,
-          theme: "vs-dark",
-          automaticLayout: true,
-          minimap: { enabled: true },
-          fontSize: 14,
-          fontLigatures: true,
-          scrollBeyondLastLine: false,
-          tabSize: 4,
-          insertSpaces: true
-        });
-        window.__DRPA_EDITOR_READY__ = true;
-      });
-    };
-    loader.onerror = showFallback;
-    document.head.appendChild(loader);
-    setTimeout(function () {
-      if (!window.__DRPA_EDITOR_READY__) {
+    const MONACO_SOURCES = [
+      "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs",
+      "https://unpkg.com/monaco-editor@0.52.2/min/vs"
+    ];
+
+    function loadMonaco(index) {
+      if (index >= MONACO_SOURCES.length) {
         showFallback();
+        return;
       }
-    }, 8000);
+      const base = MONACO_SOURCES[index];
+      const loader = document.createElement("script");
+      let completed = false;
+      loader.src = base + "/loader.js";
+      loader.onload = function () {
+        completed = true;
+        if (window.__DRPA_EDITOR_READY__) {
+          return;
+        }
+        require.config({ paths: { vs: base } });
+        require(["vs/editor/editor.main"], function () {
+          document.getElementById("fallback").style.display = "none";
+          document.getElementById("editor").style.display = "block";
+          window.editor = monaco.editor.create(document.getElementById("editor"), {
+            value: window.__DRPA_PENDING_VALUE__,
+            language: window.__DRPA_PENDING_LANGUAGE__,
+            theme: "vs-dark",
+            automaticLayout: true,
+            minimap: { enabled: true },
+            fontSize: 14,
+            fontLigatures: true,
+            scrollBeyondLastLine: false,
+            tabSize: 4,
+            insertSpaces: true
+          });
+          window.__DRPA_EDITOR_READY__ = true;
+        }, function () {
+          loadMonaco(index + 1);
+        });
+      };
+      loader.onerror = function () {
+        completed = true;
+        loadMonaco(index + 1);
+      };
+      document.head.appendChild(loader);
+      setTimeout(function () {
+        if (!completed && !window.__DRPA_EDITOR_READY__) {
+          completed = true;
+          loadMonaco(index + 1);
+        }
+      }, 15000);
+    }
+
+    loadMonaco(0);
   </script>
 </body>
 </html>

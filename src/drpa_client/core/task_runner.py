@@ -139,6 +139,7 @@ class TaskRunner:
             try:
                 raw = json.loads(line)
                 event = TaskEvent(type=str(raw.get("type", "log")), payload=raw)
+                event.payload.setdefault("run_id", task.run_id)
                 if event.type == "error":
                     status = "failed"
                 elif event.type == "status" and raw.get("value"):
@@ -147,7 +148,12 @@ class TaskRunner:
                         status = value
                 on_event(event)
             except json.JSONDecodeError:
-                on_event(TaskEvent(type="log", payload={"level": "info", "message": line}))
+                on_event(
+                    TaskEvent(
+                        type="log",
+                        payload={"level": "info", "message": line, "run_id": task.run_id},
+                    )
+                )
 
         exit_code = task.process.wait()
         if exit_code == 0 and status == "running":
@@ -162,7 +168,7 @@ class TaskRunner:
             finished_at=datetime.now(UTC).isoformat(),
             exit_code=exit_code,
         )
-        on_event(TaskEvent(type="finished", payload={"exit_code": exit_code}))
+        on_event(TaskEvent(type="finished", payload={"exit_code": exit_code, "run_id": task.run_id}))
         try:
             task.config_path.unlink(missing_ok=True)
         except OSError:
