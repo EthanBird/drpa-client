@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from importlib import resources
 from typing import Any
 
 from PySide6.QtCore import QDate, QObject, Qt, QThread, Signal
@@ -33,20 +32,11 @@ from PySide6.QtWidgets import (
 )
 
 from drpa_client.core.database import RunStore
+from drpa_client.core.default_packages import default_package_path
 from drpa_client.core.models import InstalledPackage, TaskEvent
 from drpa_client.core.package_manager import PackageManager
 from drpa_client.core.paths import get_data_dir
 from drpa_client.core.task_runner import RunningTask, TaskRunner
-
-
-def default_package_path(filename: str) -> Path:
-    cache_dir = get_data_dir() / "cache" / "default-packages"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    target = cache_dir / filename
-    package_resource = resources.files("drpa_client.resources.default_packages").joinpath(filename)
-    with package_resource.open("rb") as source, target.open("wb") as destination:
-        destination.write(source.read())
-    return target
 
 
 class MainWindow(QMainWindow):
