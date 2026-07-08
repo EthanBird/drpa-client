@@ -62,10 +62,10 @@ class RuntimeManager:
             try:
                 _log(log, f"创建虚拟环境：{venv_dir}")
                 venv.EnvBuilder(with_pip=needs_pip, clear=False).create(venv_dir)
-            except venv.Error as exc:
+            except Exception as exc:
                 raise RuntimeErrorDetails(
-                    "无法创建脚本包虚拟环境。Linux 系统请确认安装包内置 Python 支持 venv，"
-                    "或系统已安装 python3-venv/ensurepip。"
+                    "无法创建项目虚拟环境。请确认当前 Python 支持 venv/ensurepip。"
+                    f"原始错误：{exc}"
                 ) from exc
 
         python = self.python_executable(venv_dir)
@@ -74,9 +74,10 @@ class RuntimeManager:
             shutil.rmtree(venv_dir, ignore_errors=True)
             try:
                 venv.EnvBuilder(with_pip=True, clear=True).create(venv_dir)
-            except venv.Error as exc:
+            except Exception as exc:
                 raise RuntimeErrorDetails(
-                    "无法创建带 pip 的项目虚拟环境。请确认运行时 Python 支持 ensurepip。"
+                    "无法创建带 pip 的项目虚拟环境。请确认当前 Python 支持 ensurepip。"
+                    f"原始错误：{exc}"
                 ) from exc
             python = self.python_executable(venv_dir)
         if needs_pip:
