@@ -36,7 +36,8 @@ where = ["src"]
 drpa_client = [
   "app/ui/themes/*.qss",
   "resources/default_packages/*.rpaz",
-  "resources/recorder/*.js"
+  "resources/recorder/*.js",
+  "resources/editor/*.html"
 ]
 
 [tool.ruff]

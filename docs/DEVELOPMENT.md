@@ -31,6 +31,7 @@ DRPA Client 当前定位为一款轻量级 Python RPA 桌面客户端：
 | SQLite 运行历史 | 已实现 | `RunStore` 持久化任务状态、日志和输出路径 |
 | 包管理操作 | 已实现 | 支持卸载脚本包和重建脚本包 venv |
 | 进程树停止 | 已实现 | 使用 psutil 终止任务进程及其子进程 |
+| Monaco 代码编辑 | 已实现入口 | 基于 QtWebEngine 承载 Monaco Editor，参考 VS Code |
 | 浏览器录制器 | 规划中 | 详见 `docs/BROWSER_RECORDER_DESIGN.md` |
 
 ## 2. 项目结构
@@ -69,6 +70,8 @@ DRPA Client 当前定位为一款轻量级 Python RPA 桌面客户端：
 │       ├── resources/
 │       │   └── default_packages/
 │       │       └── bing_daily_image.rpaz
+│       │   └── editor/
+│       │       └── monaco.html
 │       └── sdk/
 │           └── context.py
 ├── tools/
@@ -194,6 +197,24 @@ examples/bing_daily_image/
 ```bash
 python3 tools/build_default_packages.py
 ```
+
+代码编辑器资源：
+
+```text
+src/drpa_client/resources/editor/monaco.html
+```
+
+该页面使用 Monaco Editor CDN 资源，产品化安装包后续应考虑内置 Monaco 静态文件以支持离线编辑。
+
+## 2.6 AI Skills
+
+仓库包含给 AI 开发使用的 skill：
+
+```text
+.cursor/skills/build-rpaz-package/SKILL.md
+```
+
+该 skill 明确使用 **Python 3.11.9** 构建和验证 `.rpaz` 脚本包，并定义 manifest、入口函数、构建命令和验证清单。
 
 ## 3. 脚本包协议
 

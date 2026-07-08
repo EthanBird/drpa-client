@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QDate, QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QDate, QObject, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -30,6 +31,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+except ImportError:  # pragma: no cover - depends on optional QtWebEngine runtime
+    QWebEngineView = None
 
 from drpa_client.core.database import RunStore
 from drpa_client.core.default_packages import default_package_path
@@ -61,6 +67,7 @@ class MainWindow(QMainWindow):
         self.dashboard_page = DashboardPage(self.package_manager, self.run_store)
         self.packages_page = PackagesPage(self.package_manager)
         self.tasks_page = TasksPage(self.package_manager, self.task_runner)
+        self.editor_page = CodeEditorPage()
         self.recorder_page = RecorderPage()
         self.history_page = HistoryPage(self.run_store)
         self.settings_page = SettingsPage()
@@ -69,6 +76,7 @@ class MainWindow(QMainWindow):
             self.dashboard_page,
             self.packages_page,
             self.tasks_page,
+            self.editor_page,
             self.recorder_page,
             self.history_page,
             self.settings_page,
@@ -90,7 +98,7 @@ class MainWindow(QMainWindow):
             self.dashboard_page.refresh()
         elif index == 2:
             self.tasks_page.refresh_packages()
-        elif index == 4:
+        elif index == 5:
             self.history_page.refresh()
 
     def _refresh_all(self) -> None:
@@ -110,7 +118,7 @@ class Sidebar(QListWidget):
         self.setFixedWidth(220)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setSpacing(8)
-        for title in ("首页", "脚本包", "运行任务", "浏览器录制", "运行历史", "设置"):
+        for title in ("首页", "脚本包", "运行任务", "代码编辑", "浏览器录制", "运行历史", "设置"):
             item = QListWidgetItem(title)
             item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
             item.setSizeHint(item.sizeHint().expandedTo(item.sizeHint() * 1.6))
@@ -144,16 +152,22 @@ class Card(QFrame):
 
 class DashboardPage(Page):
     def __init__(self, package_manager: PackageManager, run_store: RunStore):
-        super().__init__("DRPA Client", "轻量级 Python RPA Worker，支持脚本包安装、依赖隔离和跨平台运行。")
+        super().__init__("DRPA 工作台", "管理脚本包、运行任务、录制浏览器流程，并用 Monaco 编辑 Python RPA 脚本。")
         self.package_manager = package_manager
         self.run_store = run_store
         self.package_stats = QLabel()
         self.package_stats.setObjectName("HeroNumber")
         self.run_stats = QLabel()
         self.run_stats.setObjectName("HeroNumber")
+        self.success_stats = QLabel()
+        self.success_stats.setObjectName("HeroNumber")
         self.health_stats = QLabel()
+        self.recent_runs = QTableWidget(0, 4)
+        self.recent_runs.setHorizontalHeaderLabels(["时间", "脚本包", "状态", "退出码"])
+        self.recent_runs.horizontalHeader().setStretchLastSection(True)
+        self.recent_runs.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
-        card = Card()
+        hero = Card()
         stats_row = QHBoxLayout()
         package_box = QVBoxLayout()
         package_box.addWidget(QLabel("已安装脚本包"))
@@ -161,18 +175,62 @@ class DashboardPage(Page):
         run_box = QVBoxLayout()
         run_box.addWidget(QLabel("历史运行次数"))
         run_box.addWidget(self.run_stats)
+        success_box = QVBoxLayout()
+        success_box.addWidget(QLabel("成功运行"))
+        success_box.addWidget(self.success_stats)
         stats_row.addLayout(package_box)
         stats_row.addLayout(run_box)
+        stats_row.addLayout(success_box)
         stats_row.addStretch(1)
-        card.layout.addLayout(stats_row)
-        card.layout.addWidget(self.health_stats)
-        card.layout.addWidget(
+        hero.layout.addLayout(stats_row)
+        hero.layout.addWidget(self.health_stats)
+        hero.layout.addWidget(
             QLabel(
-                "当前版本已具备脚本包安装、独立 venv、离线 wheels、运行历史、进程树停止和 PySide6 桌面框架。"
+                "建议流程：安装脚本包 -> 在代码编辑器中修订脚本 -> 运行任务 -> 查看历史和输出产物。"
             )
         )
-        self.content.addWidget(card)
-        self.content.addStretch(1)
+
+        quick = Card()
+        quick.layout.addWidget(QLabel("快捷开始"))
+        quick_row = QHBoxLayout()
+        for title, desc in (
+            ("安装默认包", "导入 Bing 每日一图示例，验证运行链路。"),
+            ("编辑脚本", "使用 Monaco Editor 修改 main.py / manifest.yaml。"),
+            ("浏览器录制", "录制操作并生成需要人工修订的草稿包。"),
+            ("构建 rpaz", "按 skill 规范打包 Python RPA 脚本包。"),
+        ):
+            box = QVBoxLayout()
+            label = QLabel(title)
+            label.setObjectName("SectionTitle")
+            text = QLabel(desc)
+            text.setObjectName("MutedText")
+            text.setWordWrap(True)
+            box.addWidget(label)
+            box.addWidget(text)
+            quick_row.addLayout(box)
+        quick.layout.addLayout(quick_row)
+
+        map_card = Card()
+        map_card.layout.addWidget(QLabel("能力地图"))
+        for item in (
+            "脚本包管理：安装、卸载、重建 venv、离线 wheels",
+            "运行任务：列表选择、参数表单、实时日志、进程树停止",
+            "代码编辑：Monaco Editor Web 编辑器，参考 VS Code 体验",
+            "浏览器录制：JS Agent 捕获事件，生成可审查草稿 rpaz",
+            "运行历史：SQLite 记录状态、日志和输出目录",
+        ):
+            line = QLabel("• " + item)
+            line.setObjectName("MutedText")
+            map_card.layout.addWidget(line)
+
+        recent = Card()
+        recent.layout.addWidget(QLabel("最近运行"))
+        recent.layout.addWidget(self.recent_runs)
+
+        self.content.addWidget(hero)
+        self.content.addWidget(quick)
+        self.content.addWidget(map_card)
+        self.content.addWidget(recent, 1)
         self.refresh()
 
     def refresh(self) -> None:
@@ -182,7 +240,19 @@ class DashboardPage(Page):
         success_runs = self.run_store.count_by_status(["success"])
         self.package_stats.setText(str(package_count))
         self.run_stats.setText(str(total_runs))
+        self.success_stats.setText(str(success_runs))
         self.health_stats.setText(f"成功 {success_runs} 次 / 失败 {failed_runs} 次")
+        runs = self.run_store.list_runs(limit=8)
+        self.recent_runs.setRowCount(len(runs))
+        for row, run in enumerate(runs):
+            values = [
+                run.started_at,
+                run.package_name,
+                run.status,
+                "" if run.exit_code is None else str(run.exit_code),
+            ]
+            for column, value in enumerate(values):
+                self.recent_runs.setItem(row, column, QTableWidgetItem(value))
 
 
 class PackagesPage(Page):
@@ -625,6 +695,115 @@ class TaskEventBridge(QObject):
 
     def emit_event(self, event: TaskEvent) -> None:
         self.event.emit(event)
+
+
+class CodeEditorPage(Page):
+    def __init__(self):
+        super().__init__("代码编辑", "基于 Monaco Editor 的 Web 代码编辑器，参考 VS Code，不使用原生文本控件实现。")
+        self.current_file: Path | None = None
+        self.web_view = None
+
+        card = Card()
+        toolbar = QHBoxLayout()
+        self.open_button = QPushButton("打开文件")
+        self.save_button = QPushButton("保存")
+        self.save_as_button = QPushButton("另存为")
+        self.path_label = QLabel("尚未打开文件")
+        self.path_label.setObjectName("MutedText")
+        toolbar.addWidget(self.open_button)
+        toolbar.addWidget(self.save_button)
+        toolbar.addWidget(self.save_as_button)
+        toolbar.addWidget(self.path_label, 1)
+
+        card.layout.addLayout(toolbar)
+
+        if QWebEngineView is None:
+            info = QLabel(
+                "当前运行环境缺少 QtWebEngine，无法加载 Monaco Editor。\n"
+                "代码编辑器设计参考 VS Code/Monaco，不回退到原生 QTextEdit。\n"
+                "产品化安装包需要包含 PySide6 QtWebEngine 组件，或内置 Monaco 静态资源。"
+            )
+            info.setWordWrap(True)
+            info.setObjectName("MutedText")
+            card.layout.addWidget(info, 1)
+        else:
+            self.web_view = QWebEngineView()
+            self.web_view.setMinimumHeight(520)
+            html = resources.files("drpa_client.resources.editor").joinpath("monaco.html").read_text(
+                encoding="utf-8"
+            )
+            self.web_view.setHtml(html, QUrl("https://drpa-editor.local/"))
+            card.layout.addWidget(self.web_view, 1)
+
+        self.content.addWidget(card, 1)
+
+        self.open_button.clicked.connect(self._open_file)
+        self.save_button.clicked.connect(self._save_file)
+        self.save_as_button.clicked.connect(self._save_file_as)
+
+    def _open_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "打开代码文件",
+            str(Path.home()),
+            "Code Files (*.py *.yaml *.yml *.json *.md *.txt);;All Files (*)",
+        )
+        if not path:
+            return
+        self.current_file = Path(path)
+        content = self.current_file.read_text(encoding="utf-8")
+        self.path_label.setText(str(self.current_file))
+        self._set_editor_content(content, _language_for_path(self.current_file))
+
+    def _save_file(self) -> None:
+        if self.current_file is None:
+            self._save_file_as()
+            return
+        self._get_editor_content(lambda value: self._write_file(self.current_file, value))
+
+    def _save_file_as(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存代码文件",
+            str(self.current_file or Path.home() / "main.py"),
+            "Code Files (*.py *.yaml *.yml *.json *.md *.txt);;All Files (*)",
+        )
+        if not path:
+            return
+        self.current_file = Path(path)
+        self.path_label.setText(str(self.current_file))
+        self._get_editor_content(lambda value: self._write_file(self.current_file, value))
+
+    def _set_editor_content(self, content: str, language: str) -> None:
+        if self.web_view is None:
+            QMessageBox.information(self, "编辑器不可用", "当前环境缺少 QtWebEngine，无法加载 Monaco Editor。")
+            return
+        script = f"setEditorValue({json.dumps(content)}, {json.dumps(language)});"
+        self.web_view.page().runJavaScript(script)
+
+    def _get_editor_content(self, callback) -> None:
+        if self.web_view is None:
+            QMessageBox.information(self, "编辑器不可用", "当前环境缺少 QtWebEngine，无法保存 Monaco Editor 内容。")
+            return
+        self.web_view.page().runJavaScript("getEditorValue();", callback)
+
+    def _write_file(self, path: Path, content: str) -> None:
+        path.write_text(content or "", encoding="utf-8")
+        self.path_label.setText(str(path))
+        QMessageBox.information(self, "保存成功", f"已保存：{path}")
+
+
+def _language_for_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".py":
+        return "python"
+    if suffix in {".yaml", ".yml"}:
+        return "yaml"
+    if suffix == ".json":
+        return "json"
+    if suffix == ".md":
+        return "markdown"
+    return "plaintext"
 
 
 def _recorded_event_label(event) -> str:

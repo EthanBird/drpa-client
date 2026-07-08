@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DRPA Monaco Editor</title>
+  <style>
+    html, body, #editor {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      background: #0f172a;
+      overflow: hidden;
+    }
+    #fallback {
+      display: none;
+      box-sizing: border-box;
+      height: 100%;
+      padding: 28px;
+      color: #cbd5e1;
+      font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+    }
+    #fallback h1 {
+      color: #f8fafc;
+      font-size: 22px;
+      margin: 0 0 12px;
+    }
+    code {
+      color: #93c5fd;
+    }
+  </style>
+</head>
+<body>
+  <div id="editor"></div>
+  <div id="fallback">
+    <h1>Monaco Editor 未加载</h1>
+    <p>DRPA Client 的代码编辑器参考 VS Code/Monaco Editor 方案，通过 WebEngine 加载 Web 编辑器。</p>
+    <p>如果当前环境无法访问 CDN，或 QtWebEngine 禁用了网络资源，请检查网络或后续改为随安装包内置 Monaco 静态资源。</p>
+    <p>当前不是原生 QTextEdit 编辑器，避免在桌面端重复实现代码编辑器能力。</p>
+  </div>
+  <script>
+    window.__DRPA_PENDING_VALUE__ = "";
+    window.__DRPA_PENDING_LANGUAGE__ = "python";
+    window.__DRPA_EDITOR_READY__ = false;
+
+    function showFallback() {
+      document.getElementById("editor").style.display = "none";
+      document.getElementById("fallback").style.display = "block";
+    }
+
+    function setEditorValue(value, language) {
+      window.__DRPA_PENDING_VALUE__ = value || "";
+      window.__DRPA_PENDING_LANGUAGE__ = language || "python";
+      if (window.editor && window.monaco) {
+        const model = window.editor.getModel();
+        monaco.editor.setModelLanguage(model, window.__DRPA_PENDING_LANGUAGE__);
+        window.editor.setValue(window.__DRPA_PENDING_VALUE__);
+      }
+    }
+
+    function getEditorValue() {
+      if (!window.editor) {
+        return window.__DRPA_PENDING_VALUE__ || "";
+      }
+      return window.editor.getValue();
+    }
+
+    const loader = document.createElement("script");
+    loader.src = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js";
+    loader.onload = function () {
+      require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs" } });
+      require(["vs/editor/editor.main"], function () {
+        window.editor = monaco.editor.create(document.getElementById("editor"), {
+          value: window.__DRPA_PENDING_VALUE__,
+          language: window.__DRPA_PENDING_LANGUAGE__,
+          theme: "vs-dark",
+          automaticLayout: true,
+          minimap: { enabled: true },
+          fontSize: 14,
+          fontLigatures: true,
+          scrollBeyondLastLine: false,
+          tabSize: 4,
+          insertSpaces: true
+        });
+        window.__DRPA_EDITOR_READY__ = true;
+      });
+    };
+    loader.onerror = showFallback;
+    document.head.appendChild(loader);
+    setTimeout(function () {
+      if (!window.__DRPA_EDITOR_READY__) {
+        showFallback();
+      }
+    }, 8000);
+  </script>
+</body>
+</html>

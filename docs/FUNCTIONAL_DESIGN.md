@@ -116,6 +116,10 @@ DRPA Client
 │   ├── 启动任务
 │   ├── 停止任务
 │   └── 实时日志
+├── 代码编辑
+│   ├── Monaco Editor
+│   ├── 打开/保存脚本文件
+│   └── main.py / manifest.yaml 编辑
 ├── 默认脚本包
 │   └── Bing 每日一图
 ├── 浏览器录制器（规划）
@@ -218,7 +222,25 @@ DRPA Client
 | `failed` | 失败结束 |
 | `cancelled` | 被取消 |
 
-### 5.5 默认脚本包
+### 5.5 代码编辑
+
+代码编辑器采用 Web 编辑器方案，参考 VS Code 使用的 Monaco Editor，不使用原生 QTextEdit/QPlainTextEdit 重复实现代码编辑功能。
+
+当前支持：
+
+- 新增“代码编辑”页面。
+- 通过 PySide6 QtWebEngine 承载 Monaco Editor。
+- 打开 `.py`、`.yaml`、`.json`、`.md`、`.txt`。
+- 保存和另存为。
+- 根据文件后缀设置 Monaco language。
+
+当前限制：
+
+- 依赖 QtWebEngine；若运行环境缺少该组件，会显示明确提示。
+- Monaco 资源当前从 CDN 加载，产品化安装包应考虑内置 Monaco 静态资源以支持离线环境。
+- 暂未提供脚本包目录树、语法诊断、格式化和多文件标签页。
+
+### 5.6 默认脚本包
 
 当前内置：
 
@@ -244,7 +266,7 @@ examples/bing_daily_image/
 src/drpa_client/resources/default_packages/bing_daily_image.rpaz
 ```
 
-### 5.6 设置
+### 5.7 设置
 
 当前支持：
 
@@ -258,7 +280,7 @@ src/drpa_client/resources/default_packages/bing_daily_image.rpaz
 - 脚本仓库配置。
 - Python runtime 诊断。
 
-## 5.7 浏览器录制器规划
+## 5.8 浏览器录制器规划
 
 浏览器录制器用于把用户在浏览器中的操作转成结构化录制事件，再生成一个需要人工修订的 `.rpaz` 草稿脚本包。
 

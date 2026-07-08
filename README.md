@@ -21,8 +21,10 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 - SQLite 运行历史
 - 脚本包卸载和环境重建
 - 列表式任务运行界面
+- Monaco Web 代码编辑器入口
 - 内置默认脚本包：Bing 每日一图
 - 浏览器录制 MVP：录制事件模型、JS Agent、草稿 `.rpaz` 生成器和 GUI 入口
+- AI skill：构建 `.rpaz` 代码包，指定 Python 3.11.9
 - 面向 DrissionPage 的 SDK 入口
 
 ## 快速运行
