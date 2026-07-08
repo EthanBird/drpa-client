@@ -1,6 +1,6 @@
 # Bing 每日一图
 
-这是 DRPA Client 内置默认脚本包，用于访问 Bing 每日一图接口，下载图片和 JSON 元数据。
+这是 DRPA Client 示例脚本包，用于访问 Bing 每日一图接口，下载图片和 JSON 元数据。
 
 参数：
 

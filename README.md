@@ -24,7 +24,7 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 - 脚本包卸载和环境重建
 - 列表式任务运行界面
 - Monaco Web 代码编辑器入口
-- 内置默认脚本包：Bing 每日一图
+- examples 示例脚本包：Hello、Bing 每日一图、Bilibili 搜索
 - 浏览器录制 MVP：录制事件模型、JS Agent、草稿 `.rpaz` 生成器；作为高级功能默认隐藏，可在设置中启用
 - AI skill：构建 `.rpaz` 代码包，指定 Python 3.11.9
 - 面向 DrissionPage 的 SDK 入口
@@ -105,37 +105,38 @@ params:
 
 安装时会按 manifest 中的 `dependencies.local` 收集这些目录，并传给 pip 的 `--find-links`。如果 `strategy` 为 `offline-only`，会附加 `--no-index`，确保只从脚本包资源中安装。
 
+## 参数表与运行表单
+
+脚本包的 `manifest.yaml` 中 `params` 字段会自动生成两部分 UI：
+
+- 参数表：展示参数名、类型、必填、默认值和说明。
+- 运行表单：根据参数类型生成输入控件，例如文本框、密码框、数字框、日期框、复选框。
+
+因此每个任务的可配置参数不需要在 GUI 里写死，只需要维护脚本包自己的 manifest。
+
 ## 示例脚本包
 
-仓库内置一个示例：
-
-```bash
-cd examples/hello_web_bot
-zip -r ../hello_web_bot.rpaz .
-```
-
-然后在 GUI 的“脚本包”页面导入 `examples/hello_web_bot.rpaz`。
-
-## 默认脚本包
-
-应用内置了一个默认脚本包：
+仓库内置示例源码和可直接安装的 `.rpaz`：
 
 ```text
-src/drpa_client/resources/default_packages/bing_daily_image.rpaz
-```
-
-它的源码位于：
-
-```text
+examples/hello_web_bot.rpaz
 examples/bing_daily_image/
+examples/bing_daily_image.rpaz
+examples/bilibili_search/
+examples/bilibili_search.rpaz
 ```
 
-在 GUI 的“脚本包”页面点击“安装默认 Bing 每日一图”即可安装。该脚本会访问 Bing 图片接口，下载每日一图和 JSON 元数据到任务输出目录。
+在 GUI 的“脚本包”页面点击“安装脚本包”，默认会打开当前运行/安装目录，方便直接选择 `examples/*.rpaz`。
 
-如需重新生成默认 `.rpaz`：
+其中：
+
+- `bing_daily_image`：访问 Bing 每日一图接口，下载图片和 JSON 元数据。
+- `bilibili_search`：使用 DrissionPage 打开 Bilibili 搜索页，按关键词导出搜索结果。
+
+如需重新生成 examples 下的 `.rpaz`：
 
 ```bash
-python3 tools/build_default_packages.py
+python3 tools/build_example_packages.py
 ```
 
 ## 脚本 SDK

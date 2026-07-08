@@ -112,7 +112,8 @@ DRPA Client
 ├── 任务运行
 │   ├── 左侧脚本包列表
 │   ├── 右侧脚本包详情
-│   ├── 自动生成参数表单
+│   ├── 自动生成参数表
+│   ├── 自动生成运行表单
 │   ├── 参数校验
 │   ├── 启动任务
 │   ├── 停止任务
@@ -121,8 +122,10 @@ DRPA Client
 │   ├── Monaco Editor
 │   ├── 打开/保存脚本文件
 │   └── main.py / manifest.yaml 编辑
-├── 默认脚本包
-│   └── Bing 每日一图
+├── 示例脚本包
+│   ├── Hello Web Bot
+│   ├── Bing 每日一图
+│   └── Bilibili 搜索
 ├── 浏览器录制器（规划）
 │   ├── 录制浏览器事件
 │   ├── 生成 recording.json
@@ -198,7 +201,8 @@ DRPA Client
 
 - 使用左侧列表展示所有可运行脚本包，避免用下拉框隐藏上下文。
 - 选中脚本包后，在右侧显示脚本包名称、描述、ID 和 runtime。
-- 根据 manifest 参数生成表单。
+- 根据 manifest 参数生成参数表，用于展示参数名、类型、必填、默认值和说明。
+- 根据 manifest 参数生成运行表单，用于实际填写运行参数。
 - 支持基础参数类型：
   - string
   - password
@@ -254,30 +258,31 @@ DRPA Client
 - Monaco 资源当前从 CDN 加载，产品化安装包应考虑内置 Monaco 静态资源以支持离线环境。
 - 暂未提供脚本包目录树、语法诊断、格式化和多文件标签页。
 
-### 5.6 默认脚本包
+### 5.6 示例脚本包
 
-当前内置：
+当前仓库提供：
 
 | 脚本包 | ID | 说明 |
 | --- | --- | --- |
+| Hello Web Bot | `hello_web_bot` | 验证参数、日志、进度和输出文件 |
 | Bing 每日一图 | `bing_daily_image` | 访问 Bing 图片接口，下载每日一图和元数据 |
+| Bilibili 搜索 | `bilibili_search` | 使用 DrissionPage 打开 Bilibili 搜索页并导出结果 |
 
-默认脚本包用途：
+示例脚本包用途：
 
 - 作为新用户首次体验入口。
 - 验证脚本包安装、参数表单、任务运行、输出产物和运行历史。
-- 展示不依赖第三方库的轻量脚本包写法。
+- 展示不同类型脚本包写法，例如纯标准库和 DrissionPage Web 自动化。
 
-默认包源码位于：
+示例包源码和可安装 `.rpaz` 位于：
 
 ```text
+examples/hello_web_bot/
+examples/hello_web_bot.rpaz
 examples/bing_daily_image/
-```
-
-内置 `.rpaz` 位于：
-
-```text
-src/drpa_client/resources/default_packages/bing_daily_image.rpaz
+examples/bing_daily_image.rpaz
+examples/bilibili_search/
+examples/bilibili_search.rpaz
 ```
 
 ### 5.7 设置
@@ -347,7 +352,7 @@ docs/BROWSER_RECORDER_DESIGN.md
 ```text
 用户打开“运行任务”
   -> 选择脚本包
-  -> GUI 生成参数表单
+  -> GUI 生成只读参数表和可编辑运行表单
   -> 用户填写参数
   -> 点击“运行”
   -> TaskRunner 创建运行记录
@@ -407,9 +412,12 @@ manifest.yaml
 - `version`
 - `entry`
 
-### 7.2 参数表单
+### 7.2 参数表与运行表单
 
-manifest 的 `params` 决定 GUI 表单。
+manifest 的 `params` 同时决定 GUI 参数表和运行表单：
+
+- 参数表：只读展示参数名、类型、必填、默认值、说明，帮助用户理解任务配置。
+- 运行表单：根据类型生成可编辑控件，运行时收集为 `ctx.params`。
 
 示例：
 

@@ -68,14 +68,12 @@ DRPA Client 当前定位为一款轻量级 Python RPA 桌面客户端：
 │       ├── runtime/
 │       │   └── bootstrap.py
 │       ├── resources/
-│       │   └── default_packages/
-│       │       └── bing_daily_image.rpaz
 │       │   └── editor/
 │       │       └── monaco.html
 │       └── sdk/
 │           └── context.py
 ├── tools/
-│   └── build_default_packages.py
+│   └── build_example_packages.py
 └── tests/
     └── test_manifest.py
 ```
@@ -181,22 +179,10 @@ SDK 的目标是让业务脚本不需要知道 GUI、数据库、子进程协议
 
 `resources` 保存应用内置资源。
 
-当前内置默认脚本包：
-
-```text
-src/drpa_client/resources/default_packages/bing_daily_image.rpaz
-```
-
-该包源码位于：
-
-```text
-examples/bing_daily_image/
-```
-
-重新构建默认包：
+示例脚本包源码和 `.rpaz` 位于 `examples/`。重新构建示例包：
 
 ```bash
-python3 tools/build_default_packages.py
+python3 tools/build_example_packages.py
 ```
 
 代码编辑器资源：
@@ -691,7 +677,8 @@ TasksPage
   │   └── 刷新列表
   └── 右侧：RunDetail
       ├── 脚本包名称/描述/Runtime
-      ├── manifest 参数表单
+      ├── manifest 参数表
+      ├── manifest 运行表单
       ├── 运行/停止按钮
       └── 实时日志
 ```

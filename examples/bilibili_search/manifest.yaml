@@ -1,0 +1,44 @@
+id: bilibili_search
+name: Bilibili 搜索
+version: 0.1.0
+entry: main.py
+description: 使用 DrissionPage 打开 Bilibili 搜索页，按关键词抓取搜索结果标题和链接。
+author: drpa-client
+
+runtime:
+  python: ">=3.11"
+  isolation: venv
+
+dependencies:
+  strategy: offline-first
+  pip:
+    - DrissionPage
+  local:
+    common:
+      - wheels/common/*.whl
+    windows:
+      - wheels/windows/*.whl
+    linux:
+      - wheels/linux/*.whl
+
+params:
+  - name: keyword
+    label: 搜索关键词
+    type: string
+    required: true
+    default: Python RPA
+    description: 要在 Bilibili 搜索的关键词。
+
+  - name: max_results
+    label: 最大结果数
+    type: integer
+    required: true
+    default: 10
+    description: 最多导出的搜索结果数量。
+
+  - name: headless
+    label: 无头浏览器
+    type: boolean
+    required: false
+    default: false
+    description: 是否使用无头模式运行浏览器。

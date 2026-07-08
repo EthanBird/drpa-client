@@ -5,17 +5,17 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PACKAGES = {
-    "bing_daily_image": ROOT / "src" / "drpa_client" / "resources" / "default_packages" / "bing_daily_image.rpaz",
-}
+EXAMPLE_PACKAGES = ("hello_web_bot", "bing_daily_image", "bilibili_search")
 
 
 def main() -> int:
-    for source_name, target in DEFAULT_PACKAGES.items():
-        source = ROOT / "examples" / source_name
+    for package_id in EXAMPLE_PACKAGES:
+        source = ROOT / "examples" / package_id
         if not source.exists():
-            raise SystemExit(f"missing package source: {source}")
-        target.parent.mkdir(parents=True, exist_ok=True)
+            continue
+        target = ROOT / "examples" / f"{package_id}.rpaz"
+        if target.exists():
+            target.unlink()
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(source.rglob("*")):
                 if path.is_file():

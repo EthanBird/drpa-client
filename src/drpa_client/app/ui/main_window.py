@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,6 @@ except ImportError:  # pragma: no cover - depends on optional QtWebEngine runtim
     QWebEngineView = None
 
 from drpa_client.core.database import RunStore
-from drpa_client.core.default_packages import default_package_path
 from drpa_client.core.models import InstalledPackage, TaskEvent
 from drpa_client.core.package_manager import PackageManager
 from drpa_client.core.paths import get_data_dir
@@ -47,6 +47,16 @@ from drpa_client.core.recorder import BrowserRecorderSession, RecorderPackageGen
 from drpa_client.core.runtime_manager import RuntimeManager
 from drpa_client.core.settings import AppSettings, SettingsStore
 from drpa_client.core.task_runner import RunningTask, TaskRunner
+
+
+def default_open_dir() -> str:
+    current = Path.cwd().resolve()
+    module_path = Path(__file__).resolve()
+    for base in (current, *module_path.parents):
+        if (base / "examples").exists():
+            return str(base)
+    executable = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else module_path
+    return str(executable.parent)
 
 
 class MainWindow(QMainWindow):
@@ -185,7 +195,7 @@ class Card(QFrame):
 
 class DashboardPage(Page):
     def __init__(self, package_manager: PackageManager, run_store: RunStore):
-        super().__init__("DRPA 工作台", "管理脚本包、运行任务、录制浏览器流程，并用 Monaco 编辑 Python RPA 脚本。")
+        super().__init__("DRPA 工作台", "管理脚本包、运行任务，并用 Monaco 编辑 Python RPA 脚本。")
         self.package_manager = package_manager
         self.run_store = run_store
         self.package_stats = QLabel()
@@ -227,9 +237,8 @@ class DashboardPage(Page):
         quick.layout.addWidget(QLabel("快捷开始"))
         quick_row = QHBoxLayout()
         for title, desc in (
-            ("安装默认包", "导入 Bing 每日一图示例，验证运行链路。"),
+            ("安装示例包", "从 examples 目录选择 .rpaz 或 .py，验证运行链路。"),
             ("编辑脚本", "使用 Monaco Editor 修改 main.py / manifest.yaml。"),
-            ("浏览器录制", "录制操作并生成需要人工修订的草稿包。"),
             ("构建 rpaz", "按 skill 规范打包 Python RPA 脚本包。"),
         ):
             box = QVBoxLayout()
@@ -249,7 +258,6 @@ class DashboardPage(Page):
             "脚本包管理：安装、卸载、重建 venv、离线 wheels",
             "运行任务：列表选择、参数表单、实时日志、进程树停止",
             "代码编辑：Monaco Editor Web 编辑器，参考 VS Code 体验",
-            "浏览器录制：JS Agent 捕获事件，生成可审查草稿 rpaz",
             "运行历史：SQLite 记录状态、日志和输出目录",
         ):
             line = QLabel("• " + item)
@@ -300,13 +308,11 @@ class PackagesPage(Page):
         toolbar = QHBoxLayout()
         self.install_button = QPushButton("安装脚本包")
         self.install_button.setObjectName("PrimaryButton")
-        self.install_default_button = QPushButton("安装默认 Bing 每日一图")
         self.rebuild_button = QPushButton("重建环境")
         self.uninstall_button = QPushButton("卸载")
         self.install_dependencies = QCheckBox("安装依赖")
         self.install_dependencies.setChecked(True)
         toolbar.addWidget(self.install_button)
-        toolbar.addWidget(self.install_default_button)
         toolbar.addWidget(self.rebuild_button)
         toolbar.addWidget(self.uninstall_button)
         toolbar.addWidget(self.install_dependencies)
@@ -329,7 +335,6 @@ class PackagesPage(Page):
         self.content.addWidget(card, 1)
 
         self.install_button.clicked.connect(self._choose_package)
-        self.install_default_button.clicked.connect(self._install_default_bing_package)
         self.rebuild_button.clicked.connect(self._rebuild_selected)
         self.uninstall_button.clicked.connect(self._uninstall_selected)
         self.refresh()
@@ -352,7 +357,7 @@ class PackagesPage(Page):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "选择脚本包",
-            str(Path.home()),
+            default_open_dir(),
             "RPA Packages or Python Files (*.rpaz *.zip *.py)",
         )
         if not path:
@@ -361,7 +366,6 @@ class PackagesPage(Page):
 
     def _install_package(self, path: Path) -> None:
         self.install_button.setEnabled(False)
-        self.install_default_button.setEnabled(False)
         self.rebuild_button.setEnabled(False)
         self.uninstall_button.setEnabled(False)
         self.install_log.append(f"开始安装：{path}")
@@ -384,7 +388,6 @@ class PackagesPage(Page):
 
     def _install_finished(self, package_name: str) -> None:
         self.install_button.setEnabled(True)
-        self.install_default_button.setEnabled(True)
         self.rebuild_button.setEnabled(True)
         self.uninstall_button.setEnabled(True)
         self.install_log.append(f"安装完成：{package_name}")
@@ -393,18 +396,10 @@ class PackagesPage(Page):
 
     def _install_failed(self, message: str) -> None:
         self.install_button.setEnabled(True)
-        self.install_default_button.setEnabled(True)
         self.rebuild_button.setEnabled(True)
         self.uninstall_button.setEnabled(True)
         self.install_log.append(f"安装失败：{message}")
         QMessageBox.critical(self, "安装失败", message)
-
-    def _install_default_bing_package(self) -> None:
-        package_path = default_package_path("bing_daily_image.rpaz")
-        if not package_path.exists():
-            QMessageBox.critical(self, "默认包缺失", f"找不到默认脚本包：{package_path}")
-            return
-        self._install_package(package_path)
 
     def _selected_package(self) -> InstalledPackage | None:
         row = self.table.currentRow()
@@ -419,7 +414,6 @@ class PackagesPage(Page):
             QMessageBox.information(self, "请选择脚本包", "请先在表格中选择一个脚本包。")
             return
         self.install_button.setEnabled(False)
-        self.install_default_button.setEnabled(False)
         self.rebuild_button.setEnabled(False)
         self.uninstall_button.setEnabled(False)
         self.install_log.append(f"开始重建环境：{package.display_name}")
@@ -549,6 +543,11 @@ class TasksPage(Page):
         self.selected_description = QLabel("请从左侧列表选择要运行的 RPA 脚本包。")
         self.selected_description.setObjectName("MutedText")
         self.selected_description.setWordWrap(True)
+        self.param_table = QTableWidget(0, 5)
+        self.param_table.setHorizontalHeaderLabels(["参数名", "类型", "必填", "默认值", "说明"])
+        self.param_table.horizontalHeader().setStretchLastSection(True)
+        self.param_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.param_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.form = QFormLayout()
         self.form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
@@ -568,6 +567,9 @@ class TasksPage(Page):
 
         right_panel.addWidget(self.selected_title)
         right_panel.addWidget(self.selected_description)
+        right_panel.addWidget(QLabel("参数表"))
+        right_panel.addWidget(self.param_table)
+        right_panel.addWidget(QLabel("运行参数"))
         right_panel.addLayout(self.form)
         right_panel.addLayout(buttons)
         right_panel.addWidget(self.log, 1)
@@ -603,6 +605,7 @@ class TasksPage(Page):
         while self.form.rowCount():
             self.form.removeRow(0)
         self.param_widgets.clear()
+        self.param_table.setRowCount(0)
         package = self._selected_package()
         if package is None:
             self.selected_title.setText("尚未选择脚本包")
@@ -615,6 +618,7 @@ class TasksPage(Page):
         self.selected_description.setText(
             f"{description}\nID: {package.manifest.id} · Runtime: {package.manifest.runtime.isolation}"
         )
+        self._render_param_table(package)
 
         for param in package.manifest.params:
             if param.type == "boolean":
@@ -650,6 +654,20 @@ class TasksPage(Page):
             self.param_widgets[param.name] = widget
             label = f"{param.label}{' *' if param.required else ''}"
             self.form.addRow(label, widget)
+
+    def _render_param_table(self, package: InstalledPackage) -> None:
+        params = package.manifest.params
+        self.param_table.setRowCount(len(params))
+        for row, param in enumerate(params):
+            values = [
+                param.name,
+                param.type,
+                "是" if param.required else "否",
+                "" if param.default is None else str(param.default),
+                param.description,
+            ]
+            for column, value in enumerate(values):
+                self.param_table.setItem(row, column, QTableWidgetItem(value))
 
     def _selected_package(self) -> InstalledPackage | None:
         index = self.package_list.currentRow()
