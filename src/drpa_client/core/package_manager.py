@@ -237,7 +237,7 @@ description: 由单个 Python 文件直接导入生成的脚本包。
 author: single-file-import
 
 runtime:
-  python: ">=3.11,<3.12"
+  python: ">=3.11"
   isolation: venv
 
 dependencies:

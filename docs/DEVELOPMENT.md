@@ -416,7 +416,7 @@ data/
 
 ```yaml
 runtime:
-  python: ">=3.11,<3.12"
+  python: ">=3.11"
   isolation: venv
 params: []
 ```

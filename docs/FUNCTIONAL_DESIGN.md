@@ -179,7 +179,7 @@ DRPA Client
 
 - `id`：来自文件名。
 - `entry`：`main.py`。
-- `runtime.python`：`>=3.11,<3.12`。
+- `runtime.python`：`>=3.11`。
 - `params`：空列表。
 
 注意：单文件脚本仍需要定义 `main(ctx)` 才能被 DRPA 运行器正确调用。
