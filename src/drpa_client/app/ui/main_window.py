@@ -10,6 +10,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDateEdit,
     QDoubleSpinBox,
     QFileDialog,
@@ -43,6 +44,8 @@ from drpa_client.core.models import InstalledPackage, TaskEvent
 from drpa_client.core.package_manager import PackageManager
 from drpa_client.core.paths import get_data_dir
 from drpa_client.core.recorder import BrowserRecorderSession, RecorderPackageGenerator, Recording
+from drpa_client.core.runtime_manager import RuntimeManager
+from drpa_client.core.settings import AppSettings, SettingsStore
 from drpa_client.core.task_runner import RunningTask, TaskRunner
 
 
@@ -52,7 +55,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DRPA Client")
         self.resize(1180, 760)
 
-        self.package_manager = PackageManager()
+        self.settings_store = SettingsStore()
+        self.package_manager = PackageManager(settings_store=self.settings_store)
         self.run_store = RunStore()
         self.task_runner = TaskRunner(run_store=self.run_store)
 
@@ -70,18 +74,7 @@ class MainWindow(QMainWindow):
         self.editor_page = CodeEditorPage()
         self.recorder_page = RecorderPage()
         self.history_page = HistoryPage(self.run_store)
-        self.settings_page = SettingsPage()
-
-        for page in (
-            self.dashboard_page,
-            self.packages_page,
-            self.tasks_page,
-            self.editor_page,
-            self.recorder_page,
-            self.history_page,
-            self.settings_page,
-        ):
-            self.stack.addWidget(page)
+        self.settings_page = SettingsPage(self.settings_store)
 
         root_layout.addWidget(self.sidebar)
         root_layout.addWidget(self.stack, 1)
@@ -90,15 +83,51 @@ class MainWindow(QMainWindow):
         self.sidebar.currentRowChanged.connect(self._change_page)
         self.packages_page.packages_changed.connect(self._refresh_all)
         self.tasks_page.run_finished.connect(self._refresh_history)
+        self.settings_page.settings_changed.connect(self._rebuild_navigation)
+        self._rebuild_navigation()
         self.sidebar.setCurrentRow(0)
+
+    def _rebuild_navigation(self) -> None:
+        current = self.stack.currentWidget()
+        pages: list[tuple[str, QWidget]] = [
+            ("首页", self.dashboard_page),
+            ("脚本包", self.packages_page),
+            ("运行任务", self.tasks_page),
+            ("代码编辑", self.editor_page),
+        ]
+        if self.settings_store.load().advanced_recorder_enabled:
+            pages.append(("浏览器录制", self.recorder_page))
+        pages.extend(
+            [
+                ("运行历史", self.history_page),
+                ("设置", self.settings_page),
+            ]
+        )
+
+        self.sidebar.blockSignals(True)
+        self.stack.blockSignals(True)
+        self.sidebar.set_titles([title for title, _ in pages])
+        while self.stack.count():
+            widget = self.stack.widget(0)
+            self.stack.removeWidget(widget)
+        selected_index = 0
+        for index, (_, page) in enumerate(pages):
+            self.stack.addWidget(page)
+            if page is current:
+                selected_index = index
+        self.stack.blockSignals(False)
+        self.sidebar.blockSignals(False)
+        self.sidebar.setCurrentRow(selected_index)
+        self.stack.setCurrentIndex(selected_index)
 
     def _change_page(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
-        if index == 0:
+        page = self.stack.currentWidget()
+        if page is self.dashboard_page:
             self.dashboard_page.refresh()
-        elif index == 2:
+        elif page is self.tasks_page:
             self.tasks_page.refresh_packages()
-        elif index == 5:
+        elif page is self.history_page:
             self.history_page.refresh()
 
     def _refresh_all(self) -> None:
@@ -118,7 +147,11 @@ class Sidebar(QListWidget):
         self.setFixedWidth(220)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setSpacing(8)
-        for title in ("首页", "脚本包", "运行任务", "代码编辑", "浏览器录制", "运行历史", "设置"):
+        self.set_titles([])
+
+    def set_titles(self, titles: list[str]) -> None:
+        self.clear()
+        for title in titles:
             item = QListWidgetItem(title)
             item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
             item.setSizeHint(item.sizeHint().expandedTo(item.sizeHint() * 1.6))
@@ -320,7 +353,7 @@ class PackagesPage(Page):
             self,
             "选择脚本包",
             str(Path.home()),
-            "RPA Packages (*.rpaz *.zip)",
+            "RPA Packages or Python Files (*.rpaz *.zip *.py)",
         )
         if not path:
             return
@@ -459,12 +492,20 @@ class PackageInstallWorker(QObject):
             else:
                 if self.path is None:
                     raise RuntimeError("安装缺少脚本包路径")
-                self.message.emit("正在解压和校验 manifest...")
-                package = self.manager.install_archive(
-                    self.path,
-                    self.install_dependencies,
-                    log=self.message.emit,
-                )
+                if self.path.suffix.lower() == ".py":
+                    self.message.emit("正在从单个 Python 文件生成脚本包...")
+                    package = self.manager.install_python_file(
+                        self.path,
+                        install_dependencies=False,
+                        log=self.message.emit,
+                    )
+                else:
+                    self.message.emit("正在解压和校验 manifest...")
+                    package = self.manager.install_archive(
+                        self.path,
+                        self.install_dependencies,
+                        log=self.message.emit,
+                    )
             self.finished.emit(package.display_name)
         except Exception as exc:  # noqa: BLE001 - surfaced to UI
             self.failed.emit(str(exc))
@@ -1002,14 +1043,96 @@ class HistoryPage(Page):
 
 
 class SettingsPage(Page):
-    def __init__(self):
-        super().__init__("设置", "运行目录、浏览器路径和未来的打包策略会集中放在这里。")
+    settings_changed = Signal()
+
+    def __init__(self, settings_store: SettingsStore):
+        super().__init__("设置", "管理高级功能、本地 Python 检测和脚本包运行环境策略。")
+        self.settings_store = settings_store
+        self.runtime_manager = RuntimeManager()
+
         card = Card()
         data_dir = QLabel(str(get_data_dir()))
         data_dir.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         data_dir.setFont(QFont("monospace"))
         card.layout.addWidget(QLabel("数据目录"))
         card.layout.addWidget(data_dir)
-        card.layout.addWidget(QLabel("下一步会增加：Chrome/Edge 路径检测、主题切换、脚本仓库配置。"))
+
+        self.recorder_enabled = QCheckBox("启用高级功能：浏览器录制")
+        self.runtime_mode = QComboBox()
+        self.runtime_mode.addItem("每个脚本包新建 venv（默认，隔离性最好）", "new_venv")
+        self.runtime_mode.addItem("共享当前 DRPA Python 环境", "shared")
+        self.runtime_mode.addItem("使用已有 venv", "existing_venv")
+        self.existing_venv_path = QLineEdit()
+        self.existing_venv_path.setPlaceholderText("选择已有 venv 目录，例如 /path/to/.venv")
+        self.choose_venv_button = QPushButton("选择 venv")
+
+        runtime_form = QFormLayout()
+        runtime_form.addRow("", self.recorder_enabled)
+        runtime_form.addRow("运行环境策略", self.runtime_mode)
+        venv_row = QHBoxLayout()
+        venv_row.addWidget(self.existing_venv_path, 1)
+        venv_row.addWidget(self.choose_venv_button)
+        runtime_form.addRow("已有 venv", venv_row)
+        card.layout.addLayout(runtime_form)
+
+        buttons = QHBoxLayout()
+        self.save_button = QPushButton("保存设置")
+        self.save_button.setObjectName("PrimaryButton")
+        self.detect_button = QPushButton("检测本地 Python")
+        buttons.addWidget(self.save_button)
+        buttons.addWidget(self.detect_button)
+        buttons.addStretch(1)
+        card.layout.addLayout(buttons)
+
+        self.python_table = QTableWidget(0, 4)
+        self.python_table.setHorizontalHeaderLabels(["Python", "版本", "是否 venv", "Prefix"])
+        self.python_table.horizontalHeader().setStretchLastSection(True)
+        self.python_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        card.layout.addWidget(QLabel("本地 Python 环境"))
+        card.layout.addWidget(self.python_table)
+
         self.content.addWidget(card)
         self.content.addStretch(1)
+        self.choose_venv_button.clicked.connect(self._choose_venv)
+        self.detect_button.clicked.connect(self.detect_python)
+        self.save_button.clicked.connect(self.save)
+        self.load()
+
+    def load(self) -> None:
+        settings = self.settings_store.load()
+        self.recorder_enabled.setChecked(settings.advanced_recorder_enabled)
+        index = self.runtime_mode.findData(settings.runtime_mode)
+        self.runtime_mode.setCurrentIndex(max(index, 0))
+        self.existing_venv_path.setText(settings.existing_venv_path)
+        self.detect_python()
+
+    def save(self) -> None:
+        settings = AppSettings(
+            advanced_recorder_enabled=self.recorder_enabled.isChecked(),
+            runtime_mode=self.runtime_mode.currentData(),
+            existing_venv_path=self.existing_venv_path.text().strip(),
+        )
+        if settings.runtime_mode == "existing_venv" and not settings.existing_venv_path:
+            QMessageBox.warning(self, "缺少 venv", "选择“使用已有 venv”时必须配置 venv 路径。")
+            return
+        self.settings_store.save(settings)
+        self.settings_changed.emit()
+        QMessageBox.information(self, "设置已保存", "设置已保存，导航和后续脚本包安装会使用新配置。")
+
+    def _choose_venv(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择已有 venv 目录", str(Path.home()))
+        if path:
+            self.existing_venv_path.setText(path)
+
+    def detect_python(self) -> None:
+        items = self.runtime_manager.detect_python_environments()
+        self.python_table.setRowCount(len(items))
+        for row, item in enumerate(items):
+            values = [
+                item.get("executable", ""),
+                item.get("version", ""),
+                item.get("is_venv", ""),
+                item.get("prefix", ""),
+            ]
+            for column, value in enumerate(values):
+                self.python_table.setItem(row, column, QTableWidgetItem(value))

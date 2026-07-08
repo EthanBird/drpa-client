@@ -122,6 +122,7 @@ src/drpa_client/app/ui/themes/dark.qss
 | `runtime_manager.py` | 创建 venv、安装依赖、处理平台化 wheels |
 | `task_runner.py` | 启动用户脚本子进程，接收结构化事件，更新运行历史 |
 | `paths.py` | 管理跨平台数据目录 |
+| `settings.py` | 保存高级功能开关和 runtime 策略 |
 
 后续浏览器录制器建议新增：
 
@@ -349,6 +350,12 @@ params:
 PackageManager.install_archive(path)
 ```
 
+也支持单个 Python 文件直接导入：
+
+```python
+PackageManager.install_python_file(path)
+```
+
 流程：
 
 ```text
@@ -402,6 +409,24 @@ data/
 - 拒绝软链接。
 - 做 SHA256 校验。
 - 支持包签名。
+
+### 4.3 单文件导入
+
+单文件导入会把 `.py` 文件复制为 `main.py`，并生成一个最小 `manifest.yaml`：
+
+```yaml
+runtime:
+  python: ">=3.11,<3.12"
+  isolation: venv
+params: []
+```
+
+该功能适合快速导入已有脚本，但脚本仍必须提供：
+
+```python
+def main(ctx):
+    ...
+```
 
 ## 5. 依赖安装机制
 
@@ -786,6 +811,26 @@ ensurepip
 - 自带 Python runtime。
 - 自带 pip。
 - 不依赖系统 Python。
+
+### 5.4 Runtime 策略
+
+设置页支持三种脚本包运行环境策略：
+
+| 策略 | 说明 | 适用场景 |
+| --- | --- | --- |
+| `new_venv` | 每个脚本包创建独立 venv | 默认，隔离性最好 |
+| `shared` | 使用当前 DRPA Python 环境 | 开发调试或受控环境 |
+| `existing_venv` | 使用用户指定的已有 venv | 多个脚本包共享同一环境 |
+
+当使用已有 venv 时，`install.lock` 会记录 `venv_owned=false`，重建环境不会删除这个外部 venv，只会尝试重新安装依赖。
+
+设置页还支持检测本地 Python：
+
+- 当前 DRPA Python。
+- `VIRTUAL_ENV`。
+- PATH 中的 `python3.11`、`python3`、`python`、`python3.12`。
+
+检测结果用于用户判断应该选择哪个 runtime，但不会自动切换，必须由用户在设置中保存。
 
 ### 9.4 浏览器
 

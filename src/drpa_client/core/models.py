@@ -54,6 +54,8 @@ class InstalledPackage:
     package_dir: Path
     venv_dir: Path | None
     installed_at: str
+    runtime_mode: str = "new_venv"
+    venv_owned: bool = True
 
     @property
     def display_name(self) -> str:

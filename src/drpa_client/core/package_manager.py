@@ -12,6 +12,7 @@ from .manifest import ManifestError, load_manifest
 from .models import InstalledPackage
 from .paths import ensure_data_layout
 from .runtime_manager import RuntimeManager
+from .settings import SettingsStore
 
 
 class PackageInstallError(RuntimeError):
@@ -19,10 +20,16 @@ class PackageInstallError(RuntimeError):
 
 
 class PackageManager:
-    def __init__(self, data_dir: Path | None = None, runtime_manager: RuntimeManager | None = None):
+    def __init__(
+        self,
+        data_dir: Path | None = None,
+        runtime_manager: RuntimeManager | None = None,
+        settings_store: SettingsStore | None = None,
+    ):
         self.data_dir = ensure_data_layout(data_dir)
         self.packages_dir = self.data_dir / "packages"
         self.runtime_manager = runtime_manager or RuntimeManager()
+        self.settings_store = settings_store or SettingsStore(self.data_dir)
 
     def install_archive(
         self,
@@ -41,42 +48,36 @@ class PackageManager:
             _log(log, f"解压脚本包：{archive_path}")
             with zipfile.ZipFile(archive_path) as archive:
                 _safe_extract(archive, staging_dir)
-            _log(log, "读取 manifest.yaml")
-            manifest = load_manifest(staging_dir)
-
-            package_root = self.packages_dir / manifest.id
-            package_dir = package_root / manifest.version / "package"
-            if package_dir.exists():
-                _log(log, f"覆盖已安装版本：{manifest.id} {manifest.version}")
-                shutil.rmtree(package_dir.parent)
-            package_dir.parent.mkdir(parents=True, exist_ok=True)
-            _log(log, f"复制脚本包到：{package_dir}")
-            shutil.move(str(staging_dir), str(package_dir))
-
-            venv_dir = None
-            if manifest.runtime.isolation == "venv":
-                venv_dir = package_dir.parent / "venv"
-                self.runtime_manager.ensure_environment(
-                    package_dir=package_dir,
-                    manifest=manifest,
-                    venv_dir=venv_dir,
-                    install_dependencies=install_dependencies,
-                    log=log,
-                )
-            else:
-                _log(log, "脚本包使用 shared runtime，不创建独立 venv")
-
-            installed = InstalledPackage(
-                manifest=manifest,
-                root_dir=package_dir.parent,
-                package_dir=package_dir,
-                venv_dir=venv_dir,
-                installed_at=datetime.now(UTC).isoformat(),
-            )
-            self._write_install_lock(installed)
-            _log(log, "写入 install.lock")
-            return installed
+            return self._install_staging(staging_dir, install_dependencies=install_dependencies, log=log)
         except (zipfile.BadZipFile, ManifestError, OSError) as exc:
+            raise PackageInstallError(str(exc)) from exc
+        finally:
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir, ignore_errors=True)
+
+    def install_python_file(
+        self,
+        file_path: Path,
+        install_dependencies: bool = False,
+        log: Callable[[str], None] | None = None,
+    ) -> InstalledPackage:
+        if not file_path.exists():
+            raise PackageInstallError(f"Python 文件不存在：{file_path}")
+        if file_path.suffix.lower() != ".py":
+            raise PackageInstallError("单文件导入只支持 .py 文件")
+
+        package_id = _slug(file_path.stem)
+        staging_dir = self.data_dir / "cache" / f"single-file-{datetime.now(UTC).timestamp():.0f}"
+        staging_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            _log(log, f"导入单文件脚本：{file_path}")
+            shutil.copy2(file_path, staging_dir / "main.py")
+            (staging_dir / "manifest.yaml").write_text(
+                _single_file_manifest(package_id, file_path.stem),
+                encoding="utf-8",
+            )
+            return self._install_staging(staging_dir, install_dependencies=install_dependencies, log=log)
+        except (ManifestError, OSError) as exc:
             raise PackageInstallError(str(exc)) from exc
         finally:
             if staging_dir.exists():
@@ -115,6 +116,15 @@ class PackageManager:
         if package.manifest.runtime.isolation != "venv" or package.venv_dir is None:
             _log(log, "当前脚本包使用 shared runtime，无需重建 venv")
             return package
+        if not package.venv_owned:
+            _log(log, f"当前脚本包使用已有 venv，不会删除外部环境：{package.venv_dir}")
+            self.runtime_manager.install_dependencies(
+                self.runtime_manager.python_executable(package.venv_dir),
+                package.package_dir,
+                package.manifest.dependencies,
+                log=log,
+            )
+            return package
         if package.venv_dir.exists():
             _log(log, f"删除旧虚拟环境：{package.venv_dir}")
             shutil.rmtree(package.venv_dir)
@@ -134,6 +144,8 @@ class PackageManager:
             "root_dir": str(installed.root_dir),
             "package_dir": str(installed.package_dir),
             "venv_dir": str(installed.venv_dir) if installed.venv_dir else None,
+            "runtime_mode": installed.runtime_mode,
+            "venv_owned": installed.venv_owned,
             "installed_at": installed.installed_at,
         }
         with (installed.root_dir / "install.lock").open("w", encoding="utf-8") as fp:
@@ -149,8 +161,52 @@ class PackageManager:
             root_dir=Path(payload["root_dir"]),
             package_dir=Path(payload["package_dir"]),
             venv_dir=venv_dir,
+            runtime_mode=payload.get("runtime_mode", "new_venv"),
+            venv_owned=bool(payload.get("venv_owned", True)),
             installed_at=payload["installed_at"],
         )
+
+    def _install_staging(
+        self,
+        staging_dir: Path,
+        install_dependencies: bool,
+        log: Callable[[str], None] | None = None,
+    ) -> InstalledPackage:
+        _log(log, "读取 manifest.yaml")
+        manifest = load_manifest(staging_dir)
+        settings = self.settings_store.load()
+
+        package_root = self.packages_dir / manifest.id
+        package_dir = package_root / manifest.version / "package"
+        if package_dir.exists():
+            _log(log, f"覆盖已安装版本：{manifest.id} {manifest.version}")
+            shutil.rmtree(package_dir.parent)
+        package_dir.parent.mkdir(parents=True, exist_ok=True)
+        _log(log, f"复制脚本包到：{package_dir}")
+        shutil.move(str(staging_dir), str(package_dir))
+
+        _, venv_dir, venv_owned = self.runtime_manager.prepare_environment(
+            package_dir=package_dir,
+            manifest=manifest,
+            package_root_dir=package_dir.parent,
+            runtime_mode=settings.runtime_mode,
+            existing_venv_path=settings.existing_venv_path,
+            install_dependencies=install_dependencies,
+            log=log,
+        )
+
+        installed = InstalledPackage(
+            manifest=manifest,
+            root_dir=package_dir.parent,
+            package_dir=package_dir,
+            venv_dir=venv_dir,
+            runtime_mode=settings.runtime_mode,
+            venv_owned=venv_owned,
+            installed_at=datetime.now(UTC).isoformat(),
+        )
+        self._write_install_lock(installed)
+        _log(log, "写入 install.lock")
+        return installed
 
 
 def _safe_extract(archive: zipfile.ZipFile, target_dir: Path) -> None:
@@ -165,3 +221,35 @@ def _safe_extract(archive: zipfile.ZipFile, target_dir: Path) -> None:
 def _log(callback: Callable[[str], None] | None, message: str) -> None:
     if callback is not None:
         callback(message)
+
+
+def _slug(value: str) -> str:
+    safe = "".join(ch.lower() if ch.isalnum() else "_" for ch in value).strip("_")
+    return safe or "single_file_script"
+
+
+def _single_file_manifest(package_id: str, name: str) -> str:
+    return f"""id: {package_id}
+name: {name}
+version: 0.1.0
+entry: main.py
+description: 由单个 Python 文件直接导入生成的脚本包。
+author: single-file-import
+
+runtime:
+  python: ">=3.11,<3.12"
+  isolation: venv
+
+dependencies:
+  strategy: offline-first
+  pip: []
+  local:
+    common:
+      - wheels/common/*.whl
+    windows:
+      - wheels/windows/*.whl
+    linux:
+      - wheels/linux/*.whl
+
+params: []
+"""

@@ -105,6 +105,7 @@ DRPA Client
 │   └── 成功/失败统计
 ├── 脚本包管理
 │   ├── 安装脚本包
+│   ├── 单文件 Python 导入
 │   ├── 卸载脚本包
 │   ├── 重建虚拟环境
 │   └── 查看安装日志
@@ -136,6 +137,9 @@ DRPA Client
 └── 设置
     ├── 数据目录
     ├── 浏览器路径
+    ├── 高级功能开关
+    ├── Python 环境检测
+    ├── Runtime 策略
     ├── 主题
     └── 脚本仓库配置
 ```
@@ -160,6 +164,7 @@ DRPA Client
 当前支持：
 
 - 导入 `.rpaz` 或 `.zip`。
+- 直接导入单个 `.py` 文件，自动生成 `manifest.yaml` 和脚本包目录。
 - 读取 `manifest.yaml`。
 - 安装到数据目录。
 - 创建独立 venv。
@@ -169,6 +174,15 @@ DRPA Client
 - 卸载脚本包。
 - 重建脚本包虚拟环境。
 - 安装/重建时显示阶段日志和 pip 输出。
+
+单文件导入适合快速把已有 Python 脚本纳入 DRPA Client 管理。默认生成：
+
+- `id`：来自文件名。
+- `entry`：`main.py`。
+- `runtime.python`：`>=3.11,<3.12`。
+- `params`：空列表。
+
+注意：单文件脚本仍需要定义 `main(ctx)` 才能被 DRPA 运行器正确调用。
 
 脚本包表格字段：
 
@@ -271,6 +285,12 @@ src/drpa_client/resources/default_packages/bing_daily_image.rpaz
 当前支持：
 
 - 展示数据目录。
+- 浏览器录制高级功能开关。默认关闭，因此默认导航不显示“浏览器录制”。
+- 检测本地 Python 环境，包括当前 Python、PATH 中的 `python3.11`、`python3`、`python` 等。
+- 配置脚本包安装运行环境策略：
+  - 每个脚本包新建 venv。
+  - 共享当前 DRPA Python 环境。
+  - 使用已有 venv。
 
 后续需要补充：
 
@@ -278,7 +298,7 @@ src/drpa_client/resources/default_packages/bing_daily_image.rpaz
 - 默认下载目录。
 - 主题切换。
 - 脚本仓库配置。
-- Python runtime 诊断。
+- 更完整的 Python runtime 诊断。
 
 ## 5.8 浏览器录制器规划
 
@@ -293,6 +313,7 @@ docs/BROWSER_RECORDER_DESIGN.md
 核心原则：
 
 - 录制结果是草稿，不是生产级最终脚本。
+- 浏览器录制器是高级功能，默认隐藏，需要在设置里启用。
 - 选择器需要评分和候选列表。
 - 密码、token、验证码等敏感值必须脱敏或生成 TODO。
 - 生成包必须包含 `recording.json`、`recorder_notes.md` 和带 TODO 的 `main.py`。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import json
 import os
 import platform
 import shutil
@@ -14,6 +15,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from .models import DependencySpec, PackageManifest
+from .settings import RuntimeMode
 
 
 class RuntimeErrorDetails(RuntimeError):
@@ -23,6 +25,47 @@ class RuntimeErrorDetails(RuntimeError):
 class RuntimeManager:
     def __init__(self, base_python: Path | None = None):
         self.base_python = base_python or Path(sys.executable)
+
+    def prepare_environment(
+        self,
+        package_dir: Path,
+        manifest: PackageManifest,
+        package_root_dir: Path,
+        runtime_mode: RuntimeMode = "new_venv",
+        existing_venv_path: str = "",
+        install_dependencies: bool = True,
+        log: Callable[[str], None] | None = None,
+    ) -> tuple[Path, Path | None, bool]:
+        if manifest.runtime.isolation != "venv" or runtime_mode == "shared":
+            python = self.base_python
+            _log(log, f"使用共享 Python 环境：{python}")
+            self._validate_python_version(manifest.runtime.python)
+            if install_dependencies:
+                self.install_dependencies(python, package_dir, manifest.dependencies, log=log)
+            return python, None, False
+
+        if runtime_mode == "existing_venv":
+            if not existing_venv_path:
+                raise RuntimeErrorDetails("已选择使用已有 venv，但未配置 venv 路径")
+            venv_dir = Path(existing_venv_path).expanduser().resolve()
+            python = self.python_executable(venv_dir)
+            if not python.exists():
+                raise RuntimeErrorDetails(f"已有 venv 中找不到 Python：{python}")
+            _log(log, f"使用已有 venv：{venv_dir}")
+            self._validate_python_executable_version(python, manifest.runtime.python)
+            if install_dependencies:
+                self.install_dependencies(python, package_dir, manifest.dependencies, log=log)
+            return python, venv_dir, False
+
+        venv_dir = package_root_dir / "venv"
+        python = self.ensure_environment(
+            package_dir=package_dir,
+            manifest=manifest,
+            venv_dir=venv_dir,
+            install_dependencies=install_dependencies,
+            log=log,
+        )
+        return python, venv_dir, True
 
     def ensure_environment(
         self,
@@ -96,6 +139,28 @@ class RuntimeManager:
             return venv_dir / "Scripts" / "python.exe"
         return venv_dir / "bin" / "python"
 
+    def detect_python_environments(self) -> list[dict[str, str]]:
+        candidates: list[Path] = [self.base_python]
+        env_venv = os.getenv("VIRTUAL_ENV")
+        if env_venv:
+            candidates.append(self.python_executable(Path(env_venv)))
+        for command in ("python3.11", "python3", "python", "python3.12"):
+            found = shutil.which(command)
+            if found:
+                candidates.append(Path(found))
+
+        seen: set[str] = set()
+        results: list[dict[str, str]] = []
+        for candidate in candidates:
+            key = str(candidate)
+            if key in seen or not candidate.exists():
+                continue
+            seen.add(key)
+            info = self._inspect_python(candidate)
+            if info:
+                results.append(info)
+        return results
+
     def _validate_python_version(self, spec: str) -> None:
         try:
             specifier = SpecifierSet(spec)
@@ -104,6 +169,44 @@ class RuntimeManager:
         current = Version(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
         if current not in specifier:
             raise RuntimeErrorDetails(f"当前 Python {current} 不满足脚本包要求：{spec}")
+
+    def _validate_python_executable_version(self, python: Path, spec: str) -> None:
+        info = self._inspect_python(python)
+        if not info:
+            raise RuntimeErrorDetails(f"无法检测 Python 版本：{python}")
+        try:
+            specifier = SpecifierSet(spec)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeErrorDetails(f"Python 版本约束无效：{spec}") from exc
+        version = Version(info["version"])
+        if version not in specifier:
+            raise RuntimeErrorDetails(f"{python} 的版本 {version} 不满足脚本包要求：{spec}")
+
+    def _inspect_python(self, python: Path) -> dict[str, str] | None:
+        script = (
+            "import json,sys,sysconfig;"
+            "print(json.dumps({'executable':sys.executable,"
+            "'version':'.'.join(map(str,sys.version_info[:3])),"
+            "'prefix':sys.prefix,'base_prefix':getattr(sys,'base_prefix',sys.prefix),"
+            "'is_venv':sys.prefix!=getattr(sys,'base_prefix',sys.prefix)}))"
+        )
+        try:
+            result = subprocess.run(
+                [str(python), "-c", script],
+                text=True,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        try:
+            raw = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+        return {key: str(value) for key, value in raw.items()}
 
     def _collect_find_links(self, package_dir: Path, dependencies: DependencySpec) -> list[str]:
         patterns = list(dependencies.local_common)

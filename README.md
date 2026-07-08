@@ -13,8 +13,10 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 - Windows / Linux 跨平台桌面客户端
 - PySide6 美观暗色 UI
 - `.rpaz` 脚本包安装
+- 单个 `.py` 文件直接导入为脚本包
 - `manifest.yaml` 参数定义
 - 每个脚本包独立 venv
+- 可在设置中选择新建 venv、共享当前 Python 或使用已有 venv
 - 支持脚本包内置 wheels 离线依赖
 - 子进程运行脚本
 - JSON Lines 实时任务日志
@@ -23,7 +25,7 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 - 列表式任务运行界面
 - Monaco Web 代码编辑器入口
 - 内置默认脚本包：Bing 每日一图
-- 浏览器录制 MVP：录制事件模型、JS Agent、草稿 `.rpaz` 生成器和 GUI 入口
+- 浏览器录制 MVP：录制事件模型、JS Agent、草稿 `.rpaz` 生成器；作为高级功能默认隐藏，可在设置中启用
 - AI skill：构建 `.rpaz` 代码包，指定 Python 3.11.9
 - 面向 DrissionPage 的 SDK 入口
 
