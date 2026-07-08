@@ -11,7 +11,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import psutil
+try:
+    import psutil
+except ImportError:  # pragma: no cover - fallback for minimal bootstrap environments
+    psutil = None
 
 from .database import RunStore
 from .models import InstalledPackage, TaskEvent
@@ -30,6 +33,9 @@ class RunningTask:
 
     def stop(self) -> None:
         if self.process.poll() is not None:
+            return
+        if psutil is None:
+            self.process.terminate()
             return
         try:
             parent = psutil.Process(self.process.pid)
