@@ -82,7 +82,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DRPA Client")
-        self.resize(1180, 760)
+        self.resize(1280, 820)
         self.setAcceptDrops(True)
 
         self.settings_store = SettingsStore()
@@ -190,9 +190,9 @@ class Sidebar(QListWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("Sidebar")
-        self.setFixedWidth(220)
+        self.setFixedWidth(180)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setSpacing(8)
+        self.setSpacing(4)
         self.set_titles([])
 
     def set_titles(self, titles: list[str]) -> None:
@@ -200,7 +200,7 @@ class Sidebar(QListWidget):
         for title in titles:
             item = QListWidgetItem(title)
             item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
-            item.setSizeHint(item.sizeHint().expandedTo(item.sizeHint() * 1.6))
+            item.setSizeHint(item.sizeHint().expandedTo(item.sizeHint() * 1.25))
             self.addItem(item)
 
 
@@ -208,8 +208,8 @@ class Page(QWidget):
     def __init__(self, title: str, subtitle: str):
         super().__init__()
         self.content = QVBoxLayout(self)
-        self.content.setContentsMargins(32, 28, 32, 28)
-        self.content.setSpacing(18)
+        self.content.setContentsMargins(16, 12, 16, 12)
+        self.content.setSpacing(10)
 
         title_label = QLabel(title)
         title_label.setObjectName("PageTitle")
@@ -225,8 +225,8 @@ class Card(QFrame):
         self.setObjectName("Card")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(22, 20, 22, 20)
-        self.layout.setSpacing(12)
+        self.layout.setContentsMargins(12, 10, 12, 10)
+        self.layout.setSpacing(8)
 
 
 class DashboardPage(Page):
@@ -587,12 +587,12 @@ class TasksPage(Page):
         # Left: package "folders"
         self.package_list = QListWidget()
         self.package_list.setObjectName("PackageList")
-        self.package_list.setMinimumWidth(260)
+        self.package_list.setMinimumWidth(220)
 
         left_widget = QWidget()
         left_widget.setObjectName("TaskLeftPanel")
-        left_widget.setMinimumWidth(280)
-        left_widget.setMaximumWidth(360)
+        left_widget.setMinimumWidth(240)
+        left_widget.setMaximumWidth(320)
         left_panel = QVBoxLayout(left_widget)
         left_panel.setContentsMargins(0, 0, 0, 0)
         left_panel.setSpacing(10)
@@ -614,7 +614,7 @@ class TasksPage(Page):
 
         # Middle: task profile "files"
         middle_widget = QWidget()
-        middle_widget.setMinimumWidth(320)
+        middle_widget.setMinimumWidth(300)
         middle_panel = QVBoxLayout(middle_widget)
         middle_panel.setContentsMargins(0, 0, 0, 0)
         middle_panel.setSpacing(10)
@@ -658,7 +658,7 @@ class TasksPage(Page):
         detail_scroll = QScrollArea()
         detail_scroll.setObjectName("ContentScroll")
         detail_scroll.setWidgetResizable(True)
-        detail_scroll.setMinimumHeight(280)
+        detail_scroll.setMinimumHeight(320)
         detail_content = QWidget()
         detail_layout = QVBoxLayout(detail_content)
         detail_layout.setContentsMargins(2, 2, 10, 2)
@@ -671,8 +671,8 @@ class TasksPage(Page):
         self.selected_description.setWordWrap(True)
         self.param_table = QTableWidget(0, 5)
         self.param_table.setHorizontalHeaderLabels(["参数名", "类型", "必填", "默认值", "说明"])
-        self.param_table.setMinimumHeight(150)
-        self.param_table.setMaximumHeight(260)
+        self.param_table.setMinimumHeight(170)
+        self.param_table.setMaximumHeight(300)
         self.param_table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
         self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -701,8 +701,8 @@ class TasksPage(Page):
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(180)
-        self.log.setMaximumHeight(320)
+        self.log.setMinimumHeight(160)
+        self.log.setMaximumHeight(260)
         self.run_table = QTableWidget(0, 4)
         self.run_table.setHorizontalHeaderLabels(["运行ID", "任务", "状态", "退出码"])
         self.run_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -735,7 +735,7 @@ class TasksPage(Page):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 0)
         splitter.setStretchFactor(2, 1)
-        splitter.setSizes([300, 360, 680])
+        splitter.setSizes([260, 340, 760])
         card.layout.addWidget(splitter)
         self.content.addWidget(card, 1)
 

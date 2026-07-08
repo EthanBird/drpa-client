@@ -29,6 +29,9 @@ dev = [
 [project.scripts]
 drpa-client = "drpa_client.app.main:main"
 
+[tool.setuptools]
+package-dir = { "" = "src" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
