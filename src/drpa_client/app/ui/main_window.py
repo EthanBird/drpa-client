@@ -579,6 +579,7 @@ class TasksPage(Page):
         self.event_bridge = TaskEventBridge()
         self.param_widgets: dict[str, QWidget] = {}
         self.current_profile_id: str | None = None
+        self._updating_param_table = False
 
         card = Card()
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -620,7 +621,7 @@ class TasksPage(Page):
         middle_panel.setSpacing(10)
         profile_title = QLabel("任务配置")
         profile_title.setObjectName("SectionTitle")
-        self.profile_hint = QLabel("保存后的任务配置会出现在这里，可分别运行。")
+        self.profile_hint = QLabel("保存后的任务配置会出现在这里；参数会随任务一起保存，下次可直接运行。")
         self.profile_hint.setObjectName("MutedText")
         self.profile_hint.setWordWrap(True)
         self.profile_table = QTableWidget(0, 4)
@@ -634,9 +635,9 @@ class TasksPage(Page):
         self.profile_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         profile_buttons = QHBoxLayout()
-        self.new_profile_button = QPushButton("新建")
-        self.save_profile_button = QPushButton("保存")
-        self.delete_profile_button = QPushButton("删除")
+        self.new_profile_button = QPushButton("新建任务")
+        self.save_profile_button = QPushButton("保存参数")
+        self.delete_profile_button = QPushButton("删除任务")
         profile_buttons.addWidget(self.new_profile_button)
         profile_buttons.addWidget(self.save_profile_button)
         profile_buttons.addWidget(self.delete_profile_button)
@@ -669,8 +670,8 @@ class TasksPage(Page):
         self.selected_description = QLabel("请从左侧列表选择要运行的 RPA 脚本包。")
         self.selected_description.setObjectName("MutedText")
         self.selected_description.setWordWrap(True)
-        self.param_table = QTableWidget(0, 5)
-        self.param_table.setHorizontalHeaderLabels(["参数名", "类型", "必填", "默认值", "说明"])
+        self.param_table = QTableWidget(0, 6)
+        self.param_table.setHorizontalHeaderLabels(["参数名", "类型", "必填", "默认值", "当前值", "说明"])
         self.param_table.setMinimumHeight(170)
         self.param_table.setMaximumHeight(300)
         self.param_table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
@@ -678,11 +679,16 @@ class TasksPage(Page):
         self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.param_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.param_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.param_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         self.param_table.verticalHeader().setVisible(False)
         self.param_table.setWordWrap(True)
         self.param_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.param_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.param_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+            | QAbstractItemView.EditTrigger.SelectedClicked
+        )
         self.param_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.form = QFormLayout()
         self.form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -740,6 +746,7 @@ class TasksPage(Page):
         self.content.addWidget(card, 1)
 
         self.package_list.currentRowChanged.connect(self._render_params)
+        self.param_table.itemChanged.connect(self._param_table_item_changed)
         self.install_button.clicked.connect(self._choose_package)
         self.refresh_button.clicked.connect(self.refresh_packages)
         self.profile_table.currentCellChanged.connect(self._profile_selected)
@@ -847,7 +854,6 @@ class TasksPage(Page):
         self.selected_description.setText(
             f"{description}\nID: {package.manifest.id} · Runtime: {package.manifest.runtime.isolation}"
         )
-        self._render_param_table(package)
 
         for param in package.manifest.params:
             if param.type == "boolean":
@@ -882,27 +888,24 @@ class TasksPage(Page):
             widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             widget.setToolTip(param.description)
             self.param_widgets[param.name] = widget
+            self._connect_param_widget(param.name, widget)
             label = f"{param.label}{' *' if param.required else ''}"
             self.form.addRow(label, widget)
+        self._render_param_table(package)
 
     def _set_params(self, params: dict[str, Any]) -> None:
         for name, value in params.items():
             widget = self.param_widgets.get(name)
             if widget is None:
                 continue
-            if isinstance(widget, QCheckBox):
-                widget.setChecked(bool(value))
-            elif isinstance(widget, QSpinBox):
-                widget.setValue(int(value))
-            elif isinstance(widget, QDoubleSpinBox):
-                widget.setValue(float(value))
-            elif isinstance(widget, QDateEdit):
-                widget.setDate(QDate.fromString(str(value), "yyyy-MM-dd"))
-            elif isinstance(widget, QLineEdit):
-                widget.setText(str(value))
+            self._set_widget_value(widget, value)
+        package = self._selected_package()
+        if package is not None:
+            self._render_param_table(package)
 
     def _render_param_table(self, package: InstalledPackage) -> None:
         params = package.manifest.params
+        self._updating_param_table = True
         self.param_table.setRowCount(len(params))
         for row, param in enumerate(params):
             values = [
@@ -910,11 +913,86 @@ class TasksPage(Page):
                 param.type,
                 "是" if param.required else "否",
                 "" if param.default is None else str(param.default),
+                self._param_current_value(param.name),
                 param.description,
             ]
             for column, value in enumerate(values):
-                self.param_table.setItem(row, column, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if column != 4:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.param_table.setItem(row, column, item)
         self.param_table.resizeRowsToContents()
+        self._updating_param_table = False
+
+    def _param_current_value(self, name: str) -> str:
+        widget = self.param_widgets.get(name)
+        if widget is None:
+            return ""
+        if isinstance(widget, QCheckBox):
+            return "true" if widget.isChecked() else "false"
+        if isinstance(widget, QSpinBox):
+            return str(widget.value())
+        if isinstance(widget, QDoubleSpinBox):
+            return str(widget.value())
+        if isinstance(widget, QDateEdit):
+            return widget.date().toString("yyyy-MM-dd")
+        if isinstance(widget, QLineEdit):
+            return widget.text()
+        return ""
+
+    def _param_table_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._updating_param_table or item.column() != 4:
+            return
+        name_item = self.param_table.item(item.row(), 0)
+        if name_item is None:
+            return
+        widget = self.param_widgets.get(name_item.text())
+        if widget is None:
+            return
+        try:
+            self._set_widget_value(widget, item.text())
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "参数格式错误", f"参数 {name_item.text()} 的值格式不正确。")
+            self._updating_param_table = True
+            item.setText(self._param_current_value(name_item.text()))
+            self._updating_param_table = False
+
+    def _set_widget_value(self, widget: QWidget, value: Any) -> None:
+        if isinstance(widget, QCheckBox):
+            widget.setChecked(str(value).strip().lower() in {"1", "true", "yes", "y", "是", "启用"})
+        elif isinstance(widget, QSpinBox):
+            widget.setValue(int(value))
+        elif isinstance(widget, QDoubleSpinBox):
+            widget.setValue(float(value))
+        elif isinstance(widget, QDateEdit):
+            date = QDate.fromString(str(value), "yyyy-MM-dd")
+            if date.isValid():
+                widget.setDate(date)
+        elif isinstance(widget, QLineEdit):
+            widget.setText(str(value))
+
+    def _connect_param_widget(self, name: str, widget: QWidget) -> None:
+        if isinstance(widget, QCheckBox):
+            widget.stateChanged.connect(lambda *_args, key=name: self._sync_param_table_value(key))
+        elif isinstance(widget, QSpinBox | QDoubleSpinBox):
+            widget.valueChanged.connect(lambda *_args, key=name: self._sync_param_table_value(key))
+        elif isinstance(widget, QDateEdit):
+            widget.dateChanged.connect(lambda *_args, key=name: self._sync_param_table_value(key))
+        elif isinstance(widget, QLineEdit):
+            widget.textChanged.connect(lambda *_args, key=name: self._sync_param_table_value(key))
+
+    def _sync_param_table_value(self, name: str) -> None:
+        if self._updating_param_table:
+            return
+        for row in range(self.param_table.rowCount()):
+            name_item = self.param_table.item(row, 0)
+            if name_item and name_item.text() == name:
+                value_item = self.param_table.item(row, 4)
+                if value_item is not None:
+                    self._updating_param_table = True
+                    value_item.setText(self._param_current_value(name))
+                    self._updating_param_table = False
+                return
 
     def _selected_package(self) -> InstalledPackage | None:
         index = self.package_list.currentRow()

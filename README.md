@@ -6,6 +6,7 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 
 - [功能设计文档](docs/FUNCTIONAL_DESIGN.md)
 - [开发文档](docs/DEVELOPMENT.md)
+- [使用文档](docs/USER_GUIDE.md)
 - [浏览器录制与脚本包生成设计规范](docs/BROWSER_RECORDER_DESIGN.md)
 
 当前首版聚焦：
@@ -127,10 +128,10 @@ wheelhouse/windows-amd64/
 
 脚本包的 `manifest.yaml` 中 `params` 字段会自动生成两部分 UI：
 
-- 参数表：展示参数名、类型、必填、默认值和说明。
+- 参数表：展示参数名、类型、必填、默认值、当前值和说明，其中“当前值”可直接编辑。
 - 运行表单：根据参数类型生成输入控件，例如文本框、密码框、数字框、日期框、复选框。
 
-因此每个任务的可配置参数不需要在 GUI 里写死，只需要维护脚本包自己的 manifest。
+参数表和运行表单会双向同步。保存任务配置后，下次选择该任务会自动回填保存过的参数。
 
 ## 示例脚本包
 
