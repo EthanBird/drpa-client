@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 .drpa-data/
+.tools/
 venv/
 dist/
 build/

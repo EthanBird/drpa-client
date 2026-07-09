@@ -34,9 +34,19 @@ DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让�
 
 ## 快速运行
 
+Windows 用户不需要预装 Python，可以直接运行：
+
+```bat
+scripts\run-drpa-windows.bat
+```
+
+该脚本会自动下载 uv，并由 uv 根据 `.python-version` 准备 Python 3.11.9。
+
+开发环境也可以运行：
+
 ```bash
-python -m pip install -e .
-drpa-client
+uv sync
+uv run drpa-client
 ```
 
 如果只想做语法验证：

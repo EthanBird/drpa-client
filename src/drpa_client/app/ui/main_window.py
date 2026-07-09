@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QHeaderView,
@@ -589,6 +590,7 @@ class TasksPage(Page):
         self.package_list = QListWidget()
         self.package_list.setObjectName("PackageList")
         self.package_list.setMinimumWidth(220)
+        self.package_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
         left_widget = QWidget()
         left_widget.setObjectName("TaskLeftPanel")
@@ -633,6 +635,7 @@ class TasksPage(Page):
         self.profile_table.verticalHeader().setVisible(False)
         self.profile_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.profile_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.profile_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
         profile_buttons = QHBoxLayout()
         self.new_profile_button = QPushButton("新建任务")
@@ -718,6 +721,7 @@ class TasksPage(Page):
         self.run_table.verticalHeader().setVisible(False)
         self.run_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.run_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.run_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
         detail_layout.addWidget(self.selected_title)
         detail_layout.addWidget(self.selected_description)
@@ -746,11 +750,14 @@ class TasksPage(Page):
         self.content.addWidget(card, 1)
 
         self.package_list.currentRowChanged.connect(self._render_params)
+        self.package_list.customContextMenuRequested.connect(self._show_package_menu)
         self.param_table.itemChanged.connect(self._param_table_item_changed)
         self.install_button.clicked.connect(self._choose_package)
         self.refresh_button.clicked.connect(self.refresh_packages)
         self.profile_table.currentCellChanged.connect(self._profile_selected)
+        self.profile_table.customContextMenuRequested.connect(self._show_profile_menu)
         self.run_table.currentCellChanged.connect(self._run_selected)
+        self.run_table.customContextMenuRequested.connect(self._show_run_menu)
         self.new_profile_button.clicked.connect(self._new_profile)
         self.save_profile_button.clicked.connect(self._save_profile)
         self.delete_profile_button.clicked.connect(self._delete_profile)
@@ -812,6 +819,34 @@ class TasksPage(Page):
         self.log.append(f"[install] 安装失败：{message}")
         QMessageBox.critical(self, "安装失败", message)
 
+    def _show_package_menu(self, pos) -> None:
+        item = self.package_list.itemAt(pos)
+        if item is not None:
+            self.package_list.setCurrentItem(item)
+        menu = QMenu(self)
+        menu.addAction("安装脚本包 / 导入 py", self._choose_package)
+        menu.addAction("刷新列表", self.refresh_packages)
+        uninstall_action = menu.addAction("卸载选中脚本包")
+        uninstall_action.setEnabled(self._selected_package() is not None)
+        uninstall_action.triggered.connect(self._uninstall_selected_package)
+        menu.exec(self.package_list.mapToGlobal(pos))
+
+    def _uninstall_selected_package(self) -> None:
+        package = self._selected_package()
+        if package is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "卸载脚本包",
+            f"确定卸载 {package.display_name}？这会删除该脚本包目录，但不会删除项目 .venv。",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.package_manager.uninstall(package)
+        self.log.append(f"[install] 已卸载脚本包：{package.display_name}")
+        self.refresh_packages()
+        self.run_finished.emit()
+
     def refresh_packages(self) -> None:
         self.packages = self.package_manager.list_installed()
         current_row = self.package_list.currentRow()
@@ -855,43 +890,49 @@ class TasksPage(Page):
             f"{description}\nID: {package.manifest.id} · Runtime: {package.manifest.runtime.isolation}"
         )
 
+        self.param_table.setRowCount(len(package.manifest.params))
         for param in package.manifest.params:
-            if param.type == "boolean":
-                widget: QWidget = QCheckBox()
-                if param.default is not None:
-                    widget.setChecked(bool(param.default))
-            elif param.type == "integer":
-                widget = QSpinBox()
-                widget.setRange(-2_147_483_648, 2_147_483_647)
-                if param.default is not None:
-                    widget.setValue(int(param.default))
-            elif param.type == "number":
-                widget = QDoubleSpinBox()
-                widget.setRange(-1_000_000_000, 1_000_000_000)
-                widget.setDecimals(4)
-                if param.default is not None:
-                    widget.setValue(float(param.default))
-            elif param.type == "date":
-                widget = QDateEdit()
-                widget.setCalendarPopup(True)
-                widget.setDisplayFormat("yyyy-MM-dd")
-                if param.default:
-                    widget.setDate(QDate.fromString(str(param.default), "yyyy-MM-dd"))
-                else:
-                    widget.setDate(QDate.currentDate())
-            else:
-                widget = QLineEdit()
-                if param.type == "password":
-                    widget.setEchoMode(QLineEdit.EchoMode.Password)
-                if param.default is not None:
-                    widget.setText(str(param.default))
+            widget = self._create_param_widget(param)
             widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             widget.setToolTip(param.description)
             self.param_widgets[param.name] = widget
-            self._connect_param_widget(param.name, widget)
-            label = f"{param.label}{' *' if param.required else ''}"
-            self.form.addRow(label, widget)
         self._render_param_table(package)
+        hint = QLabel("请直接在上方参数表的“当前值”列编辑参数；点击“保存参数”后下次会自动回填。")
+        hint.setObjectName("MutedText")
+        hint.setWordWrap(True)
+        self.form.addRow(hint)
+
+    def _create_param_widget(self, param) -> QWidget:
+        if param.type == "boolean":
+            widget: QWidget = QCheckBox()
+            if param.default is not None:
+                widget.setChecked(bool(param.default))
+        elif param.type == "integer":
+            widget = QSpinBox()
+            widget.setRange(-2_147_483_648, 2_147_483_647)
+            if param.default is not None:
+                widget.setValue(int(param.default))
+        elif param.type == "number":
+            widget = QDoubleSpinBox()
+            widget.setRange(-1_000_000_000, 1_000_000_000)
+            widget.setDecimals(4)
+            if param.default is not None:
+                widget.setValue(float(param.default))
+        elif param.type == "date":
+            widget = QDateEdit()
+            widget.setCalendarPopup(True)
+            widget.setDisplayFormat("yyyy-MM-dd")
+            if param.default:
+                widget.setDate(QDate.fromString(str(param.default), "yyyy-MM-dd"))
+            else:
+                widget.setDate(QDate.currentDate())
+        else:
+            widget = QLineEdit()
+            if param.type == "password":
+                widget.setEchoMode(QLineEdit.EchoMode.Password)
+            if param.default is not None:
+                widget.setText(str(param.default))
+        return widget
 
     def _set_params(self, params: dict[str, Any]) -> None:
         for name, value in params.items():
@@ -913,14 +954,14 @@ class TasksPage(Page):
                 param.type,
                 "是" if param.required else "否",
                 "" if param.default is None else str(param.default),
-                self._param_current_value(param.name),
                 param.description,
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if column != 4:
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.param_table.setItem(row, column, item)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                target_column = column if column < 4 else 5
+                self.param_table.setItem(row, target_column, item)
+            self.param_table.setCellWidget(row, 4, self.param_widgets[param.name])
         self.param_table.resizeRowsToContents()
         self._updating_param_table = False
 
@@ -1088,6 +1129,23 @@ class TasksPage(Page):
         self.current_profile_id = None
         self.refresh_profiles()
 
+    def _show_profile_menu(self, pos) -> None:
+        item = self.profile_table.itemAt(pos)
+        if item is not None:
+            self.profile_table.setCurrentCell(item.row(), item.column())
+        menu = QMenu(self)
+        menu.addAction("新建任务配置", self._new_profile)
+        save_action = menu.addAction("保存当前参数")
+        save_action.setEnabled(self._selected_package() is not None)
+        save_action.triggered.connect(self._save_profile)
+        run_action = menu.addAction("运行选中任务")
+        run_action.setEnabled(self._selected_profile() is not None)
+        run_action.triggered.connect(self._run_selected_profile)
+        delete_action = menu.addAction("删除选中任务")
+        delete_action.setEnabled(self._selected_profile() is not None)
+        delete_action.triggered.connect(self._delete_profile)
+        menu.exec(self.profile_table.viewport().mapToGlobal(pos))
+
     def _profile_selected(self, *args) -> None:
         profile = self._selected_profile()
         if profile is None:
@@ -1137,6 +1195,20 @@ class TasksPage(Page):
         if task is not None:
             task.stop()
             self._append_log(run_id, "[status] 已发送停止信号")
+
+    def _show_run_menu(self, pos) -> None:
+        item = self.run_table.itemAt(pos)
+        if item is not None:
+            self.run_table.setCurrentCell(item.row(), item.column())
+        run_id = self._selected_run_id()
+        menu = QMenu(self)
+        stop_action = menu.addAction("停止选中运行")
+        stop_action.setEnabled(bool(run_id and run_id in self.running_tasks))
+        stop_action.triggered.connect(self._stop_selected_run)
+        copy_action = menu.addAction("复制运行 ID")
+        copy_action.setEnabled(bool(run_id))
+        copy_action.triggered.connect(lambda: QApplication.clipboard().setText(run_id or ""))
+        menu.exec(self.run_table.viewport().mapToGlobal(pos))
 
     def _handle_event(self, event: TaskEvent) -> None:
         payload = event.payload

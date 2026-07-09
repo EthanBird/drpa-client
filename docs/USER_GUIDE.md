@@ -4,6 +4,28 @@
 
 ## 1. 启动程序
 
+### 1.1 Windows：无需预装 Python
+
+在 Windows 上可以直接运行：
+
+```bat
+scripts\run-drpa-windows.bat
+```
+
+这个脚本会：
+
+1. 检查项目目录下是否已有 `.tools\uv\uv.exe`。
+2. 如果没有，会下载 uv standalone。
+3. uv 根据 `.python-version` 自动准备 Python 3.11.9。
+4. 执行 `uv sync`。
+5. 执行 `uv run drpa-client`。
+
+因此用户不需要手动安装 Python。
+
+首次运行需要网络用于下载 uv 和同步应用依赖；脚本包依赖安装仍然使用本地 wheelhouse，不联网。
+
+### 1.2 开发方式
+
 在项目目录运行：
 
 ```bash
