@@ -827,6 +827,14 @@ DRPA Client 不再让用户选择 Python 环境。安装和运行都使用项目
 
 这个 venv 由应用自动创建、自动复用。所有脚本包依赖集中安装，所有任务运行集中复用，减少重复 venv 和用户配置成本。
 
+如果检测到系统可用 `uv`，依赖安装会使用：
+
+```bash
+uv pip install --python .venv/.../python --no-index --find-links ...
+```
+
+这样可以正确修改 uv 管理的项目 `.venv`，避免 `externally-managed-environment`。
+
 ### 9.4 浏览器
 
 DrissionPage 控制 Chromium 内核浏览器。

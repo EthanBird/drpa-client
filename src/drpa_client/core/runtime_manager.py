@@ -271,7 +271,8 @@ class RuntimeManager:
     ) -> None:
         env = os.environ.copy()
         env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
-        command = [str(python), "-m", "pip", *args]
+        env.setdefault("UV_NO_PROGRESS", "1")
+        command = _dependency_install_command(python, args)
         _log(log, f"执行：{' '.join(command)}")
         process = subprocess.Popen(
             command,
@@ -291,7 +292,7 @@ class RuntimeManager:
         if exit_code != 0:
             raise RuntimeErrorDetails(
                 "依赖安装失败：\n"
-                f"命令：{shutil.which(str(python)) or python} -m pip {' '.join(args)}\n"
+                f"命令：{' '.join(command)}\n"
                 f"输出：\n{chr(10).join(output)}"
             )
 
@@ -299,6 +300,13 @@ class RuntimeManager:
 def _log(callback: Callable[[str], None] | None, message: str) -> None:
     if callback is not None:
         callback(message)
+
+
+def _dependency_install_command(python: Path, args: list[str]) -> list[str]:
+    uv = shutil.which("uv")
+    if uv and args and args[0] == "install":
+        return [uv, "pip", "install", "--python", str(python), *args[1:]]
+    return [str(python), "-m", "pip", *args]
 
 
 def _candidate_install_roots(start: Path) -> list[Path]:
