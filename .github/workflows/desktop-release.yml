@@ -63,8 +63,8 @@ jobs:
       - name: Install Linux desktop libraries
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo timeout 300 apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo env DEBIAN_FRONTEND=noninteractive timeout 300 apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - name: Generate native icon formats
         run: npm exec --workspace @drpa/desktop -- tauri icon src-tauri/icons/icon.png
