@@ -13,6 +13,15 @@ temp/
 *.rpaz
 !examples/*.rpaz
 
+# DRPA Next desktop workspace
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+target/
+coverage/
+*.tsbuildinfo
+.DS_Store
+
 # Internal-network example packages (local only, do not publish)
 examples/marketing_cancel_order_dispatch/
 examples/marketing_cancel_order_dispatch.rpaz

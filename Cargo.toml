@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/desktop/src-tauri",
+  "crates/drpa-host",
+  "crates/drpa-package",
+  "crates/drpa-protocol",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }

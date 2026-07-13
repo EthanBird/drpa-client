@@ -1,0 +1,19 @@
+{
+  "name": "drpa-next",
+  "version": "0.2.0",
+  "private": true,
+  "workspaces": [
+    "apps/desktop"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @drpa/desktop",
+    "build": "npm run build --workspace @drpa/desktop",
+    "typecheck": "npm run typecheck --workspace @drpa/desktop",
+    "test": "npm run test --workspace @drpa/desktop",
+    "tauri:dev": "npm run tauri:dev --workspace @drpa/desktop",
+    "tauri:build": "npm run tauri:build --workspace @drpa/desktop"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
