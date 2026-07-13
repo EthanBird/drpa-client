@@ -50,8 +50,19 @@ export interface StudioCellResult {
   result?: string;
   error?: string;
   traceback: string[];
+  outputs: Array<Record<string, unknown>>;
   variables: StudioVariable[];
   durationMs: number;
+}
+
+export interface RuntimeStatus {
+  state: "ready" | "notInitialized" | "broken";
+  bundleVersion: string;
+  pythonVersion: string;
+  runtimeRoot: string;
+  environmentRoot: string;
+  browserExecutable: string;
+  message: string;
 }
 
 export interface TaskProfile {

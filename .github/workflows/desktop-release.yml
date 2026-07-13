@@ -1,4 +1,4 @@
-name: Publish offline desktop preview
+name: Publish Windows offline desktop preview
 
 on:
   workflow_dispatch:
@@ -15,6 +15,7 @@ on:
       - "offline/**"
       - "runtime/python/**"
       - "tools/offline/**"
+      - "tools/windows/**"
       - "Cargo.lock"
       - "Cargo.toml"
       - "package-lock.json"
@@ -38,18 +39,6 @@ jobs:
             runner: windows-latest
             target: x86_64-pc-windows-msvc
             bundle: host
-          - platform: linux-x86_64
-            runner: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            bundle: appimage
-          - platform: macos-arm64
-            runner: macos-15
-            target: aarch64-apple-darwin
-            bundle: app
-          - platform: macos-x86_64
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            bundle: app
     runs-on: ${{ matrix.runner }}
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -74,25 +63,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: desktop-release-${{ matrix.target }}
-      - name: Install Linux desktop libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo timeout 300 apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
-          sudo env DEBIAN_FRONTEND=noninteractive timeout 300 apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - name: Generate native icon formats
         run: npm exec --workspace @drpa/desktop -- tauri icon src-tauri/icons/icon.png
       - name: Build Windows GUI host
         if: runner.os == 'Windows'
         run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --no-bundle
-      - name: Build Linux AppImage
-        if: runner.os == 'Linux'
-        run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --bundles appimage
-      - name: Build macOS application bundle
-        if: runner.os == 'macOS'
-        env:
-          APPLE_SIGNING_IDENTITY: "-"
-        run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --bundles app
+      - name: Build headless Windows file updater
+        if: runner.os == 'Windows'
+        run: cargo build -p drpa-desktop --bin drpa-updater --release --target "${{ matrix.target }}"
 
       - name: Assemble registry-free Windows installer
         if: runner.os == 'Windows'
@@ -108,6 +87,7 @@ jobs:
           if (-not $runtimeStage) { throw "Sealed Windows runtime stage is missing" }
           New-Item -ItemType Directory -Force -Path $assets, "$portable/runtime", "$portable/webview2", "$portable/examples" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/drpa-desktop.exe" "$portable/DRPA Next.exe"
+          Copy-Item "target/${{ matrix.target }}/release/drpa-updater.exe" "$portable/drpa-updater.exe"
           Get-ChildItem $runtimeStage.FullName -Force | Copy-Item -Destination "$portable/runtime" -Recurse -Force
           Copy-Item "examples/bing_daily_image.rpaz" "$portable/examples/"
           Copy-Item "docs/PORTABLE_RELEASE.md" "$portable/README.md"
@@ -124,6 +104,21 @@ jobs:
           if (-not $browser) { throw "Fixed WebView2 executable is missing" }
           Get-ChildItem $browser.Directory.FullName -Force | Copy-Item -Destination "$portable/webview2" -Recurse -Force
 
+          $runtimeManifest = Get-Content "$portable/runtime/manifest.json" -Raw | ConvertFrom-Json
+          $runtimePython = Join-Path "$portable/runtime" ($runtimeManifest.pythonExecutable -replace '/', '\\')
+          $smokeEnvironment = Join-Path $portable "data/runtime-environment/environment"
+          & $runtimePython "$portable/runtime/bootstrap_runtime.py" --environment $smokeEnvironment
+          if ($LASTEXITCODE -ne 0) { throw "Installed-layout runtime bootstrap failed" }
+          & "$smokeEnvironment/Scripts/python.exe" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat; print('DRPA_WINDOWS_RUNTIME_OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Installed-layout Python/Jupyter import smoke failed" }
+          Remove-Item (Join-Path $portable "data") -Recurse -Force
+
+          $update = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64.drpa-update"
+          python tools/windows/build_update_package.py --stage $portable --output $update --version "$env:DRPA_VERSION-preview-$env:GITHUB_RUN_NUMBER"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to build Windows file-level update" }
+          $updateHash = (Get-FileHash -Algorithm SHA256 $update).Hash.ToLowerInvariant()
+          "$updateHash  $([IO.Path]::GetFileName($update))" | Set-Content -Encoding ascii "$update.sha256"
+
           choco install nsis --version=3.12.0 --no-progress --yes
           $makensis = "C:/Program Files (x86)/NSIS/makensis.exe"
           if (-not (Test-Path $makensis)) { throw "Pinned NSIS compiler is missing" }
@@ -134,50 +129,6 @@ jobs:
           if ($registryCalls) { throw "Installer contains a forbidden registry instruction" }
           $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
           "$hash  $([IO.Path]::GetFileName($installer))" | Set-Content -Encoding ascii "$installer.sha256"
-
-      - name: Assemble Linux portable archive
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          assets="${RUNNER_TEMP}/desktop-assets"
-          stage="${RUNNER_TEMP}/DRPA-Next-${DRPA_VERSION}-linux-x86_64"
-          runtime_stage="$(find "${RUNNER_TEMP}/drpa-offline" -maxdepth 1 -type d -name 'drpa-runtime-*-linux-x86_64' -print -quit)"
-          appimage="$(find "target/${{ matrix.target }}/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
-          test -n "$runtime_stage"
-          test -n "$appimage"
-          mkdir -p "$assets" "$stage/runtime" "$stage/examples"
-          cp -a "$runtime_stage"/. "$stage/runtime/"
-          cp "$appimage" "$stage/DRPA Next.AppImage"
-          chmod +x "$stage/DRPA Next.AppImage"
-          cp examples/bing_daily_image.rpaz "$stage/examples/"
-          cp docs/PORTABLE_RELEASE.md "$stage/README.md"
-          archive="$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-portable.tar.gz"
-          tar -C "${RUNNER_TEMP}" -czf "$archive" "$(basename "$stage")"
-          sha256sum "$archive" | sed "s#${assets}/##" > "$archive.sha256"
-
-      - name: Assemble macOS DMG
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          assets="${RUNNER_TEMP}/desktop-assets"
-          stage="${RUNNER_TEMP}/dmg-root"
-          runtime_stage="$(find "${RUNNER_TEMP}/drpa-offline" -maxdepth 1 -type d -name 'drpa-runtime-*-${{ matrix.platform }}' -print -quit)"
-          source_app="$(find "target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -type d -name '*.app' -print -quit)"
-          test -n "$runtime_stage"
-          test -n "$source_app"
-          mkdir -p "$assets" "$stage/examples"
-          cp -R "$source_app" "$stage/DRPA Next.app"
-          mkdir -p "$stage/DRPA Next.app/Contents/Resources/runtime"
-          cp -a "$runtime_stage"/. "$stage/DRPA Next.app/Contents/Resources/runtime/"
-          cp examples/bing_daily_image.rpaz "$stage/examples/"
-          cp docs/PORTABLE_RELEASE.md "$stage/README.md"
-          codesign --force --deep --sign - "$stage/DRPA Next.app"
-          dmg="$assets/drpa-next-${DRPA_VERSION}-${{ matrix.platform }}.dmg"
-          hdiutil create -volname "DRPA Next" -srcfolder "$stage" -ov -format UDZO "$dmg"
-          hash="$(shasum -a 256 "$dmg" | awk '{print $1}')"
-          printf '%s  %s\n' "$hash" "$(basename "$dmg")" > "$dmg.sha256"
 
       - name: Upload offline desktop package
         uses: actions/upload-artifact@v4
@@ -202,12 +153,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/example
-          cp examples/bing_daily_image.rpaz artifacts/example/drpa-example-bing-daily-image-0.1.0.rpaz
+          cp examples/bing_daily_image.rpaz artifacts/example/drpa-example-bing-daily-image-0.2.0.rpaz
           cd artifacts/example
-          sha256sum drpa-example-bing-daily-image-0.1.0.rpaz > drpa-example-bing-daily-image-0.1.0.rpaz.sha256
+          sha256sum drpa-example-bing-daily-image-0.2.0.rpaz > drpa-example-bing-daily-image-0.2.0.rpaz.sha256
           cd ../..
           mapfile -t assets < <(find artifacts -type f | sort)
-          test "${#assets[@]}" -eq 10
+          test "${#assets[@]}" -eq 6
       - name: Publish immutable desktop assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -216,7 +167,7 @@ jobs:
           set -euo pipefail
           tag="desktop-v0.2.0-preview-${GITHUB_RUN_NUMBER}"
           mapfile -t assets < <(find artifacts -type f | sort)
-          notes=$'Chinese-first DRPA Next offline preview.\n\nIncludes a registry-free Windows x64 guided installer, Linux x64 AppImage archive, macOS Apple Silicon DMG, macOS Intel DMG, sealed Python 3.11 runtimes and the Bing daily image RPAZ example. Windows uses a pinned Fixed Version WebView2; the custom installer contains no registry operations and stores workspace data beside the application.\n\nThis preview is unsigned/not notarized. Verify the matching SHA-256 file before moving a package to an offline machine.'
+          notes=$'Windows-focused DRPA Next offline preview.\n\nIncludes a registry-free Windows x64 guided installer, a verified file-level .drpa-update package, sealed Python 3.11 with real Jupyter Kernel dependencies, Fixed Version WebView2 and the Bing daily image RPAZ example. The installer and updater contain no registry operations; workspace data remains beside the application.\n\nThis preview is unsigned. Verify the matching SHA-256 file before moving a package to an offline machine.'
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
             gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "DRPA Next 0.2.0 离线预览 · ${GITHUB_RUN_NUMBER}" --notes "$notes" --prerelease

@@ -97,7 +97,7 @@ def browser_executable(stage: Path, chrome_platform: str) -> Path:
     return paths[chrome_platform]
 
 
-def create_inventory(stage: Path, spec: dict[str, Any], platform_id: str) -> None:
+def create_inventory(stage: Path, spec: dict[str, Any], platform_id: str, chrome_platform: str) -> None:
     files = []
     for path in sorted(stage.rglob("*")):
         if path.is_file() and path.name not in {"manifest.json", "SHA256SUMS"}:
@@ -113,6 +113,8 @@ def create_inventory(stage: Path, spec: dict[str, Any], platform_id: str) -> Non
         "bundleVersion": spec["bundleVersion"],
         "platform": platform_id,
         "pythonVersion": spec["pythonVersion"],
+        "pythonExecutable": bundled_python(stage).relative_to(stage).as_posix(),
+        "browserExecutable": browser_executable(stage, chrome_platform).relative_to(stage).as_posix(),
         "uvVersion": spec["uvVersion"],
         "chromeForTestingVersion": spec["chromeForTestingVersion"],
         "files": files,
@@ -140,7 +142,7 @@ def archive_bundle(stage: Path, output: Path, archive_kind: str) -> Path:
     return target
 
 
-def smoke_test(stage: Path, chrome_platform: str, uv: Path) -> None:
+def smoke_test(stage: Path, chrome_platform: str) -> None:
     smoke = stage.parent / "smoke-environment"
     cache = stage.parent / "empty-uv-cache"
     offline_env = os.environ.copy()
@@ -154,26 +156,18 @@ def smoke_test(stage: Path, chrome_platform: str, uv: Path) -> None:
             "UV_CACHE_DIR": str(cache),
         }
     )
-    run([str(uv), "venv", str(smoke), "--python", str(bundled_python(stage)), "--no-project"], env=offline_env)
-    python = environment_python(smoke)
+    # Exercise the same entry point used by the desktop Host. Calling uv directly
+    # previously allowed a broken Host interpreter lookup to pass the release job.
     run(
         [
-            str(uv),
-            "pip",
-            "install",
-            "--python",
-            str(python),
-            "--offline",
-            "--no-index",
-            "--find-links",
-            str(stage / "wheelhouse"),
-            "--requirement",
-            str(stage / "locks" / "runtime.txt"),
-            "drpa-runtime-python==0.2.0",
+            str(bundled_python(stage)),
+            str(stage / "bootstrap_runtime.py"),
+            "--environment",
+            str(smoke),
         ],
         env=offline_env,
     )
-    run([str(uv), "pip", "check", "--python", str(python)], env=offline_env)
+    python = environment_python(smoke)
     browser = browser_executable(stage, chrome_platform)
     if not browser.exists():
         raise RuntimeError(f"Chrome for Testing is missing: {browser}")
@@ -190,6 +184,28 @@ def smoke_test(stage: Path, chrome_platform: str, uv: Path) -> None:
         "print('DRPA offline smoke test passed')"
     )
     run([str(python), "-c", smoke_script], env={**offline_env, "DRPA_BROWSER_PATH": str(browser)})
+    kernel_input = "\n".join(
+        [
+            json.dumps({"type": "execute", "request_id": "one", "code": "value = 40\\nprint('ready')"}),
+            json.dumps({"type": "execute", "request_id": "two", "code": "value + 2"}),
+            "",
+        ]
+    )
+    kernel = subprocess.run(
+        [str(python), "-m", "drpa_runner.kernel"],
+        cwd=ROOT,
+        env=offline_env,
+        input=kernel_input,
+        text=True,
+        capture_output=True,
+        timeout=90,
+        check=False,
+    )
+    if kernel.returncode != 0:
+        raise RuntimeError(f"Jupyter Kernel protocol smoke failed: {kernel.stderr}")
+    responses = [json.loads(line) for line in kernel.stdout.splitlines() if line.strip()]
+    if len(responses) != 2 or responses[0]["stdout"] != "ready\n" or responses[1]["result"] != "42":
+        raise RuntimeError(f"Jupyter Kernel returned unexpected responses: {responses}")
 
 
 def build(platform_id: str, work_dir: Path) -> Path:
@@ -241,8 +257,8 @@ def build(platform_id: str, work_dir: Path) -> Path:
         chrome_archive,
     )
     safe_extract_zip(chrome_archive, stage / "browser")
-    smoke_test(stage, chrome_platform, uv_target)
-    create_inventory(stage, spec, platform_id)
+    create_inventory(stage, spec, platform_id, chrome_platform)
+    smoke_test(stage, chrome_platform)
     return archive_bundle(stage, work_dir / "out", target["archive"])
 
 

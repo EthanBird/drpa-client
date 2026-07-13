@@ -8,6 +8,8 @@ interface AppStore {
   commandOpen: boolean;
   compactMode: boolean;
   inspectorOpen: boolean;
+  dragActive: boolean;
+  operationNotice: string;
   selectedPackageId: string;
   selectedProfileId: string;
   snapshot: WorkspaceSnapshot | null;
@@ -18,6 +20,8 @@ interface AppStore {
   selectPackage: (packageId: string, profileId?: string) => void;
   selectProfile: (profileId: string) => void;
   setSnapshot: (snapshot: WorkspaceSnapshot) => void;
+  setDragActive: (active: boolean) => void;
+  setOperationNotice: (notice: string) => void;
 }
 
 export const useAppStore = create<AppStore>()(persist((set) => ({
@@ -25,6 +29,8 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   commandOpen: false,
   compactMode: false,
   inspectorOpen: true,
+  dragActive: false,
+  operationNotice: "",
   selectedPackageId: "",
   selectedProfileId: "",
   snapshot: null,
@@ -39,6 +45,8 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     })),
   selectProfile: (selectedProfileId) => set({ selectedProfileId }),
   setSnapshot: (snapshot) => set({ snapshot }),
+  setDragActive: (dragActive) => set({ dragActive }),
+  setOperationNotice: (operationNotice) => set({ operationNotice }),
 }), {
   name: "drpa-ui-preferences",
   partialize: (state) => ({ compactMode: state.compactMode }),

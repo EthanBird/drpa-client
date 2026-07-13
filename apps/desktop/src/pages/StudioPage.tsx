@@ -211,11 +211,13 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice }: { project
     if (!cell || cell.cell_type !== "code") return sourceDocument;
     const result = await desktopGateway.executeStudioCell(projectId, sourceText(cell.source));
     const next = structuredClone(sourceDocument);
-    const outputs: Array<Record<string, unknown>> = [];
-    if (result.stdout) outputs.push({ output_type: "stream", name: "stdout", text: result.stdout });
-    if (result.stderr) outputs.push({ output_type: "stream", name: "stderr", text: result.stderr });
-    if (result.result !== undefined) outputs.push({ output_type: "execute_result", execution_count: result.executionCount, data: { "text/plain": result.result }, metadata: {} });
-    if (result.error) outputs.push({ output_type: "error", ename: result.error.split(":")[0], evalue: result.error, traceback: result.traceback });
+    const outputs = result.outputs.length > 0 ? result.outputs : [];
+    if (result.outputs.length === 0) {
+      if (result.stdout) outputs.push({ output_type: "stream", name: "stdout", text: result.stdout });
+      if (result.stderr) outputs.push({ output_type: "stream", name: "stderr", text: result.stderr });
+      if (result.result !== undefined) outputs.push({ output_type: "execute_result", execution_count: result.executionCount, data: { "text/plain": result.result }, metadata: {} });
+      if (result.error) outputs.push({ output_type: "error", ename: result.error.split(":")[0], evalue: result.error, traceback: result.traceback });
+    }
     next.cells[index].execution_count = result.executionCount;
     next.cells[index].outputs = outputs;
     setVariables(result.variables);
@@ -279,7 +281,7 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice }: { project
               {cell.cell_type === "code" ? (
                 <Editor height={`${Math.max(92, sourceText(cell.source).split("\n").length * 20 + 30)}px`} language="python" value={sourceText(cell.source)} onChange={(value) => updateSource(index, value ?? "")} theme="vs-dark" options={{ fontSize: 13, minimap: { enabled: false }, automaticLayout: true, lineNumbers: "on", scrollBeyondLastLine: false, folding: false }} />
               ) : <textarea className="markdown-cell" value={sourceText(cell.source)} onChange={(event) => updateSource(index, event.target.value)} placeholder="Markdown 说明…" />}
-              {cell.outputs.length > 0 && <div className="cell-output">{cell.outputs.map((output, outputIndex) => <pre className={output.output_type === "error" ? "error" : ""} key={outputIndex}>{outputText(output)}</pre>)}</div>}
+              {cell.outputs.length > 0 && <div className="cell-output">{cell.outputs.map((output, outputIndex) => <NotebookOutput output={output} key={outputIndex} />)}</div>}
             </div>
             <button className="cell-delete" type="button" aria-label={`删除单元格 ${index + 1}`} onClick={() => deleteCell(index)}><Trash2 size={13} /></button>
           </article>
@@ -309,5 +311,16 @@ function outputText(output: Record<string, unknown>): string {
   if (Array.isArray(output.traceback)) return output.traceback.join("");
   const data = output.data as Record<string, unknown> | undefined;
   const plainText = data?.["text/plain"];
-  return typeof plainText === "string" ? plainText : "";
+  if (typeof plainText === "string") return plainText;
+  const json = data?.["application/json"];
+  return json === undefined ? "" : JSON.stringify(json, null, 2);
+}
+
+function NotebookOutput({ output }: { output: Record<string, unknown> }) {
+  const data = output.data as Record<string, unknown> | undefined;
+  const image = data?.["image/png"];
+  if (typeof image === "string") return <img className="notebook-output-image" src={`data:image/png;base64,${image.replace(/\s/g, "")}`} alt="Notebook 输出" />;
+  const html = data?.["text/html"];
+  if (typeof html === "string") return <iframe className="notebook-output-html" title="Notebook HTML 输出" sandbox="" srcDoc={html} />;
+  return <pre className={output.output_type === "error" ? "error" : ""}>{outputText(output)}</pre>;
 }

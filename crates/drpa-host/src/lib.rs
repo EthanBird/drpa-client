@@ -139,6 +139,33 @@ impl HostState {
         Ok(summary)
     }
 
+    pub fn uninstall_package(&self, package_id: &str) -> Result<(), HostError> {
+        let package = {
+            let snapshot = self.snapshot.read();
+            snapshot
+                .packages
+                .iter()
+                .find(|item| item.id == package_id)
+                .cloned()
+                .ok_or_else(|| HostError::PackageNotFound(package_id.to_owned()))?
+        };
+        let package_root = self.workspace_root.join("packages").join(package_id);
+        if package_root.is_dir() {
+            fs::remove_dir_all(&package_root)?;
+        }
+
+        let mut snapshot = self.snapshot.write();
+        snapshot.packages.retain(|item| item.id != package_id);
+        snapshot.stats.packages = snapshot.packages.len() as u32;
+        self.push_log(
+            &mut snapshot,
+            LogLevel::Info,
+            "package",
+            format!("已卸载 {} v{}", package.name, package.version),
+        );
+        Ok(())
+    }
+
     pub fn prepare_run(
         &self,
         package_id: &str,
@@ -563,6 +590,14 @@ mod tests {
 
         let restored = HostState::new(workspace);
         assert_eq!(restored.snapshot().packages.len(), 1);
+        restored.uninstall_package("com.example.test").unwrap();
+        assert!(restored.snapshot().packages.is_empty());
+        assert!(
+            !restored
+                .workspace_root()
+                .join("packages/com.example.test")
+                .exists()
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

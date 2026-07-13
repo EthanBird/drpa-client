@@ -77,6 +77,8 @@ nav { margin-top: 14px; }
 .button.ghost:hover { background: var(--surface-2); color: var(--text-1); }
 .button.small { min-height: 28px; padding: 0 9px; font-size: 10px; }
 .button.danger-ghost { background: var(--danger-soft); color: var(--danger); }
+.button.danger { border-color: rgba(255,122,135,.22); background: var(--danger-soft); color: var(--danger); }
+.button.danger:hover { border-color: var(--danger); }
 .icon-button { display: inline-grid; place-items: center; width: var(--control-height); height: var(--control-height); padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); cursor: pointer; }
 .icon-button:hover { color: var(--text-1); border-color: color-mix(in srgb, var(--border) 60%, var(--text-3)); }
 .icon-button.subtle { width: 30px; height: 30px; border-color: transparent; background: transparent; }
@@ -108,6 +110,18 @@ nav { margin-top: 14px; }
 .command-palette footer span { display: flex; align-items: center; gap: 4px; }
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(.985); } }
+
+.drop-overlay { position: fixed; z-index: 300; inset: var(--titlebar-height) 0 0 var(--sidebar-width); display: grid; place-items: center; background: rgba(7,10,16,.76); backdrop-filter: blur(10px); pointer-events: none; }
+.drop-overlay > div { display: grid; gap: 8px; min-width: 360px; padding: 34px; border: 1px dashed var(--accent); border-radius: 16px; background: color-mix(in srgb, var(--surface-1) 90%, transparent); color: var(--text-3); text-align: center; box-shadow: var(--shadow-float); }
+.drop-overlay strong { color: var(--accent-strong); font-size: 18px; }
+.drop-overlay span { font-size: 10px; }
+.global-notice { position: fixed; z-index: 320; right: 18px; bottom: 18px; display: flex; align-items: center; gap: 16px; max-width: min(520px, calc(100vw - 36px)); padding: 11px 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); color: var(--text-2); box-shadow: var(--shadow-float); cursor: pointer; font-size: 10px; text-align: left; }
+.global-notice span { color: var(--text-3); font-size: 16px; }
+.context-menu { position: fixed; z-index: 250; display: grid; width: 200px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--surface-2) 96%, transparent); box-shadow: var(--shadow-float); backdrop-filter: blur(12px); }
+.context-menu button { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; font-size: 10px; text-align: left; }
+.context-menu button:hover { background: var(--surface-3); color: var(--text-1); }
+.context-menu button.danger { color: var(--danger); }
+.context-menu > span { height: 1px; margin: 4px; background: var(--border); }
 
 .loading-page { padding: 28px; }
 .skeleton { border-radius: 8px; background: linear-gradient(100deg, var(--surface-2) 30%, var(--surface-3) 50%, var(--surface-2) 70%); background-size: 300% 100%; animation: shimmer 1.4s infinite linear; }

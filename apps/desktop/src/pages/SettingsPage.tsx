@@ -1,4 +1,5 @@
-import { CheckCircle2, Clipboard, Database, Languages, MonitorCog, ShieldCheck, Wrench } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { CheckCircle2, Clipboard, Database, Download, Languages, MonitorCog, ShieldCheck, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useAppStore } from "../app/store";
@@ -8,8 +9,21 @@ export function SettingsPage() {
   const compactMode = useAppStore((state) => state.compactMode);
   const toggleCompactMode = useAppStore((state) => state.toggleCompactMode);
   const [dataDirectory, setDataDirectory] = useState("正在读取…");
+  const [updateNotice, setUpdateNotice] = useState("选择离线 `.drpa-update` 文件；校验通过后仅替换清单列出的应用文件。");
+  const [updating, setUpdating] = useState(false);
 
   useEffect(() => { void desktopGateway.getDataDirectory().then(setDataDirectory); }, []);
+
+  const applyUpdate = async () => {
+    setUpdating(true);
+    try {
+      const selected = await open({ multiple: false, filters: [{ name: "DRPA Windows 文件级更新", extensions: ["drpa-update"] }] });
+      if (!selected) return;
+      setUpdateNotice("正在校验文件清单与 SHA-256…");
+      setUpdateNotice(await desktopGateway.applyWindowsUpdate(selected));
+    } catch (error) { setUpdateNotice(`更新失败：${String(error)}`); }
+    finally { setUpdating(false); }
+  };
 
   return (
     <div className="page settings-page">
@@ -20,6 +34,10 @@ export function SettingsPage() {
         <section className="settings-card">
           <header><Languages size={18} /><div><h2>语言</h2><p>界面、日志摘要和内置模板使用的语言。</p></div></header>
           <div className="setting-row"><div><strong>显示语言</strong><span>简体中文（默认）</span></div><span className="status-badge success"><CheckCircle2 size={12} /> 已启用</span></div>
+        </section>
+        <section className="settings-card">
+          <header><Download size={18} /><div><h2>Windows 文件级热更新</h2><p>无需重新运行安装器，不覆盖 data，也不写注册表。</p></div></header>
+          <div className="setting-row"><div><strong>本地更新包</strong><span>{updateNotice}</span></div><button className="button secondary" type="button" onClick={applyUpdate} disabled={updating}><Download size={13} /> {updating ? "校验中…" : "安装更新"}</button></div>
         </section>
         <section className="settings-card">
           <header><MonitorCog size={18} /><div><h2>界面</h2><p>调整信息密度，不影响脚本运行。</p></div></header>

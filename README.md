@@ -45,7 +45,7 @@ npm run tauri:dev
 
 The `codex/drpa-next-platform` branch is the architectural reset. It now includes a Chinese-first desktop shell, real schema-v2 package installation, a local Monaco-based RPaz Studio, manifest-driven workbench parameters, and the Host-to-sealed-Python execution bridge.
 
-Offline machines use native sealed runtime bundles, not the source-tree wheel cache. See [`offline/README.md`](offline/README.md) for the four-platform support matrix, exact dependency policy, air-gap verification and GitHub release process.
+Offline machines use a native sealed runtime bundle, not the source-tree wheel cache. The current delivery is Windows x64 only. See [`offline/README.md`](offline/README.md) for the exact dependency policy, air-gap verification and GitHub release process.
 
 See [`docs/RPAZ_DEVELOPMENT.md`](docs/RPAZ_DEVELOPMENT.md) for the package schema, Runtime Context API, direct-run Studio workflow, notebook development and Bing daily-image example. The source-based Jupyter design and supported feature boundary are recorded in [`docs/JUPYTER_INTEGRATION.md`](docs/JUPYTER_INTEGRATION.md); enabled and intentionally unavailable UI actions are listed in [`docs/UI_INTERACTION_AUDIT.md`](docs/UI_INTERACTION_AUDIT.md).
 

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -10,6 +10,7 @@ use drpa_host::{HostState, RunLaunch};
 use drpa_package::{PackageManifest, safe_relative_path, validate_package_id};
 use drpa_protocol::{PackageSummary, RUNTIME_PROTOCOL_VERSION, RuntimeEvent, WorkspaceSnapshot};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{Manager, State};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
@@ -52,6 +53,7 @@ struct StudioKernelResponse {
     result: Option<String>,
     error: Option<String>,
     traceback: Vec<String>,
+    outputs: Vec<serde_json::Value>,
     variables: Vec<StudioVariable>,
     duration_ms: u64,
 }
@@ -73,6 +75,7 @@ struct StudioCellResult {
     result: Option<String>,
     error: Option<String>,
     traceback: Vec<String>,
+    outputs: Vec<serde_json::Value>,
     variables: Vec<StudioVariable>,
     duration_ms: u64,
 }
@@ -89,6 +92,13 @@ fn install_package(
 ) -> Result<PackageSummary, String> {
     state
         .install_package(Path::new(&archive_path))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn uninstall_package(package_id: String, state: State<'_, HostState>) -> Result<(), String> {
+    state
+        .uninstall_package(&package_id)
         .map_err(|error| error.to_string())
 }
 
@@ -392,6 +402,7 @@ fn execute_studio_cell(
             result: response.result,
             error: response.error,
             traceback: response.traceback,
+            outputs: response.outputs,
             variables: response.variables,
             duration_ms: response.duration_ms,
         })
@@ -481,6 +492,232 @@ struct RuntimeEnvironment {
     python: PathBuf,
     python_path: Option<PathBuf>,
     browser: Option<PathBuf>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfflineRuntimeManifest {
+    bundle_version: String,
+    platform: String,
+    python_version: String,
+    python_executable: String,
+    browser_executable: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeStatus {
+    state: &'static str,
+    bundle_version: String,
+    python_version: String,
+    runtime_root: String,
+    environment_root: String,
+    browser_executable: String,
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowsUpdateManifest {
+    schema: u32,
+    version: String,
+    target: String,
+    files: Vec<WindowsUpdateFile>,
+}
+
+#[derive(Deserialize)]
+struct WindowsUpdateFile {
+    path: String,
+    bytes: u64,
+    sha256: String,
+}
+
+#[tauri::command]
+fn apply_windows_update(
+    package_path: String,
+    app: tauri::AppHandle,
+    paths: State<'_, AppPaths>,
+) -> Result<String, String> {
+    if !cfg!(windows) {
+        return Err("文件级热更新当前只对 Windows 开放".to_owned());
+    }
+    let package = Path::new(&package_path);
+    let file = File::open(package).map_err(|error| format!("无法打开更新包：{error}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| format!("更新包无效：{error}"))?;
+    let manifest_source = {
+        let mut entry = archive
+            .by_name("update-manifest.json")
+            .map_err(|_| "更新包缺少 update-manifest.json".to_owned())?;
+        let mut source = String::new();
+        entry
+            .read_to_string(&mut source)
+            .map_err(|error| format!("无法读取更新清单：{error}"))?;
+        source
+    };
+    let manifest: WindowsUpdateManifest = serde_json::from_str(&manifest_source)
+        .map_err(|error| format!("更新清单无效：{error}"))?;
+    if manifest.schema != 1 || manifest.target != "windows-x86_64" {
+        return Err("更新包格式或目标平台不匹配".to_owned());
+    }
+    if !is_safe_update_version(&manifest.version) {
+        return Err("更新包版本标识无效".to_owned());
+    }
+    if manifest.files.is_empty() || manifest.files.len() > 50_000 {
+        return Err("更新包文件数量异常".to_owned());
+    }
+
+    let stage = paths
+        .workspace_root
+        .join("updates/staged")
+        .join(format!("{}-{}", manifest.version, Uuid::new_v4().simple()));
+    fs::create_dir_all(stage.join("files"))
+        .map_err(|error| format!("无法创建更新暂存目录：{error}"))?;
+    let extraction = (|| {
+        let mut total = 0_u64;
+        let mut paths = HashSet::new();
+        for item in &manifest.files {
+            let relative = safe_relative_path(&item.path)
+                .map_err(|error| format!("更新清单包含不安全路径：{error}"))?;
+            let normalized = relative.to_string_lossy().replace('\\', "/");
+            if !paths.insert(normalized.clone()) {
+                return Err(format!("更新清单包含重复路径：{normalized}"));
+            }
+            if item.sha256.len() != 64
+                || !item
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(format!("更新文件 SHA-256 格式无效：{normalized}"));
+            }
+            if normalized.starts_with("data/")
+                || normalized.eq_ignore_ascii_case("drpa-updater.exe")
+            {
+                return Err(format!("更新包不得覆盖受保护路径：{normalized}"));
+            }
+            total = total
+                .checked_add(item.bytes)
+                .ok_or_else(|| "更新包体积溢出".to_owned())?;
+            if total > 2 * 1024 * 1024 * 1024 {
+                return Err("更新包解压后超过 2 GiB 限制".to_owned());
+            }
+            let archive_name = format!("files/{normalized}");
+            let mut entry = archive
+                .by_name(&archive_name)
+                .map_err(|_| format!("更新包缺少文件：{normalized}"))?;
+            if entry.is_dir() || entry.size() != item.bytes {
+                return Err(format!("更新文件大小不匹配：{normalized}"));
+            }
+            if entry.compressed_size() > 0 && entry.size() / entry.compressed_size().max(1) > 200 {
+                return Err(format!("更新文件压缩率异常：{normalized}"));
+            }
+            let target = stage.join("files").join(&relative);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            let mut output = File::create(&target).map_err(|error| error.to_string())?;
+            let mut digest = Sha256::new();
+            let mut buffer = [0_u8; 1024 * 1024];
+            loop {
+                let read = entry.read(&mut buffer).map_err(|error| error.to_string())?;
+                if read == 0 {
+                    break;
+                }
+                digest.update(&buffer[..read]);
+                output
+                    .write_all(&buffer[..read])
+                    .map_err(|error| error.to_string())?;
+            }
+            let actual = format!("{:x}", digest.finalize());
+            if !actual.eq_ignore_ascii_case(&item.sha256) {
+                return Err(format!("更新文件 SHA-256 不匹配：{normalized}"));
+            }
+        }
+        fs::write(stage.join("update-manifest.json"), &manifest_source)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })();
+    if let Err(error) = extraction {
+        let _ = fs::remove_dir_all(&stage);
+        return Err(error);
+    }
+
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let install = executable
+        .parent()
+        .ok_or_else(|| "无法定位安装目录".to_owned())?;
+    let updater = install.join("drpa-updater.exe");
+    if !updater.is_file() {
+        return Err(
+            "安装目录缺少 drpa-updater.exe，当前版本不能执行热更新".to_owned(),
+        );
+    }
+    let launch = executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "无法读取主程序文件名".to_owned())?;
+    let mut command = Command::new(updater);
+    command
+        .arg("--stage")
+        .arg(&stage)
+        .arg("--install")
+        .arg(install)
+        .arg("--launch")
+        .arg(launch)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    hide_child_window(&mut command);
+    command
+        .spawn()
+        .map_err(|error| format!("无法启动无界面更新器：{error}"))?;
+    let version = manifest.version;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        app.exit(0);
+    });
+    Ok(format!("更新 {version} 已验证，应用即将重启"))
+}
+
+fn is_safe_update_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= 80
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
+#[tauri::command]
+fn get_runtime_status(paths: State<'_, AppPaths>) -> Result<RuntimeStatus, String> {
+    inspect_runtime_status(&paths)
+}
+
+#[tauri::command]
+fn initialize_runtime(paths: State<'_, AppPaths>) -> Result<RuntimeStatus, String> {
+    let runtime = locate_runtime(&paths)?;
+    verify_runtime_imports(&runtime)?;
+    inspect_runtime_status(&paths)
+}
+
+#[tauri::command]
+fn repair_runtime(
+    paths: State<'_, AppPaths>,
+    kernels: State<'_, StudioKernelManager>,
+) -> Result<RuntimeStatus, String> {
+    kernels
+        .sessions
+        .lock()
+        .map_err(|_| "无法停止 Studio Kernel".to_owned())?
+        .clear();
+    let generated = paths.workspace_root.join("runtime-environment");
+    if generated.is_dir() {
+        fs::remove_dir_all(&generated)
+            .map_err(|error| format!("无法清理损坏的运行环境：{error}"))?;
+    }
+    let runtime = locate_runtime(&paths)?;
+    verify_runtime_imports(&runtime)?;
+    inspect_runtime_status(&paths)
 }
 
 fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKernel, String> {
@@ -609,35 +846,20 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
         });
     }
 
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let mut roots = Vec::new();
-    if let Some(root) = std::env::var_os("DRPA_RUNTIME_ROOT") {
-        roots.push(PathBuf::from(root));
-    }
-    if let Some(parent) = executable.parent() {
-        roots.push(parent.join("runtime"));
-        #[cfg(target_os = "macos")]
-        if let Some(contents) = parent.parent() {
-            roots.push(contents.join("Resources/runtime"));
-        }
-    }
-    #[cfg(target_os = "linux")]
-    if let Some(app_image) = std::env::var_os("APPIMAGE")
-        && let Some(parent) = Path::new(&app_image).parent()
-    {
-        roots.push(parent.join("runtime"));
-    }
-
-    for root in roots {
+    for root in runtime_roots()? {
         if !root.is_dir() {
             continue;
         }
         let environment = paths.workspace_root.join("runtime-environment");
         let python = prepare_sealed_runtime(&root, &environment)?;
+        let manifest = read_offline_runtime_manifest(&root)?;
         return Ok(RuntimeEnvironment {
             python,
             python_path: None,
-            browser: find_named_file(&root.join("browser"), &browser_names()),
+            browser: Some(resolve_runtime_manifest_path(
+                &root,
+                &manifest.browser_executable,
+            )?),
         });
     }
 
@@ -659,21 +881,97 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
     ))
 }
 
-fn prepare_sealed_runtime(root: &Path, environment: &Path) -> Result<PathBuf, String> {
-    let environment_python = environment.join(if cfg!(windows) {
-        "environment/Scripts/python.exe"
+fn runtime_roots() -> Result<Vec<PathBuf>, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let mut roots = Vec::new();
+    if let Some(root) = std::env::var_os("DRPA_RUNTIME_ROOT") {
+        roots.push(PathBuf::from(root));
+    }
+    if let Some(parent) = executable.parent() {
+        roots.push(parent.join("runtime"));
+        #[cfg(target_os = "macos")]
+        if let Some(contents) = parent.parent() {
+            roots.push(contents.join("Resources/runtime"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(app_image) = std::env::var_os("APPIMAGE")
+        && let Some(parent) = Path::new(&app_image).parent()
+    {
+        roots.push(parent.join("runtime"));
+    }
+    Ok(roots)
+}
+
+fn inspect_runtime_status(paths: &AppPaths) -> Result<RuntimeStatus, String> {
+    let root = runtime_roots()?
+        .into_iter()
+        .find(|candidate| candidate.is_dir())
+        .ok_or_else(|| "未找到随安装包提供的 Windows 运行时".to_owned())?;
+    let manifest = read_offline_runtime_manifest(&root)?;
+    let browser = resolve_runtime_manifest_path(&root, &manifest.browser_executable)?;
+    let environment_root = paths.workspace_root.join("runtime-environment/environment");
+    let python = environment_python_path(&environment_root);
+    let marker = environment_root.join(".drpa-runtime.json");
+    let pyvenv = environment_root.join("pyvenv.cfg");
+    let (state, message) = if python.is_file() && marker.is_file() && pyvenv.is_file() {
+        ("ready", "Python、Jupyter Kernel 与浏览器自动化依赖已就绪")
+    } else if environment_root.exists() {
+        (
+            "broken",
+            "运行环境不完整；请执行修复，应用只会重建 data 内的生成文件",
+        )
     } else {
-        "environment/bin/python"
-    });
-    let bundled = find_named_file(
-        &root.join("python"),
-        if cfg!(windows) {
-            &["python.exe"]
-        } else {
-            &["python3.11", "python3"]
-        },
-    )
-    .ok_or_else(|| "封装运行时缺少 CPython 可执行文件".to_owned())?;
+        ("notInitialized", "运行环境尚未初始化；首次初始化完全离线完成")
+    };
+    Ok(RuntimeStatus {
+        state,
+        bundle_version: manifest.bundle_version,
+        python_version: manifest.python_version,
+        runtime_root: root.display().to_string(),
+        environment_root: environment_root.display().to_string(),
+        browser_executable: browser.display().to_string(),
+        message: message.to_owned(),
+    })
+}
+
+fn environment_python_path(environment: &Path) -> PathBuf {
+    environment.join(if cfg!(windows) {
+        "Scripts/python.exe"
+    } else {
+        "bin/python"
+    })
+}
+
+fn verify_runtime_imports(runtime: &RuntimeEnvironment) -> Result<(), String> {
+    let mut command = Command::new(&runtime.python);
+    command
+        .args([
+            "-I",
+            "-c",
+            "import drpa_runner, DrissionPage, ipykernel, jupyter_client; print('DRPA_RUNTIME_OK')",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_child_window(&mut command);
+    let output = command
+        .output()
+        .map_err(|error| format!("无法验证运行环境：{error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "运行环境依赖验证失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+fn prepare_sealed_runtime(root: &Path, environment: &Path) -> Result<PathBuf, String> {
+    let environment_python = environment_python_path(&environment.join("environment"));
+    let manifest = read_offline_runtime_manifest(root)?;
+    let bundled = resolve_runtime_manifest_path(root, &manifest.python_executable)?;
     let bootstrap = root.join("bootstrap_runtime.py");
     if !bootstrap.is_file() {
         return Err("封装运行时缺少 bootstrap_runtime.py".to_owned());
@@ -704,34 +1002,43 @@ fn prepare_sealed_runtime(root: &Path, environment: &Path) -> Result<PathBuf, St
     }
 }
 
-fn browser_names() -> Vec<&'static str> {
-    if cfg!(windows) {
-        vec!["chrome.exe"]
+fn read_offline_runtime_manifest(root: &Path) -> Result<OfflineRuntimeManifest, String> {
+    let path = root.join("manifest.json");
+    let source = fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "无法读取封装运行时清单 {}：{error}",
+            path.display()
+        )
+    })?;
+    let manifest: OfflineRuntimeManifest = serde_json::from_str(&source)
+        .map_err(|error| format!("封装运行时清单无效：{error}"))?;
+    let expected_platform = if cfg!(windows) {
+        "windows-x86_64"
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        "macos-arm64"
     } else if cfg!(target_os = "macos") {
-        vec!["Google Chrome for Testing"]
+        "macos-x86_64"
     } else {
-        vec!["chrome"]
+        "linux-x86_64"
+    };
+    if manifest.platform != expected_platform {
+        return Err(format!(
+            "运行时平台不匹配：需要 {expected_platform}，实际为 {}",
+            manifest.platform
+        ));
     }
+    Ok(manifest)
 }
 
-fn find_named_file(root: &Path, names: &[&str]) -> Option<PathBuf> {
-    let entries = fs::read_dir(root).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if let Some(found) = find_named_file(&path, names) {
-                return Some(found);
-            }
-        } else if path.is_file()
-            && path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| names.contains(&name))
-        {
-            return Some(path);
-        }
+fn resolve_runtime_manifest_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let relative = safe_relative_path(relative)
+        .map_err(|error| format!("运行时清单包含不安全路径：{error}"))?;
+    let path = root.join(relative);
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!("封装运行时缺少文件：{}", path.display()))
     }
-    None
 }
 
 #[cfg(windows)]
@@ -797,6 +1104,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_workspace_snapshot,
             install_package,
+            uninstall_package,
             start_run,
             cancel_run,
             list_studio_projects,
@@ -808,8 +1116,46 @@ pub fn run() {
             run_studio_project,
             execute_studio_cell,
             restart_studio_kernel,
+            get_runtime_status,
+            initialize_runtime,
+            repair_runtime,
+            apply_windows_update,
             get_data_directory
         ])
         .run(context)
         .expect("failed to run DRPA Next desktop host");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_manifest_selects_the_base_python_not_the_venv_template() {
+        let root = std::env::temp_dir().join(format!("drpa-runtime-test-{}", Uuid::new_v4()));
+        let base = root.join("python/cpython-3.11.9-windows-x86_64-none/python.exe");
+        let template = root.join(
+            "python/cpython-3.11.9-windows-x86_64-none/Lib/venv/scripts/nt/python.exe",
+        );
+        fs::create_dir_all(base.parent().unwrap()).unwrap();
+        fs::create_dir_all(template.parent().unwrap()).unwrap();
+        fs::write(&base, b"base").unwrap();
+        fs::write(&template, b"venv launcher requiring pyvenv.cfg").unwrap();
+
+        let resolved = resolve_runtime_manifest_path(
+            &root,
+            "python/cpython-3.11.9-windows-x86_64-none/python.exe",
+        )
+        .unwrap();
+        assert_eq!(resolved, base);
+        assert_ne!(resolved, template);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_manifest_rejects_parent_traversal() {
+        let root = std::env::temp_dir().join(format!("drpa-runtime-test-{}", Uuid::new_v4()));
+        let error = resolve_runtime_manifest_path(&root, "../python.exe").unwrap_err();
+        assert!(error.contains("不安全路径"));
+    }
 }

@@ -2,14 +2,13 @@
 
 An offline runtime is a platform-specific, immutable release asset. It is not a source checkout, pip cache, or shared virtual environment.
 
-## Supported matrix
+## Current release target
 
 | Bundle | Native GitHub runner | Contents |
 | --- | --- | --- |
 | `windows-x86_64` | `windows-latest` | CPython, uv, wheels, DRPA adapter, Chrome for Testing |
-| `linux-x86_64` | `ubuntu-22.04` | CPython, uv, wheels, DRPA adapter, Chrome for Testing |
-| `macos-arm64` | `macos-15` | CPython, uv, wheels, DRPA adapter, Chrome for Testing |
-| `macos-x86_64` | `macos-15-intel` | CPython, uv, wheels, DRPA adapter, Chrome for Testing |
+
+The runtime specification retains the other platform definitions for future work, but current Actions and releases intentionally build only `windows-x86_64`.
 
 Every version is declared in `runtime-spec.json`. Python dependencies are exact-pinned in `requirements/runtime.txt`; direct URLs, VCS dependencies, editable installs and index overrides fail validation.
 
@@ -42,8 +41,9 @@ The native runner performs the following before upload:
 6. Install with `--offline --no-index --find-links`.
 7. Run `uv pip check`.
 8. Launch bundled Chrome through DrissionPage against a local HTML file.
-9. Import the runtime, browser, data and Excel modules.
-10. Generate checksums, archive, upload as a GitHub Actions artifact, then publish all four archives to a prerelease.
+9. Import the runtime, browser, data, Excel, ipykernel and Jupyter client modules.
+10. Execute two cells through the real Jupyter/ZMQ protocol and verify persistent state/output.
+11. Generate checksums, archive, upload as a GitHub Actions artifact, then publish the Windows archive to a prerelease.
 
 Any missing wheel, wrong ABI, missing executable, broken browser or invalid pin fails the job before upload.
 

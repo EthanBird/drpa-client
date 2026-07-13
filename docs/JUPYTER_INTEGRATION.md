@@ -9,7 +9,7 @@ DRPA Next 没有把 `microsoft/vscode-jupyter` 扩展包直接塞进 Tauri。该
 | `src/kernels/kernelProvider.base.ts`：以 notebook/id 管理 Kernel 生命周期和状态 | Rust `StudioKernelManager` 以项目 ID 管理一个持久的 sealed-Python 子进程 |
 | `src/kernels/kernelExecution.ts`：执行队列、执行计数和输出 | JSONL 单请求串行协议、递增 `execution_count`、stdout/stderr/result/error |
 | `src/notebooks/controllers/vscodeNotebookController.ts`：连接 VS Code Notebook UI | React + Monaco 的本地 Notebook 工作区，读写标准 nbformat v4 `.ipynb` |
-| `src/kernels/raw/session/rawJupyterSession.node.ts`：基于 ZMQ 的原生 Jupyter 会话 | 适合离线单机包开发的轻量进程协议，不引入 ZMQ 和 Jupyter Server |
+| `src/kernels/raw/session/rawJupyterSession.node.ts`：基于 ZMQ 的原生 Jupyter 会话 | 内置 `ipykernel`、`jupyter_client` 与 `pyzmq`，由 Python bridge 管理真实 Jupyter shell/iopub/control 通道；Rust Host 只承载进程生命周期与 JSONL IPC |
 
 参考源码：
 
@@ -24,9 +24,10 @@ DRPA Next 没有把 `microsoft/vscode-jupyter` 扩展包直接塞进 Tauri。该
 - 代码与 Markdown 单元格增删、Monaco 编辑、单格运行、全部运行。
 - 项目级持久命名空间、执行计数、最后表达式结果、stdout/stderr、错误回溯。
 - Kernel 重启与变量浏览。
+- 真实 IPython Kernel、Jupyter 消息协议与 ZMQ；支持标准 stream、execute_result、display_data、error 输出结构。
 - 执行结果回写 `.ipynb`，可在标准 Jupyter/VS Code 中继续打开。
 - 所有代码都由随安装包封装的 sealed Python 运行，不访问系统 Python 或网络。
 
 ## 明确边界
 
-这不是完整 VS Code Extension Host，也不是完整 Jupyter wire protocol。目前不宣称支持 ipywidgets、富 MIME 渲染、远程 Kernel、ZMQ、调试器或中断长时间运行的单元格。后续增加这些能力时应继续复用 nbformat/Jupyter 协议，不复制 VS Code 专属 UI 层。
+这不是完整 VS Code Extension Host：VS Code 专属命令、扩展市场、`NotebookController` UI 和调试器无法在 Tauri 中原样运行。当前已使用真实 Jupyter wire protocol，但尚不宣称兼容 ipywidgets、远程 Kernel、VS Code Debug Adapter 或全部第三方 MIME Renderer。后续能力继续通过 Jupyter 标准协议扩展，不复制 VS Code 专属平台层。

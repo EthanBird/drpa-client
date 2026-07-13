@@ -27,12 +27,6 @@ jobs:
         include:
           - platform: windows-x86_64
             runner: windows-latest
-          - platform: linux-x86_64
-            runner: ubuntu-22.04
-          - platform: macos-arm64
-            runner: macos-15
-          - platform: macos-x86_64
-            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -70,10 +64,10 @@ jobs:
         run: |
           tag="offline-runtime-v0.2.0-dev-${GITHUB_RUN_NUMBER}"
           mapfile -t assets < <(find artifacts -type f | sort)
-          test "${#assets[@]}" -eq 8
+          test "${#assets[@]}" -eq 2
           gh release create "$tag" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "DRPA sealed offline runtimes · run ${GITHUB_RUN_NUMBER}" \
-            --notes "Four native, air-gap-tested Python 3.11.9 runtime bundles. Each archive has a matching SHA-256 file and an internal per-file manifest."
+            --notes "Windows x64 air-gap-tested Python 3.11.9 runtime bundle with Jupyter Kernel dependencies, SHA-256 checksum and an internal per-file manifest."

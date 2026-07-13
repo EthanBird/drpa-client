@@ -1,5 +1,6 @@
 [package]
 name = "drpa-desktop"
+default-run = "drpa-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,6 +19,7 @@ drpa-package = { path = "../../../crates/drpa-package" }
 drpa-protocol = { path = "../../../crates/drpa-protocol" }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 uuid.workspace = true
