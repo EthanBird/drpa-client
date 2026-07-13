@@ -4,7 +4,7 @@
 
 ## 启动
 
-- Windows：解压完整 ZIP 后运行 `DRPA Next.exe`。这是便携版，不使用 NSIS/MSI，不写入注册表；内置的 Fixed Version WebView2 也通过进程环境变量加载。首次启动会为 WebView2 文件夹设置只读/执行 ACL，并在用户数据目录离线创建 Python 环境。
+- Windows：运行 Setup EXE，通过图形向导选择非系统盘目录。安装器不申请管理员权限、不注册卸载项、不读写应用注册表，只释放文件并创建 `.lnk` 快捷方式；内置 Fixed Version WebView2 通过进程环境变量加载。项目、脚本包、运行历史和 Python 环境均保存在安装目录下的 `data`。
 - Linux：解压完整归档，保持 `DRPA Next.AppImage` 与 `runtime` 同级，然后运行 `./DRPA Next.AppImage`。
 - macOS：打开 DMG，将 `DRPA Next.app` 拖到任意可写目录后启动。当前预览版未使用 Apple Developer ID 公证，首次启动可能需要在 Finder 中右键选择“打开”。
 

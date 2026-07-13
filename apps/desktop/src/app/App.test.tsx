@@ -42,4 +42,17 @@ describe("DRPA Next desktop shell", () => {
     expect(await screen.findByRole("heading", { name: "脚本包" })).toBeVisible();
     expect(screen.getByText("发票中心")).toBeVisible();
   });
+
+  it("creates a Studio project from a display name without asking for an id", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开发工作室" }));
+
+    expect(await screen.findByRole("heading", { name: "开发工作室" })).toBeVisible();
+    expect(screen.queryByLabelText(/项目 ID/i)).not.toBeInTheDocument();
+    const name = screen.getByLabelText("项目名称");
+    fireEvent.change(name, { target: { value: "每日图片" } });
+    fireEvent.click(screen.getByRole("button", { name: "新建项目" }));
+
+    expect(await screen.findByText(/内部 ID 已自动生成/)).toBeVisible();
+  });
 });

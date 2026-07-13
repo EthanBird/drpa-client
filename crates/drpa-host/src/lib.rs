@@ -211,6 +211,57 @@ impl HostState {
         })
     }
 
+    pub fn prepare_development_run(
+        &self,
+        package_dir: &Path,
+        manifest: &PackageManifest,
+        parameters: &serde_json::Value,
+    ) -> Result<RunLaunch, HostError> {
+        let (entrypoint, callable) = match &manifest.entrypoint {
+            Entrypoint::Python { module, callable } => (module.clone(), callable.clone()),
+            Entrypoint::Command { .. } => return Err(HostError::UnsupportedEntrypoint),
+        };
+        let run_id = format!("run-{}", Uuid::new_v4().simple());
+        let output_dir = self
+            .workspace_root
+            .join("runs")
+            .join(&run_id)
+            .join("outputs");
+        let mut snapshot = self.snapshot.write();
+        snapshot.runs.insert(
+            0,
+            RunSummary {
+                id: run_id.clone(),
+                package_name: manifest.name.clone(),
+                profile_name: "Studio 直接运行".to_owned(),
+                status: RunStatus::Running,
+                started_at: "刚刚".to_owned(),
+                duration: "—".to_owned(),
+                progress: None,
+            },
+        );
+        snapshot.stats.active_runs += 1;
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
+        snapshot.logs.push(LogEntry {
+            id: sequence,
+            time: "现在".to_owned(),
+            level: LogLevel::Info,
+            scope: "studio".to_owned(),
+            message: format!(
+                "开发态运行 {run_id} 已启动 · {} 个参数",
+                parameters.as_object().map_or(0, |map| map.len())
+            ),
+        });
+        Ok(RunLaunch {
+            run_id,
+            package_id: manifest.id.clone(),
+            package_dir: package_dir.to_owned(),
+            output_dir,
+            entrypoint,
+            callable,
+        })
+    }
+
     pub fn record_runtime_event(&self, run_id: &str, event: RuntimeEvent) {
         let mut snapshot = self.snapshot.write();
         match event {

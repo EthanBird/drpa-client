@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 import type { NavigationId, WorkspaceSnapshot } from "../domain/models";
 
@@ -19,7 +20,7 @@ interface AppStore {
   setSnapshot: (snapshot: WorkspaceSnapshot) => void;
 }
 
-export const useAppStore = create<AppStore>((set) => ({
+export const useAppStore = create<AppStore>()(persist((set) => ({
   activeNavigation: "overview",
   commandOpen: false,
   compactMode: false,
@@ -38,4 +39,7 @@ export const useAppStore = create<AppStore>((set) => ({
     })),
   selectProfile: (selectedProfileId) => set({ selectedProfileId }),
   setSnapshot: (snapshot) => set({ snapshot }),
+}), {
+  name: "drpa-ui-preferences",
+  partialize: (state) => ({ compactMode: state.compactMode }),
 }));

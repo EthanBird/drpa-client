@@ -22,8 +22,10 @@ fn prepare_portable_webview2() {
         return;
     }
 
-    // This runs before Tauri or any worker thread starts. The process-scoped
-    // variable selects the bundled Fixed Version runtime without registry IO.
+    // This runs before Tauri or any worker thread starts. Process-scoped
+    // configuration selects the bundled runtime without registry lookup.
+    // The WebView user-data folder is set through Tauri's supported
+    // WebviewWindowBuilder API in lib.rs.
     unsafe {
         std::env::set_var("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", &runtime);
     }

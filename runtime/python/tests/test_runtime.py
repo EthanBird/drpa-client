@@ -8,6 +8,7 @@ import pytest
 
 from drpa_runner.events import EventWriter
 from drpa_runner.executor import ExecutionRequest, execute_request
+from drpa_runner.kernel import StudioKernel
 from drpa_runner.paths import PathPolicyError, resolve_child
 
 
@@ -67,3 +68,14 @@ def test_execute_request_rejects_entrypoint_escape(tmp_path: Path) -> None:
 
     with pytest.raises(PathPolicyError):
         execute_request(request, EventWriter(stream=io.StringIO()))
+
+
+def test_studio_kernel_preserves_state_and_reports_variables() -> None:
+    kernel = StudioKernel()
+    first = kernel.execute("one", "value = 40\nprint('ready')")
+    second = kernel.execute("two", "value + 2")
+
+    assert first["stdout"] == "ready\n"
+    assert second["result"] == "42"
+    assert second["execution_count"] == 2
+    assert any(variable["name"] == "value" for variable in second["variables"])

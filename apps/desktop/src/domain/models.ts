@@ -37,6 +37,23 @@ export interface StudioProject {
   files: string[];
 }
 
+export interface StudioVariable {
+  name: string;
+  typeName: string;
+  preview: string;
+}
+
+export interface StudioCellResult {
+  executionCount: number;
+  stdout: string;
+  stderr: string;
+  result?: string;
+  error?: string;
+  traceback: string[];
+  variables: StudioVariable[];
+  durationMs: number;
+}
+
 export interface TaskProfile {
   id: string;
   name: string;

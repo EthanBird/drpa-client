@@ -11,6 +11,7 @@ import {
   Library,
   ListTodo,
   Maximize2,
+  Minimize2,
   Minus,
   PanelLeftClose,
   Play,
@@ -21,7 +22,7 @@ import {
   Zap,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { PropsWithChildren } from "react";
+import { useEffect, useState, type MouseEvent, type PropsWithChildren } from "react";
 
 import type { NavigationId } from "../domain/models";
 import { useAppStore } from "../app/store";
@@ -56,19 +57,35 @@ export function AppShell({ children }: PropsWithChildren) {
   const compactMode = useAppStore((state) => state.compactMode);
   const toggleCompactMode = useAppStore((state) => state.toggleCompactMode);
   const inDesktopHost = "__TAURI_INTERNALS__" in window;
+  const [maximized, setMaximized] = useState(false);
 
-  const controlWindow = (action: "minimize" | "maximize" | "close") => {
+  useEffect(() => {
+    if (!inDesktopHost) return;
+    void getCurrentWindow().isMaximized().then(setMaximized).catch(() => setMaximized(false));
+  }, [inDesktopHost]);
+
+  const controlWindow = async (action: "minimize" | "maximize" | "close") => {
     if (!inDesktopHost) return;
     const appWindow = getCurrentWindow();
-    if (action === "minimize") void appWindow.minimize();
-    if (action === "maximize") void appWindow.toggleMaximize();
-    if (action === "close") void appWindow.close();
+    if (action === "minimize") await appWindow.minimize();
+    if (action === "maximize") {
+      await appWindow.toggleMaximize();
+      setMaximized(await appWindow.isMaximized());
+    }
+    if (action === "close") await appWindow.close();
+  };
+
+  const startWindowDrag = (event: MouseEvent<HTMLElement>) => {
+    if (!inDesktopHost || event.button !== 0 || event.detail !== 1) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, select, textarea, summary, a")) return;
+    void getCurrentWindow().startDragging();
   };
 
   return (
     <div className="shell">
-      <header className="titlebar" data-tauri-drag-region>
-        <div className="brand-lockup">
+      <header className="titlebar" data-tauri-drag-region onMouseDown={startWindowDrag} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, select, textarea, summary, a")) void controlWindow("maximize"); }}>
+        <div className="brand-lockup" data-tauri-drag-region>
           <div className="brand-mark" aria-hidden="true">
             <Bot size={17} strokeWidth={2.1} />
           </div>
@@ -80,15 +97,15 @@ export function AppShell({ children }: PropsWithChildren) {
           个人工作区
           <ChevronDown size={14} />
         </button>
-        <div className="titlebar-spacer" />
+        <div className="titlebar-spacer" data-tauri-drag-region />
         <button className="sync-state" type="button" aria-label="Host 状态" onClick={() => setActiveNavigation("runtimes")}>
           <span className="pulse-dot" />
           Host 已连接
         </button>
         <div className="window-controls" aria-label="窗口控制">
-          <button type="button" aria-label="最小化" onClick={() => controlWindow("minimize")}><Minus size={14} /></button>
-          <button type="button" aria-label="最大化" onClick={() => controlWindow("maximize")}><Maximize2 size={13} /></button>
-          <button type="button" aria-label="关闭" onClick={() => controlWindow("close")}><X size={14} /></button>
+          <button type="button" aria-label="最小化" onClick={() => void controlWindow("minimize")}><Minus size={14} /></button>
+          <button type="button" aria-label={maximized ? "还原窗口" : "最大化"} onClick={() => void controlWindow("maximize")}>{maximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}</button>
+          <button type="button" aria-label="关闭" onClick={() => void controlWindow("close")}><X size={14} /></button>
         </div>
       </header>
 

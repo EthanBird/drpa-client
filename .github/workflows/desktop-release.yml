@@ -11,6 +11,7 @@ on:
       - "crates/**"
       - "docs/PORTABLE_RELEASE.md"
       - "examples/bing_daily_image.rpaz"
+      - "installer/**"
       - "offline/**"
       - "runtime/python/**"
       - "tools/offline/**"
@@ -93,7 +94,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: "-"
         run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --bundles app
 
-      - name: Assemble Windows portable ZIP
+      - name: Assemble registry-free Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -123,10 +124,16 @@ jobs:
           if (-not $browser) { throw "Fixed WebView2 executable is missing" }
           Get-ChildItem $browser.Directory.FullName -Force | Copy-Item -Destination "$portable/webview2" -Recurse -Force
 
-          $archive = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-portable.zip"
-          Compress-Archive -Path $portable -DestinationPath $archive -CompressionLevel Optimal
-          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-          "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii "$archive.sha256"
+          choco install nsis --version=3.12.0 --no-progress --yes
+          $makensis = "C:/Program Files (x86)/NSIS/makensis.exe"
+          if (-not (Test-Path $makensis)) { throw "Pinned NSIS compiler is missing" }
+          $installer = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-setup.exe"
+          & $makensis "/DPAYLOAD_DIR=$portable" "/DOUTPUT_FILE=$installer" "/DICON_FILE=$env:GITHUB_WORKSPACE/apps/desktop/src-tauri/icons/icon.ico" "installer/windows/drpa-next.nsi"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to compile registry-free Windows installer" }
+          $registryCalls = Select-String -Path "installer/windows/drpa-next.nsi" -Pattern "WriteReg|DeleteReg|ReadReg|InstallDirRegKey" -CaseSensitive:$false
+          if ($registryCalls) { throw "Installer contains a forbidden registry instruction" }
+          $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($installer))" | Set-Content -Encoding ascii "$installer.sha256"
 
       - name: Assemble Linux portable archive
         if: runner.os == 'Linux'
@@ -209,7 +216,7 @@ jobs:
           set -euo pipefail
           tag="desktop-v0.2.0-preview-${GITHUB_RUN_NUMBER}"
           mapfile -t assets < <(find artifacts -type f | sort)
-          notes=$'Chinese-first DRPA Next offline preview.\n\nIncludes Windows x64 portable ZIP, Linux x64 AppImage archive, macOS Apple Silicon DMG, macOS Intel DMG, sealed Python 3.11 runtimes and the Bing daily image RPAZ example. Windows uses a pinned Fixed Version WebView2 and does not use NSIS/MSI or registry installation.\n\nThis preview is unsigned/not notarized. Verify the matching SHA-256 file before moving a package to an offline machine.'
+          notes=$'Chinese-first DRPA Next offline preview.\n\nIncludes a registry-free Windows x64 guided installer, Linux x64 AppImage archive, macOS Apple Silicon DMG, macOS Intel DMG, sealed Python 3.11 runtimes and the Bing daily image RPAZ example. Windows uses a pinned Fixed Version WebView2; the custom installer contains no registry operations and stores workspace data beside the application.\n\nThis preview is unsigned/not notarized. Verify the matching SHA-256 file before moving a package to an offline machine.'
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
             gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "DRPA Next 0.2.0 离线预览 · ${GITHUB_RUN_NUMBER}" --notes "$notes" --prerelease

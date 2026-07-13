@@ -21,6 +21,10 @@
         "height": 900,
         "minWidth": 1024,
         "minHeight": 640,
+        "resizable": true,
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true,
         "decorations": false,
         "transparent": false,
         "center": true

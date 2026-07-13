@@ -1,10 +1,15 @@
-import { CheckCircle2, Database, Languages, MonitorCog, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Clipboard, Database, Languages, MonitorCog, ShieldCheck, Wrench } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { useAppStore } from "../app/store";
+import { desktopGateway } from "../infra/gateway";
 
 export function SettingsPage() {
   const compactMode = useAppStore((state) => state.compactMode);
   const toggleCompactMode = useAppStore((state) => state.toggleCompactMode);
+  const [dataDirectory, setDataDirectory] = useState("正在读取…");
+
+  useEffect(() => { void desktopGateway.getDataDirectory().then(setDataDirectory); }, []);
 
   return (
     <div className="page settings-page">
@@ -21,12 +26,21 @@ export function SettingsPage() {
           <div className="setting-row"><div><strong>紧凑布局</strong><span>在同一屏幕显示更多任务信息</span></div><button className={`switch ${compactMode ? "on" : ""}`} type="button" onClick={toggleCompactMode} aria-pressed={compactMode}><span /></button></div>
         </section>
         <section className="settings-card">
-          <header><ShieldCheck size={18} /><div><h2>Windows 便携模式</h2><p>正式发行版不安装服务、不创建卸载项、不主动写注册表。</p></div></header>
-          <div className="setting-row"><div><strong>零安装策略</strong><span>Portable ZIP + Fixed WebView2 Runtime</span></div><span className="status-badge neutral">发布门禁</span></div>
+          <header><ShieldCheck size={18} /><div><h2>Windows 无注册表安装</h2><p>图形安装向导只释放文件并创建快捷方式，不创建注册表项。</p></div></header>
+          <div className="setting-row"><div><strong>安装策略</strong><span>引导安装器 + Fixed WebView2 Runtime</span></div><span className="status-badge success"><CheckCircle2 size={12} /> 已启用</span></div>
         </section>
         <section className="settings-card">
           <header><Database size={18} /><div><h2>工作区数据</h2><p>项目、脚本包、运行记录与产物统一保存在工作区。</p></div></header>
-          <div className="setting-row"><div><strong>存储策略</strong><span>本地优先 · 不依赖云端</span></div><span className="status-badge success">正常</span></div>
+          <div className="setting-row data-directory-row"><div><strong>当前数据目录</strong><code>{dataDirectory}</code><span>Windows 固定使用应用安装目录下的 data，不回落到 AppData。</span></div><button className="button ghost small" type="button" onClick={() => void navigator.clipboard.writeText(dataDirectory)}><Clipboard size={13} /> 复制</button></div>
+        </section>
+        <section className="settings-card settings-card-wide">
+          <header><Wrench size={18} /><div><h2>交互完整性审计</h2><p>可见按钮必须执行真实操作；未完成模块明确显示“开发中”。</p></div></header>
+          <div className="interaction-audit">
+            <span><CheckCircle2 size={13} /> 窗口拖动、最小化、最大化/还原、关闭</span>
+            <span><CheckCircle2 size={13} /> RPAZ 安装、参数保存、预检与真实运行</span>
+            <span><CheckCircle2 size={13} /> Studio 新建、编辑、直接运行、导出与已安装包工作副本</span>
+            <span><CheckCircle2 size={13} /> `.ipynb` 编辑、持久 Kernel、单元格输出与变量浏览</span>
+          </div>
         </section>
       </div>
     </div>

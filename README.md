@@ -47,6 +47,6 @@ The `codex/drpa-next-platform` branch is the architectural reset. It now include
 
 Offline machines use native sealed runtime bundles, not the source-tree wheel cache. See [`offline/README.md`](offline/README.md) for the four-platform support matrix, exact dependency policy, air-gap verification and GitHub release process.
 
-See [`docs/RPAZ_DEVELOPMENT.md`](docs/RPAZ_DEVELOPMENT.md) for the package schema, Runtime Context API, Studio workflow, manual packaging and Bing daily-image example.
+See [`docs/RPAZ_DEVELOPMENT.md`](docs/RPAZ_DEVELOPMENT.md) for the package schema, Runtime Context API, direct-run Studio workflow, notebook development and Bing daily-image example. The source-based Jupyter design and supported feature boundary are recorded in [`docs/JUPYTER_INTEGRATION.md`](docs/JUPYTER_INTEGRATION.md); enabled and intentionally unavailable UI actions are listed in [`docs/UI_INTERACTION_AUDIT.md`](docs/UI_INTERACTION_AUDIT.md).
 
-Windows release policy is portable-only: no NSIS/MSI installer, no service, no shortcuts and no application-created registry keys. Public desktop release publication remains gated until the portable archive includes both the sealed Python runtime and Microsoft Fixed Version WebView2 runtime.
+Windows releases use a guided, per-user NSIS installer that performs file extraction and creates `.lnk` shortcuts only. It does not read or write application registry keys, does not register an uninstaller, and refuses installation on the Windows system drive. The sealed Python runtime, Fixed Version WebView2, projects, packages, run history, browser state and settings all remain beside the application.

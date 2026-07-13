@@ -1,17 +1,37 @@
+use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::Mutex;
 
 use drpa_host::{HostState, RunLaunch};
 use drpa_package::{PackageManifest, safe_relative_path, validate_package_id};
 use drpa_protocol::{PackageSummary, RUNTIME_PROTOCOL_VERSION, RuntimeEvent, WorkspaceSnapshot};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 use zip::write::SimpleFileOptions;
 
 struct AppPaths {
     workspace_root: PathBuf,
+}
+
+struct StudioKernelManager {
+    sessions: Mutex<HashMap<String, StudioKernel>>,
+}
+
+struct StudioKernel {
+    child: Child,
+    stdin: BufWriter<ChildStdin>,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl Drop for StudioKernel {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 #[derive(Serialize)]
@@ -20,6 +40,40 @@ struct StudioProject {
     id: String,
     name: String,
     files: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct StudioKernelResponse {
+    request_id: String,
+    execution_count: u64,
+    stdout: String,
+    stderr: String,
+    result: Option<String>,
+    error: Option<String>,
+    traceback: Vec<String>,
+    variables: Vec<StudioVariable>,
+    duration_ms: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+struct StudioVariable {
+    name: String,
+    #[serde(rename(deserialize = "type_name", serialize = "typeName"))]
+    type_name: String,
+    preview: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioCellResult {
+    execution_count: u64,
+    stdout: String,
+    stderr: String,
+    result: Option<String>,
+    error: Option<String>,
+    traceback: Vec<String>,
+    variables: Vec<StudioVariable>,
+    duration_ms: u64,
 }
 
 #[tauri::command]
@@ -89,22 +143,18 @@ fn list_studio_projects(paths: State<'_, AppPaths>) -> Result<Vec<StudioProject>
 
 #[tauri::command]
 fn create_studio_project(
-    project_id: String,
     name: String,
     paths: State<'_, AppPaths>,
 ) -> Result<StudioProject, String> {
-    validate_package_id(&project_id).map_err(|error| error.to_string())?;
     if name.trim().is_empty() {
         return Err("项目名称不能为空".to_owned());
     }
+    let (project_id, package_id) = generated_project_ids(name.trim());
     let root = paths.workspace_root.join("projects").join(&project_id);
-    if root.exists() {
-        return Err("同 ID 项目已经存在".to_owned());
-    }
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let yaml_name = serde_json::to_string(name.trim()).map_err(|error| error.to_string())?;
     let manifest = format!(
-        "schema: 2\nid: {project_id}\nname: {yaml_name}\nversion: 0.1.0\nentrypoint:\n  runtime: python\n  module: main.py\n  callable: main\nruntime:\n  python: \"3.11.*\"\ncapabilities:\n  network:\n    allow: []\n  filesystem:\n    read: []\n    write: [\"$outputs\"]\nparameters: []\n"
+        "schema: 2\nid: {package_id}\nname: {yaml_name}\nversion: 0.1.0\nentrypoint:\n  runtime: python\n  module: main.py\n  callable: main\nruntime:\n  python: \"3.11.*\"\ncapabilities:\n  network:\n    allow: []\n  filesystem:\n    read: []\n    write: [\"$outputs\"]\nparameters: []\n"
     );
     fs::write(root.join("manifest.yaml"), manifest).map_err(|error| error.to_string())?;
     fs::write(
@@ -112,10 +162,36 @@ fn create_studio_project(
         "def main(ctx):\n    ctx.log.info(\"任务开始\")\n    ctx.progress(100, \"任务完成\")\n",
     )
     .map_err(|error| error.to_string())?;
+    fs::write(
+        root.join("notebook.ipynb"),
+        r#"{
+  "cells": [
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": ["# 使用内置 sealed Python Kernel 交互开发\n", "message = '你好，DRPA Notebook'\n", "message"]
+    }
+  ],
+  "metadata": {
+    "kernelspec": {"display_name": "DRPA Python 3.11", "language": "python", "name": "drpa-python"},
+    "language_info": {"name": "python", "version": "3.11"}
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}
+"#,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(StudioProject {
         id: project_id,
         name: name.trim().to_owned(),
-        files: vec!["main.py".to_owned(), "manifest.yaml".to_owned()],
+        files: vec![
+            "main.py".to_owned(),
+            "manifest.yaml".to_owned(),
+            "notebook.ipynb".to_owned(),
+        ],
     })
 }
 
@@ -125,7 +201,7 @@ fn read_project_file(
     relative_path: String,
     paths: State<'_, AppPaths>,
 ) -> Result<String, String> {
-    validate_package_id(&project_id).map_err(|error| error.to_string())?;
+    validate_project_id(&project_id)?;
     let relative = safe_relative_path(&relative_path).map_err(|error| error.to_string())?;
     fs::read_to_string(
         paths
@@ -144,7 +220,7 @@ fn write_project_file(
     content: String,
     paths: State<'_, AppPaths>,
 ) -> Result<(), String> {
-    validate_package_id(&project_id).map_err(|error| error.to_string())?;
+    validate_project_id(&project_id)?;
     let relative = safe_relative_path(&relative_path).map_err(|error| error.to_string())?;
     let target = paths
         .workspace_root
@@ -159,7 +235,7 @@ fn write_project_file(
 
 #[tauri::command]
 fn build_studio_project(project_id: String, paths: State<'_, AppPaths>) -> Result<String, String> {
-    validate_package_id(&project_id).map_err(|error| error.to_string())?;
+    validate_project_id(&project_id)?;
     let root = paths.workspace_root.join("projects").join(&project_id);
     let manifest_source = fs::read_to_string(root.join("manifest.yaml"))
         .map_err(|error| format!("无法读取 manifest.yaml：{error}"))?;
@@ -191,6 +267,201 @@ fn build_studio_project(project_id: String, paths: State<'_, AppPaths>) -> Resul
     Ok(output.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+async fn run_studio_project(
+    project_id: String,
+    parameters: serde_json::Value,
+    state: State<'_, HostState>,
+    paths: State<'_, AppPaths>,
+) -> Result<String, String> {
+    validate_project_id(&project_id)?;
+    let root = paths.workspace_root.join("projects").join(project_id);
+    let manifest = PackageManifest::from_yaml(
+        &fs::read_to_string(root.join("manifest.yaml"))
+            .map_err(|error| format!("无法读取 manifest.yaml：{error}"))?,
+    )
+    .map_err(|error| error.to_string())?;
+    let launch = state
+        .prepare_development_run(&root, &manifest, &parameters)
+        .map_err(|error| error.to_string())?;
+    let run_id = launch.run_id.clone();
+    if let Err(error) = execute_python_run(&state, &paths, &launch, &parameters) {
+        state.fail_run(&run_id, error.clone());
+        return Err(error);
+    }
+    Ok(run_id)
+}
+
+#[tauri::command]
+fn open_installed_package(
+    package_id: String,
+    paths: State<'_, AppPaths>,
+) -> Result<StudioProject, String> {
+    validate_package_id(&package_id).map_err(|error| error.to_string())?;
+    let package_root = paths.workspace_root.join("packages").join(&package_id);
+    let mut versions: Vec<PathBuf> = fs::read_dir(&package_root)
+        .map_err(|_| format!("找不到已安装脚本包：{package_id}"))?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.join("manifest.yaml").is_file())
+        .collect();
+    versions.sort();
+    let source = versions
+        .pop()
+        .ok_or_else(|| format!("脚本包 {package_id} 没有可编辑版本"))?;
+    let manifest = PackageManifest::from_yaml(
+        &fs::read_to_string(source.join("manifest.yaml")).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let (project_id, _) = generated_project_ids(&manifest.name);
+    let target = paths.workspace_root.join("projects").join(&project_id);
+    copy_directory(&source, &target).map_err(|error| error.to_string())?;
+    if !target.join("notebook.ipynb").is_file() {
+        fs::write(
+            target.join("notebook.ipynb"),
+            "{\n  \"cells\": [],\n  \"metadata\": {\"kernelspec\": {\"display_name\": \"DRPA Python 3.11\", \"language\": \"python\", \"name\": \"drpa-python\"}},\n  \"nbformat\": 4,\n  \"nbformat_minor\": 5\n}\n",
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let mut files = Vec::new();
+    collect_files(&target, &target, &mut files).map_err(|error| error.to_string())?;
+    files.sort();
+    Ok(StudioProject {
+        id: project_id,
+        name: manifest.name,
+        files,
+    })
+}
+
+#[tauri::command]
+fn execute_studio_cell(
+    project_id: String,
+    code: String,
+    paths: State<'_, AppPaths>,
+    kernels: State<'_, StudioKernelManager>,
+) -> Result<StudioCellResult, String> {
+    validate_project_id(&project_id)?;
+    let mut sessions = kernels
+        .sessions
+        .lock()
+        .map_err(|_| "Studio Kernel 状态已损坏".to_owned())?;
+    if !sessions.contains_key(&project_id) {
+        sessions.insert(
+            project_id.clone(),
+            spawn_studio_kernel(&project_id, &paths)?,
+        );
+    }
+    let request_id = Uuid::new_v4().simple().to_string();
+    let result = (|| {
+        let session = sessions
+            .get_mut(&project_id)
+            .ok_or_else(|| "无法创建 Studio Kernel".to_owned())?;
+        serde_json::to_writer(
+            &mut session.stdin,
+            &serde_json::json!({
+                "type": "execute",
+                "request_id": request_id.clone(),
+                "code": code,
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+        session
+            .stdin
+            .write_all(b"\n")
+            .and_then(|_| session.stdin.flush())
+            .map_err(|error| format!("无法向 Kernel 发送代码：{error}"))?;
+        let mut line = String::new();
+        if session
+            .stdout
+            .read_line(&mut line)
+            .map_err(|error| format!("无法读取 Kernel 输出：{error}"))?
+            == 0
+        {
+            return Err("Studio Kernel 已意外退出".to_owned());
+        }
+        let response: StudioKernelResponse =
+            serde_json::from_str(&line).map_err(|error| format!("Kernel 返回无效响应：{error}"))?;
+        if response.request_id != request_id {
+            return Err("Kernel 响应与当前单元格不匹配".to_owned());
+        }
+        Ok(StudioCellResult {
+            execution_count: response.execution_count,
+            stdout: response.stdout,
+            stderr: response.stderr,
+            result: response.result,
+            error: response.error,
+            traceback: response.traceback,
+            variables: response.variables,
+            duration_ms: response.duration_ms,
+        })
+    })();
+    if result.is_err() {
+        sessions.remove(&project_id);
+    }
+    result
+}
+
+#[tauri::command]
+fn restart_studio_kernel(
+    project_id: String,
+    kernels: State<'_, StudioKernelManager>,
+) -> Result<(), String> {
+    validate_project_id(&project_id)?;
+    kernels
+        .sessions
+        .lock()
+        .map_err(|_| "Studio Kernel 状态已损坏".to_owned())?
+        .remove(&project_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_data_directory(paths: State<'_, AppPaths>) -> String {
+    paths.workspace_root.to_string_lossy().into_owned()
+}
+
+fn generated_project_ids(name: &str) -> (String, String) {
+    let salt = Uuid::new_v4();
+    let mut first = DefaultHasher::new();
+    name.hash(&mut first);
+    salt.as_bytes().hash(&mut first);
+    let first = first.finish();
+
+    let mut second = DefaultHasher::new();
+    salt.as_bytes().hash(&mut second);
+    first.hash(&mut second);
+    name.len().hash(&mut second);
+    let hash = format!("{first:016x}{:08x}", second.finish() as u32);
+    (format!("project-{hash}"), format!("local.{hash}"))
+}
+
+fn validate_project_id(project_id: &str) -> Result<(), String> {
+    let is_generated = project_id
+        .strip_prefix("project-")
+        .is_some_and(|hash| hash.len() == 24 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    // Preview 4 and earlier used the package id as the Studio directory id.
+    // Continue accepting those safe, separator-free ids so existing projects open.
+    if is_generated || validate_package_id(project_id).is_ok() {
+        Ok(())
+    } else {
+        Err("无效的内部项目标识".to_owned())
+    }
+}
+
+fn copy_directory(source: &Path, target: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)?.flatten() {
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_directory(&source_path, &target_path)?;
+        } else if source_path.is_file() {
+            fs::copy(source_path, target_path)?;
+        }
+    }
+    Ok(())
+}
+
 fn collect_files(root: &Path, current: &Path, output: &mut Vec<String>) -> std::io::Result<()> {
     for entry in fs::read_dir(current)?.flatten() {
         let path = entry.path();
@@ -209,6 +480,47 @@ struct RuntimeEnvironment {
     python: PathBuf,
     python_path: Option<PathBuf>,
     browser: Option<PathBuf>,
+}
+
+fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKernel, String> {
+    let RuntimeEnvironment {
+        python,
+        python_path,
+        browser,
+    } = locate_runtime(paths)?;
+    let project_root = paths.workspace_root.join("projects").join(project_id);
+    let mut command = Command::new(python);
+    command
+        .args(["-m", "drpa_runner.kernel"])
+        .current_dir(project_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env("PYTHONNOUSERSITE", "1")
+        .env("PYTHONDONTWRITEBYTECODE", "1");
+    if let Some(python_path) = python_path {
+        command.env("PYTHONPATH", python_path);
+    }
+    if let Some(browser) = browser {
+        command.env("DRPA_BROWSER_PATH", browser);
+    }
+    hide_child_window(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("无法启动 Studio Kernel：{error}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "无法连接 Studio Kernel 输入".to_owned())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法连接 Studio Kernel 输出".to_owned())?;
+    Ok(StudioKernel {
+        child,
+        stdin: BufWriter::new(stdin),
+        stdout: BufReader::new(stdout),
+    })
 }
 
 fn execute_python_run(
@@ -433,13 +745,49 @@ fn hide_child_window(_command: &mut Command) {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    #[cfg(windows)]
+    let main_window_config = context
+        .config_mut()
+        .app
+        .windows
+        .pop()
+        .expect("Windows main window configuration is missing");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
-            let workspace_root = app.path().app_local_data_dir()?.join("workspace");
+        .setup(move |app| {
+            let workspace_root = if let Some(path) = std::env::var_os("DRPA_DATA_DIR") {
+                PathBuf::from(path)
+            } else {
+                #[cfg(windows)]
+                {
+                    std::env::current_exe()?
+                        .parent()
+                        .ok_or_else(|| std::io::Error::other("无法定位应用安装目录"))?
+                        .join("data")
+                }
+                #[cfg(not(windows))]
+                {
+                    app.path().app_local_data_dir()?.join("workspace")
+                }
+            };
             fs::create_dir_all(&workspace_root)?;
+
+            #[cfg(windows)]
+            {
+                let webview_data = workspace_root.join("webview2-user-data");
+                fs::create_dir_all(&webview_data)?;
+                tauri::WebviewWindowBuilder::from_config(app, &main_window_config)?
+                    .data_directory(webview_data)
+                    .build()?;
+            }
+
             app.manage(HostState::new(workspace_root.clone()));
             app.manage(AppPaths { workspace_root });
+            app.manage(StudioKernelManager {
+                sessions: Mutex::new(HashMap::new()),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -449,10 +797,15 @@ pub fn run() {
             cancel_run,
             list_studio_projects,
             create_studio_project,
+            open_installed_package,
             read_project_file,
             write_project_file,
-            build_studio_project
+            build_studio_project,
+            run_studio_project,
+            execute_studio_cell,
+            restart_studio_kernel,
+            get_data_directory
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("failed to run DRPA Next desktop host");
 }
