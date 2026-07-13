@@ -1,0 +1,155 @@
+QWidget {
+  background: #f8fafc;
+  color: #0f172a;
+  font-family: "Inter", "Segoe UI", "Noto Sans CJK SC", sans-serif;
+  font-size: 13px;
+}
+
+#Sidebar {
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  padding: 10px 8px;
+}
+
+#Sidebar::item {
+  color: #64748b;
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin: 1px 3px;
+}
+
+#Sidebar::item:selected {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+#Sidebar::item:hover:!selected {
+  background: #eff6ff;
+  color: #1e293b;
+}
+
+#PageTitle {
+  color: #0f172a;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+#PageSubtitle {
+  color: #64748b;
+  font-size: 13px;
+}
+
+#HeroNumber {
+  color: #0f172a;
+  font-size: 26px;
+  font-weight: 700;
+}
+
+#SectionTitle {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#MutedText {
+  color: #64748b;
+  line-height: 1.4;
+}
+
+#Card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+#ContentScroll {
+  background: transparent;
+  border: none;
+}
+
+#ContentScroll > QWidget > QWidget {
+  background: transparent;
+}
+
+QSplitter::handle {
+  background: #e2e8f0;
+  width: 1px;
+}
+
+#PackageList {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 4px;
+}
+
+#PackageList::item {
+  color: #334155;
+  border-radius: 8px;
+  padding: 9px 10px;
+  margin: 2px;
+}
+
+#PackageList::item:selected {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+#PackageList::item:hover:!selected {
+  background: #eff6ff;
+}
+
+QPushButton {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 7px 12px;
+  color: #0f172a;
+}
+
+QPushButton:hover {
+  background: #f1f5f9;
+}
+
+QPushButton:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+#PrimaryButton {
+  background: #2563eb;
+  border: 1px solid #2563eb;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+#PrimaryButton:hover {
+  background: #1d4ed8;
+}
+
+QLineEdit,
+QComboBox,
+QTextEdit,
+QTableWidget {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px;
+  selection-background-color: #2563eb;
+  selection-color: #ffffff;
+}
+
+QHeaderView::section {
+  background: #f1f5f9;
+  color: #334155;
+  border: none;
+  padding: 6px;
+}
+
+QTableWidget {
+  gridline-color: #e2e8f0;
+}
+
+QCheckBox {
+  spacing: 8px;
+}

@@ -1,0 +1,1 @@
+"""Code editor web assets."""

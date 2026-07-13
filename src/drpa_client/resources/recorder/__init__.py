@@ -1,0 +1,1 @@
+"""Browser recorder JavaScript resources."""

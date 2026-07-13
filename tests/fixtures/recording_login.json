@@ -1,0 +1,120 @@
+{
+  "schema_version": "1.0",
+  "tool": "drpa-browser-recorder",
+  "created_at": "2026-07-08T00:00:00Z",
+  "start_url": "https://example.com/login",
+  "browser": {
+    "engine": "chromium",
+    "headless": false
+  },
+  "events": [
+    {
+      "id": "evt_000000",
+      "type": "navigate",
+      "timestamp": "2026-07-08T00:00:00Z",
+      "url": "https://example.com/login",
+      "title": "Login",
+      "target": {},
+      "value": null,
+      "sensitive": false,
+      "confidence": "high",
+      "notes": []
+    },
+    {
+      "id": "evt_000001",
+      "type": "input",
+      "timestamp": "2026-07-08T00:00:01Z",
+      "url": "https://example.com/login",
+      "title": "Login",
+      "target": {
+        "tag": "input",
+        "type": "text",
+        "label": "用户名",
+        "attributes": {
+          "id": "username",
+          "name": "username",
+          "data-testid": "login-username"
+        },
+        "selectors": [
+          {
+            "kind": "css",
+            "value": "[data-testid='login-username']",
+            "score": 95,
+            "reason": "data-testid"
+          }
+        ]
+      },
+      "value": {
+        "mode": "literal",
+        "text": "demo"
+      },
+      "sensitive": false,
+      "confidence": "high",
+      "notes": []
+    },
+    {
+      "id": "evt_000002",
+      "type": "input",
+      "timestamp": "2026-07-08T00:00:02Z",
+      "url": "https://example.com/login",
+      "title": "Login",
+      "target": {
+        "tag": "input",
+        "type": "password",
+        "label": "密码",
+        "attributes": {
+          "id": "password",
+          "name": "password"
+        },
+        "selectors": [
+          {
+            "kind": "css",
+            "value": "#password",
+            "score": 82,
+            "reason": "id"
+          }
+        ]
+      },
+      "value": {
+        "mode": "param",
+        "param_name": "password",
+        "redacted": true
+      },
+      "sensitive": true,
+      "confidence": "medium",
+      "notes": []
+    },
+    {
+      "id": "evt_000003",
+      "type": "click",
+      "timestamp": "2026-07-08T00:00:03Z",
+      "url": "https://example.com/login",
+      "title": "Login",
+      "target": {
+        "tag": "button",
+        "text": "登录",
+        "attributes": {
+          "id": "login-button"
+        },
+        "selectors": [
+          {
+            "kind": "css",
+            "value": "#login-button",
+            "score": 82,
+            "reason": "id"
+          },
+          {
+            "kind": "text",
+            "value": "登录",
+            "score": 68,
+            "reason": "visible text"
+          }
+        ]
+      },
+      "value": null,
+      "sensitive": false,
+      "confidence": "medium",
+      "notes": []
+    }
+  ]
+}
