@@ -297,10 +297,30 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
     }
 
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    if let Some(root) = executable.parent().map(|parent| parent.join("runtime"))
-        && root.is_dir()
+    let mut roots = Vec::new();
+    if let Some(root) = std::env::var_os("DRPA_RUNTIME_ROOT") {
+        roots.push(PathBuf::from(root));
+    }
+    if let Some(parent) = executable.parent() {
+        roots.push(parent.join("runtime"));
+        #[cfg(target_os = "macos")]
+        if let Some(contents) = parent.parent() {
+            roots.push(contents.join("Resources/runtime"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(app_image) = std::env::var_os("APPIMAGE")
+        && let Some(parent) = Path::new(&app_image).parent()
     {
-        let python = prepare_sealed_runtime(&root)?;
+        roots.push(parent.join("runtime"));
+    }
+
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        let environment = paths.workspace_root.join("runtime-environment");
+        let python = prepare_sealed_runtime(&root, &environment)?;
         return Ok(RuntimeEnvironment {
             python,
             python_path: None,
@@ -326,15 +346,12 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
     ))
 }
 
-fn prepare_sealed_runtime(root: &Path) -> Result<PathBuf, String> {
-    let environment_python = root.join(if cfg!(windows) {
+fn prepare_sealed_runtime(root: &Path, environment: &Path) -> Result<PathBuf, String> {
+    let environment_python = environment.join(if cfg!(windows) {
         "environment/Scripts/python.exe"
     } else {
         "environment/bin/python"
     });
-    if environment_python.is_file() {
-        return Ok(environment_python);
-    }
     let bundled = find_named_file(
         &root.join("python"),
         if cfg!(windows) {
@@ -351,6 +368,8 @@ fn prepare_sealed_runtime(root: &Path) -> Result<PathBuf, String> {
     let mut command = Command::new(bundled);
     command
         .arg(bootstrap)
+        .arg("--environment")
+        .arg(environment.join("environment"))
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

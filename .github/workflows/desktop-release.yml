@@ -1,13 +1,29 @@
-name: Desktop packaging validation
+name: Publish offline desktop preview
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/drpa-next-platform
+    paths:
+      - ".github/workflows/desktop-release.yml"
+      - "apps/desktop/**"
+      - "crates/**"
+      - "docs/PORTABLE_RELEASE.md"
+      - "examples/bing_daily_image.rpaz"
+      - "offline/**"
+      - "runtime/python/**"
+      - "tools/offline/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "package-lock.json"
+      - "package.json"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: desktop-preview-${{ github.ref }}
+  group: desktop-offline-preview-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -20,24 +36,33 @@ jobs:
           - platform: windows-x86_64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
-            bundles: portable-host
+            bundle: host
           - platform: linux-x86_64
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bundles: deb,appimage
+            bundle: appimage
           - platform: macos-arm64
             runner: macos-15
             target: aarch64-apple-darwin
-            bundles: dmg
+            bundle: app
           - platform: macos-x86_64
             runner: macos-15-intel
             target: x86_64-apple-darwin
-            bundles: dmg
+            bundle: app
     runs-on: ${{ matrix.runner }}
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      DRPA_VERSION: 0.2.0
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+          cache: pip
+      - name: Install pinned offline bundle tooling
+        run: python -m pip install "uv==0.11.28"
+      - name: Build and air-gap test sealed runtime
+        run: python tools/offline/build_runtime_bundle.py --platform "${{ matrix.platform }}" --work-dir "${{ runner.temp }}/drpa-offline"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -47,7 +72,7 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-${{ matrix.target }}
+          key: desktop-release-${{ matrix.target }}
       - name: Install Linux desktop libraries
         if: runner.os == 'Linux'
         run: |
@@ -56,34 +81,98 @@ jobs:
       - run: npm ci
       - name: Generate native icon formats
         run: npm exec --workspace @drpa/desktop -- tauri icon src-tauri/icons/icon.png
-      - name: Build native package
-        if: runner.os != 'Windows'
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && '-' || '' }}
-        run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
-      - name: Build Windows GUI host without an installer
+      - name: Build Windows GUI host
         if: runner.os == 'Windows'
         run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --no-bundle
-      - name: Normalize installer names and checksums
-        if: runner.os != 'Windows'
-        run: >-
-          python tools/release/collect_desktop_assets.py
-          --platform "${{ matrix.platform }}"
-          --version "0.2.0"
-          --bundle-dir "target/${{ matrix.target }}/release/bundle"
-          --output "${{ runner.temp }}/desktop-assets"
-      - name: Collect Windows host for engineering validation
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --bundles appimage
+      - name: Build macOS application bundle
+        if: runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --bundles app
+
+      - name: Assemble Windows portable ZIP
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          WEBVIEW2_VERSION: 150.0.4078.65
+          WEBVIEW2_URL: https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c00b9782-0422-4114-be27-8eec079b394d/Microsoft.WebView2.FixedVersionRuntime.150.0.4078.65.x64.cab
+          WEBVIEW2_SHA256: ca01385bc232dea83242c35ed78e98403866a36b1a0952e97fa7fd870fc39ab4
         run: |
           $assets = Join-Path $env:RUNNER_TEMP "desktop-assets"
-          New-Item -ItemType Directory -Force -Path $assets | Out-Null
-          $binary = "target/${{ matrix.target }}/release/drpa-desktop.exe"
-          $archive = Join-Path $assets "drpa-next-0.2.0-windows-x86_64-host-only.zip"
-          Compress-Archive -Path $binary -DestinationPath $archive
+          $portable = Join-Path $env:RUNNER_TEMP "DRPA-Next-$env:DRPA_VERSION-windows-x86_64"
+          $runtimeStage = Get-ChildItem "$env:RUNNER_TEMP/drpa-offline" -Directory -Filter "drpa-runtime-*-windows-x86_64" | Select-Object -First 1
+          if (-not $runtimeStage) { throw "Sealed Windows runtime stage is missing" }
+          New-Item -ItemType Directory -Force -Path $assets, "$portable/runtime", "$portable/webview2", "$portable/examples" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/drpa-desktop.exe" "$portable/DRPA Next.exe"
+          Get-ChildItem $runtimeStage.FullName -Force | Copy-Item -Destination "$portable/runtime" -Recurse -Force
+          Copy-Item "examples/bing_daily_image.rpaz" "$portable/examples/"
+          Copy-Item "docs/PORTABLE_RELEASE.md" "$portable/README.md"
+
+          $cab = Join-Path $env:RUNNER_TEMP "Microsoft.WebView2.FixedVersionRuntime.$env:WEBVIEW2_VERSION.x64.cab"
+          $expanded = Join-Path $env:RUNNER_TEMP "webview2-expanded"
+          curl.exe -fL --retry 3 --output $cab $env:WEBVIEW2_URL
+          $actualHash = (Get-FileHash -Algorithm SHA256 $cab).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:WEBVIEW2_SHA256) { throw "Fixed WebView2 checksum mismatch: $actualHash" }
+          New-Item -ItemType Directory -Force -Path $expanded | Out-Null
+          & expand.exe -F:* $cab $expanded | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Failed to expand Fixed WebView2" }
+          $browser = Get-ChildItem $expanded -Recurse -File -Filter "msedgewebview2.exe" | Select-Object -First 1
+          if (-not $browser) { throw "Fixed WebView2 executable is missing" }
+          Get-ChildItem $browser.Directory.FullName -Force | Copy-Item -Destination "$portable/webview2" -Recurse -Force
+
+          $archive = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-portable.zip"
+          Compress-Archive -Path $portable -DestinationPath $archive -CompressionLevel Optimal
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
           "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii "$archive.sha256"
-      - name: Upload installer assets
+
+      - name: Assemble Linux portable archive
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="${RUNNER_TEMP}/desktop-assets"
+          stage="${RUNNER_TEMP}/DRPA-Next-${DRPA_VERSION}-linux-x86_64"
+          runtime_stage="$(find "${RUNNER_TEMP}/drpa-offline" -maxdepth 1 -type d -name 'drpa-runtime-*-linux-x86_64' -print -quit)"
+          appimage="$(find "target/${{ matrix.target }}/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$runtime_stage"
+          test -n "$appimage"
+          mkdir -p "$assets" "$stage/runtime" "$stage/examples"
+          cp -a "$runtime_stage"/. "$stage/runtime/"
+          cp "$appimage" "$stage/DRPA Next.AppImage"
+          chmod +x "$stage/DRPA Next.AppImage"
+          cp examples/bing_daily_image.rpaz "$stage/examples/"
+          cp docs/PORTABLE_RELEASE.md "$stage/README.md"
+          archive="$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-portable.tar.gz"
+          tar -C "${RUNNER_TEMP}" -czf "$archive" "$(basename "$stage")"
+          sha256sum "$archive" | sed "s#${assets}/##" > "$archive.sha256"
+
+      - name: Assemble macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="${RUNNER_TEMP}/desktop-assets"
+          stage="${RUNNER_TEMP}/dmg-root"
+          runtime_stage="$(find "${RUNNER_TEMP}/drpa-offline" -maxdepth 1 -type d -name 'drpa-runtime-*-${{ matrix.platform }}' -print -quit)"
+          source_app="$(find "target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$runtime_stage"
+          test -n "$source_app"
+          mkdir -p "$assets" "$stage/examples"
+          cp -R "$source_app" "$stage/DRPA Next.app"
+          mkdir -p "$stage/DRPA Next.app/Contents/Resources/runtime"
+          cp -a "$runtime_stage"/. "$stage/DRPA Next.app/Contents/Resources/runtime/"
+          cp examples/bing_daily_image.rpaz "$stage/examples/"
+          cp docs/PORTABLE_RELEASE.md "$stage/README.md"
+          codesign --force --deep --sign - "$stage/DRPA Next.app"
+          dmg="$assets/drpa-next-${DRPA_VERSION}-${{ matrix.platform }}.dmg"
+          hdiutil create -volname "DRPA Next" -srcfolder "$stage" -ov -format UDZO "$dmg"
+          hash="$(shasum -a 256 "$dmg" | awk '{print $1}')"
+          printf '%s  %s\n' "$hash" "$(basename "$dmg")" > "$dmg.sha256"
+
+      - name: Upload offline desktop package
         uses: actions/upload-artifact@v4
         with:
           name: drpa-desktop-${{ matrix.platform }}
@@ -91,3 +180,39 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+
+  publish:
+    name: Publish GitHub prerelease
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Add example package and verify release set
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/example
+          cp examples/bing_daily_image.rpaz artifacts/example/drpa-example-bing-daily-image-0.1.0.rpaz
+          cd artifacts/example
+          sha256sum drpa-example-bing-daily-image-0.1.0.rpaz > drpa-example-bing-daily-image-0.1.0.rpaz.sha256
+          cd ../..
+          mapfile -t assets < <(find artifacts -type f | sort)
+          test "${#assets[@]}" -eq 10
+      - name: Publish immutable desktop assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="desktop-v0.2.0-preview-${GITHUB_RUN_NUMBER}"
+          mapfile -t assets < <(find artifacts -type f | sort)
+          notes=$'Chinese-first DRPA Next offline preview.\n\nIncludes Windows x64 portable ZIP, Linux x64 AppImage archive, macOS Apple Silicon DMG, macOS Intel DMG, sealed Python 3.11 runtimes and the Bing daily image RPAZ example. Windows uses a pinned Fixed Version WebView2 and does not use NSIS/MSI or registry installation.\n\nThis preview is unsigned/not notarized. Verify the matching SHA-256 file before moving a package to an offline machine.'
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "DRPA Next 0.2.0 离线预览 · ${GITHUB_RUN_NUMBER}" --notes "$notes" --prerelease
+          else
+            gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "DRPA Next 0.2.0 离线预览 · ${GITHUB_RUN_NUMBER}" --notes "$notes"
+          fi

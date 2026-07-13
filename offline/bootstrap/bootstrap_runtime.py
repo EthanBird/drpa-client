@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -41,7 +42,7 @@ def digest_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def prepare(root: Path | None = None) -> Path:
+def prepare(root: Path | None = None, environment_override: Path | None = None) -> Path:
     root = (root or bundle_root()).resolve()
     manifest = root / "manifest.json"
     requirements = root / "locks" / "runtime.txt"
@@ -51,7 +52,8 @@ def prepare(root: Path | None = None) -> Path:
         if not required.exists():
             raise BootstrapError(f"offline bundle is incomplete: {required.relative_to(root)}")
 
-    environment = root / "environment"
+    environment = (environment_override or (root / "environment")).resolve()
+    environment.parent.mkdir(parents=True, exist_ok=True)
     marker = environment / ".drpa-runtime.json"
     expected = {
         "manifestSha256": digest_file(manifest),
@@ -76,7 +78,7 @@ def prepare(root: Path | None = None) -> Path:
             "UV_OFFLINE": "1",
             "UV_NO_MANAGED_PYTHON": "1",
             "UV_PYTHON_DOWNLOADS": "never",
-            "UV_CACHE_DIR": str(root / ".offline-cache"),
+            "UV_CACHE_DIR": str(environment.parent / ".drpa-uv-cache"),
         }
     )
     subprocess.run(
@@ -115,8 +117,15 @@ def prepare(root: Path | None = None) -> Path:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--environment",
+        type=Path,
+        help="Writable destination for the generated virtual environment",
+    )
+    args = parser.parse_args()
     try:
-        python = prepare()
+        python = prepare(environment_override=args.environment)
     except (BootstrapError, OSError, subprocess.CalledProcessError) as error:
         print(f"[DRPA offline] runtime preparation failed: {error}", file=sys.stderr)
         return 1
