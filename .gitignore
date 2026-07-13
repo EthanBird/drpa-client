@@ -9,5 +9,14 @@ __pycache__/
 venv/
 dist/
 build/
+temp/
 *.rpaz
 !examples/*.rpaz
+
+# Internal-network example packages (local only, do not publish)
+examples/marketing_cancel_order_dispatch/
+examples/marketing_cancel_order_dispatch.rpaz
+examples/implementation_power_restore/
+examples/implementation_power_restore.rpaz
+examples/autocollect/
+examples/autocollect.rpaz

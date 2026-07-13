@@ -63,10 +63,12 @@ def main() -> int:
 
 
 def _load_entry(entry_path: Path):
-    spec = importlib.util.spec_from_file_location("drpa_user_script", entry_path)
+    module_name = f"drpa_user_script_{entry_path.stem}"
+    spec = importlib.util.spec_from_file_location(module_name, entry_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载入口文件：{entry_path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 

@@ -50,6 +50,7 @@ except ImportError:  # pragma: no cover - depends on optional QtWebEngine runtim
 from drpa_client.core.database import RunStore
 from drpa_client.core.models import InstalledPackage, TaskEvent
 from drpa_client.core.package_manager import PackageManager
+from drpa_client.core.package_params import PackageParamStore
 from drpa_client.core.paths import get_data_dir
 from drpa_client.core.recorder import BrowserRecorderSession, RecorderPackageGenerator, Recording
 from drpa_client.core.settings import AppSettings, SettingsStore
@@ -571,6 +572,7 @@ class TasksPage(Page):
         self.package_manager = package_manager
         self.task_runner = task_runner
         self.profile_store = TaskProfileStore()
+        self.param_store = PackageParamStore()
         self.packages: list[InstalledPackage] = []
         self.profiles: list[TaskProfile] = []
         self.running_tasks: dict[str, RunningTask] = {}
@@ -639,7 +641,7 @@ class TasksPage(Page):
 
         profile_buttons = QHBoxLayout()
         self.new_profile_button = QPushButton("新建任务")
-        self.save_profile_button = QPushButton("保存参数")
+        self.save_profile_button = QPushButton("保存任务")
         self.delete_profile_button = QPushButton("删除任务")
         profile_buttons.addWidget(self.new_profile_button)
         profile_buttons.addWidget(self.save_profile_button)
@@ -727,6 +729,12 @@ class TasksPage(Page):
         detail_layout.addWidget(self.selected_description)
         detail_layout.addWidget(QLabel("参数表"))
         detail_layout.addWidget(self.param_table)
+        param_actions = QHBoxLayout()
+        self.save_params_button = QPushButton("保存参数")
+        self.save_params_button.setObjectName("PrimaryButton")
+        param_actions.addWidget(self.save_params_button)
+        param_actions.addStretch(1)
+        detail_layout.addLayout(param_actions)
         detail_layout.addWidget(QLabel("运行参数"))
         detail_layout.addLayout(self.form)
         detail_layout.addStretch(1)
@@ -760,6 +768,7 @@ class TasksPage(Page):
         self.run_table.customContextMenuRequested.connect(self._show_run_menu)
         self.new_profile_button.clicked.connect(self._new_profile)
         self.save_profile_button.clicked.connect(self._save_profile)
+        self.save_params_button.clicked.connect(self._save_current_params)
         self.delete_profile_button.clicked.connect(self._delete_profile)
         self.run_profile_button.clicked.connect(self._run_selected_profile)
         self.run_button.clicked.connect(self._run_current_form)
@@ -897,7 +906,10 @@ class TasksPage(Page):
             widget.setToolTip(param.description)
             self.param_widgets[param.name] = widget
         self._render_param_table(package)
-        hint = QLabel("请直接在上方参数表的“当前值”列编辑参数；点击“保存参数”后下次会自动回填。")
+        saved = self.param_store.get_params(package.manifest.id, package.manifest.version)
+        if saved:
+            self._set_params(saved)
+        hint = QLabel("在“当前值”列编辑参数后，点击“保存参数”；重启后会自动回填上次保存的值。")
         hint.setObjectName("MutedText")
         hint.setWordWrap(True)
         self.form.addRow(hint)
@@ -932,6 +944,7 @@ class TasksPage(Page):
                 widget.setEchoMode(QLineEdit.EchoMode.Password)
             if param.default is not None:
                 widget.setText(str(param.default))
+        self._connect_param_widget(param.name, widget)
         return widget
 
     def _set_params(self, params: dict[str, Any]) -> None:
@@ -1092,9 +1105,47 @@ class TasksPage(Page):
             package_version=package.manifest.version,
             params=self._collect_params(),
         )
+        self._persist_current_params(package)
         self.current_profile_id = profile.id
         self.refresh_profiles()
         self._select_profile(profile.id)
+
+    def _save_current_params(self) -> None:
+        package = self._selected_package()
+        if package is None:
+            QMessageBox.warning(self, "无法保存参数", "请先选择脚本包。")
+            return
+        if not self._validate_params(package):
+            return
+        self._persist_current_params(package)
+        profile = self._selected_profile()
+        if (
+            profile is not None
+            and profile.package_id == package.manifest.id
+            and profile.package_version == package.manifest.version
+        ):
+            saved = self.profile_store.save_profile(
+                profile_id=profile.id,
+                name=profile.name,
+                package_id=package.manifest.id,
+                package_version=package.manifest.version,
+                params=self._collect_params(),
+            )
+            self.current_profile_id = saved.id
+            self.refresh_profiles()
+            self._select_profile(saved.id)
+        QMessageBox.information(
+            self,
+            "参数已保存",
+            f"已保存 {package.display_name} 的参数，下次打开会自动回填。",
+        )
+
+    def _persist_current_params(self, package: InstalledPackage) -> None:
+        self.param_store.save_params(
+            package.manifest.id,
+            package.manifest.version,
+            self._collect_params(),
+        )
 
     def _save_profile(self) -> None:
         package = self._selected_package()
@@ -1114,9 +1165,11 @@ class TasksPage(Page):
             package_version=package.manifest.version,
             params=self._collect_params(),
         )
+        self._persist_current_params(package)
         self.current_profile_id = saved.id
         self.refresh_profiles()
         self._select_profile(saved.id)
+        QMessageBox.information(self, "任务已保存", f"任务配置“{saved.name}”已更新。")
 
     def _delete_profile(self) -> None:
         profile = self._selected_profile()
@@ -1137,7 +1190,7 @@ class TasksPage(Page):
         menu.addAction("新建任务配置", self._new_profile)
         save_action = menu.addAction("保存当前参数")
         save_action.setEnabled(self._selected_package() is not None)
-        save_action.triggered.connect(self._save_profile)
+        save_action.triggered.connect(self._save_current_params)
         run_action = menu.addAction("运行选中任务")
         run_action.setEnabled(self._selected_profile() is not None)
         run_action.triggered.connect(self._run_selected_profile)

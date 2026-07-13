@@ -5,12 +5,20 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXAMPLE_PACKAGES = (
+PUBLIC_EXAMPLE_PACKAGES = (
     "hello_web_bot",
     "bing_daily_image",
     "bilibili_search",
-    "marketing_cancel_order_dispatch",
 )
+
+# Local-only intranet examples are intentionally excluded from git and this build list.
+LOCAL_EXAMPLE_PACKAGES = (
+    "marketing_cancel_order_dispatch",
+    "implementation_power_restore",
+    "autocollect",
+)
+
+EXAMPLE_PACKAGES = (*PUBLIC_EXAMPLE_PACKAGES, *LOCAL_EXAMPLE_PACKAGES)
 
 
 def main() -> int:

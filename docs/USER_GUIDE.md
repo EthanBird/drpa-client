@@ -12,33 +12,37 @@
 scripts\run-drpa-windows.bat
 ```
 
-这个脚本会：
+### 1.2 Linux / macOS：无需预装 Python
 
-1. 检查项目目录下是否已有 `.tools\uv\uv.exe`。
+在 Linux 或 macOS 上可以直接运行：
+
+```bash
+chmod +x scripts/run-drpa.sh
+./scripts/run-drpa.sh
+```
+
+启动脚本会：
+
+1. 检查项目目录下是否已有 `.tools/uv/` 中的 uv。
 2. 如果没有，会下载 uv standalone。
-3. uv 根据 `.python-version` 自动准备 Python 3.11.9。
-4. 执行 `uv sync`。
+3. uv 根据 `.python-version` 自动准备 Python 3.11.9 到项目 `.venv/`。
+4. 执行 `uv sync --reinstall-package drpa-client`。
 5. 执行 `uv run drpa-client`。
 
-因此用户不需要手动安装 Python。
+因此用户**不需要**手动安装系统 Python。应用和脚本包都只使用项目 `.venv/` 中的 Python。
 
 首次运行需要网络用于下载 uv 和同步应用依赖；脚本包依赖安装仍然使用本地 wheelhouse，不联网。
 
-### 1.2 开发方式
+### 1.3 开发方式（需已安装 uv）
 
 在项目目录运行：
 
 ```bash
-uv sync
+uv sync --reinstall-package drpa-client
 uv run drpa-client
 ```
 
-如果不用 uv，也可以使用：
-
-```bash
-python -m pip install -e .
-drpa-client
-```
+**注意**：不要直接用系统 `python` 或 `drpa-client` 命令启动，否则会被拒绝运行。
 
 ## 2. 目录说明
 
@@ -149,6 +153,14 @@ examples/*.rpaz
 
 修改“当前值”后，下方运行表单会同步更新。
 
+编辑完成后，点击参数表下方的：
+
+```text
+保存参数
+```
+
+即可把当前脚本包的参数保存到本地。下次选中同一个脚本包时，会自动回填上次保存的值，而不是 manifest 默认值。
+
 ### 5.2 运行表单
 
 运行表单也可以修改参数。
@@ -168,6 +180,8 @@ examples/*.rpaz
 
 ## 6. 保存任务配置
 
+除了直接保存参数，也可以把一组参数保存为命名任务，方便管理多套方案。
+
 填写好参数后，可以点击：
 
 ```text
@@ -178,10 +192,10 @@ examples/*.rpaz
 
 以后可以在中间的“任务配置”列表中选择它。
 
-如果修改了参数，可以点击：
+如果修改了已选中的任务配置，可以点击：
 
 ```text
-保存参数
+保存任务
 ```
 
 这样下次选择这个任务配置时，会自动回填上次保存的参数。
@@ -336,7 +350,13 @@ Monaco Editor 未加载
 
 ### 12.3 参数保存在哪里？
 
-任务配置保存在：
+每个脚本包最近一次保存的参数在：
+
+```text
+.drpa-data/package-params.json
+```
+
+命名任务配置保存在：
 
 ```text
 .drpa-data/task-profiles.json

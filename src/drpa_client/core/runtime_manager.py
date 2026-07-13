@@ -4,10 +4,7 @@ import glob
 import json
 import os
 import platform
-import shutil
 import subprocess
-import sys
-import venv
 from collections.abc import Callable
 from pathlib import Path
 
@@ -16,7 +13,13 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
 from .models import DependencySpec, PackageManifest
-from .paths import get_project_venv_dir
+from .paths import (
+    get_project_python,
+    get_project_root,
+    get_project_venv_dir,
+    require_project_python,
+    resolve_uv_executable,
+)
 
 
 class RuntimeErrorDetails(RuntimeError):
@@ -25,7 +28,7 @@ class RuntimeErrorDetails(RuntimeError):
 
 class RuntimeManager:
     def __init__(self, base_python: Path | None = None):
-        self.base_python = base_python or Path(sys.executable)
+        self.base_python = base_python or get_project_python()
 
     def prepare_environment(
         self,
@@ -59,28 +62,18 @@ class RuntimeManager:
         self._validate_python_version(manifest.runtime.python)
         needs_pip = install_dependencies and self._requires_pip(package_dir, manifest.dependencies)
         if not venv_dir.exists():
-            try:
-                _log(log, f"创建虚拟环境：{venv_dir}")
-                venv.EnvBuilder(with_pip=needs_pip, clear=False).create(venv_dir)
-            except Exception as exc:
-                raise RuntimeErrorDetails(
-                    "无法创建项目虚拟环境。请确认当前 Python 支持 venv/ensurepip。"
-                    f"原始错误：{exc}"
-                ) from exc
+            raise RuntimeErrorDetails(
+                f"项目运行环境不存在：{venv_dir}\n"
+                "请运行 scripts/run-drpa-windows.bat 或 scripts/run-drpa.sh，"
+                "或在项目目录执行 uv sync。"
+            )
 
         python = self.python_executable(venv_dir)
-        if needs_pip and not self._has_pip(python):
-            _log(log, f"项目 venv 缺少 pip，重建虚拟环境：{venv_dir}")
-            shutil.rmtree(venv_dir, ignore_errors=True)
-            try:
-                venv.EnvBuilder(with_pip=True, clear=True).create(venv_dir)
-            except Exception as exc:
-                raise RuntimeErrorDetails(
-                    "无法创建带 pip 的项目虚拟环境。请确认当前 Python 支持 ensurepip。"
-                    f"原始错误：{exc}"
-                ) from exc
-            python = self.python_executable(venv_dir)
         if needs_pip:
+            try:
+                resolve_uv_executable()
+            except RuntimeError as exc:
+                raise RuntimeErrorDetails(str(exc)) from exc
             self.install_dependencies(python, package_dir, manifest.dependencies, log=log)
         elif install_dependencies:
             _log(log, "脚本包没有声明额外依赖，跳过 pip 安装")
@@ -128,41 +121,27 @@ class RuntimeManager:
 
     def python_executable(self, venv_dir: Path | None) -> Path:
         if venv_dir is None:
-            return self.base_python
+            raise RuntimeErrorDetails("脚本包必须使用项目统一 .venv 运行")
+        expected = get_project_venv_dir()
+        if venv_dir.resolve() != expected.resolve():
+            raise RuntimeErrorDetails(f"仅支持项目统一 venv：{expected}")
+        python = self._venv_python_path(venv_dir)
+        if not python.exists():
+            raise RuntimeErrorDetails(
+                f"项目 Python 不存在：{python}\n"
+                "请运行 scripts/run-drpa-windows.bat 或 scripts/run-drpa.sh，"
+                "或在项目目录执行 uv sync。"
+            )
+        return python
+
+    def _venv_python_path(self, venv_dir: Path) -> Path:
         if platform.system().lower() == "windows":
             return venv_dir / "Scripts" / "python.exe"
         return venv_dir / "bin" / "python"
 
-    def detect_python_environments(self) -> list[dict[str, str]]:
-        candidates: list[Path] = [self.base_python]
-        env_venv = os.getenv("VIRTUAL_ENV")
-        if env_venv:
-            candidates.append(self.python_executable(Path(env_venv)))
-        for command in ("python3.11", "python3", "python", "python3.12"):
-            found = shutil.which(command)
-            if found:
-                candidates.append(Path(found))
-
-        seen: set[str] = set()
-        results: list[dict[str, str]] = []
-        for candidate in candidates:
-            key = str(candidate)
-            if key in seen or not candidate.exists():
-                continue
-            seen.add(key)
-            info = self._inspect_python(candidate)
-            if info:
-                results.append(info)
-        return results
-
     def _validate_python_version(self, spec: str) -> None:
-        try:
-            specifier = SpecifierSet(spec)
-        except Exception as exc:  # noqa: BLE001 - packaging raises several subclasses
-            raise RuntimeErrorDetails(f"Python 版本约束无效：{spec}") from exc
-        current = Version(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
-        if current not in specifier:
-            raise RuntimeErrorDetails(f"当前 Python {current} 不满足脚本包要求：{spec}")
+        python = require_project_python()
+        self._validate_python_executable_version(python, spec)
 
     def _validate_python_executable_version(self, python: Path, spec: str) -> None:
         info = self._inspect_python(python)
@@ -188,6 +167,8 @@ class RuntimeManager:
             result = subprocess.run(
                 [str(python), "-c", script],
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 capture_output=True,
                 timeout=5,
                 check=False,
@@ -201,15 +182,6 @@ class RuntimeManager:
         except json.JSONDecodeError:
             return None
         return {key: str(value) for key, value in raw.items()}
-
-    def _has_pip(self, python: Path) -> bool:
-        result = subprocess.run(
-            [str(python), "-m", "pip", "--version"],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        return result.returncode == 0
 
     def _collect_find_links(self, package_dir: Path, dependencies: DependencySpec) -> list[str]:
         directories: list[Path] = []
@@ -272,15 +244,19 @@ class RuntimeManager:
         env = os.environ.copy()
         env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
         env.setdefault("UV_NO_PROGRESS", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
         command = _dependency_install_command(python, args)
         _log(log, f"执行：{' '.join(command)}")
         process = subprocess.Popen(
             command,
             cwd=cwd,
             env=env,
-            text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         output: list[str] = []
         assert process.stdout is not None
@@ -303,32 +279,17 @@ def _log(callback: Callable[[str], None] | None, message: str) -> None:
 
 
 def _dependency_install_command(python: Path, args: list[str]) -> list[str]:
-    uv = shutil.which("uv")
-    if uv and args and args[0] == "install":
-        return [uv, "pip", "install", "--python", str(python), *args[1:]]
-    return [str(python), "-m", "pip", *args]
+    if not args or args[0] != "install":
+        raise RuntimeErrorDetails("依赖安装仅支持 pip install，且必须通过 uv 执行")
+    try:
+        uv = resolve_uv_executable()
+    except RuntimeError as exc:
+        raise RuntimeErrorDetails(str(exc)) from exc
+    return [uv, "pip", "install", "--python", str(python), *args[1:]]
 
 
-def _candidate_install_roots(start: Path) -> list[Path]:
-    candidates: list[Path] = []
-    raw_candidates = [
-        Path.cwd(),
-        Path(sys.executable).resolve().parent,
-        Path(sys.argv[0]).resolve().parent if sys.argv and sys.argv[0] else None,
-        start,
-        *start.parents,
-    ]
-    seen: set[Path] = set()
-    for item in raw_candidates:
-        if item is None:
-            continue
-        path = item.resolve()
-        if path.is_file():
-            path = path.parent
-        if path not in seen:
-            candidates.append(path)
-            seen.add(path)
-    return candidates
+def _candidate_install_roots(_start: Path) -> list[Path]:
+    return [get_project_root().resolve()]
 
 
 def _global_wheel_constraints(wheel_dirs: list[Path]) -> list[str]:

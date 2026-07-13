@@ -109,6 +109,8 @@ class TaskRunner:
         if env.get("PYTHONPATH"):
             pythonpath.append(env["PYTHONPATH"])
         env["PYTHONPATH"] = os.pathsep.join(pythonpath)
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
 
         process = subprocess.Popen(
             [str(python), str(bootstrap), str(config_path)],
@@ -117,6 +119,8 @@ class TaskRunner:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
 

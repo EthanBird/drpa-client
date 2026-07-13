@@ -14,6 +14,7 @@ Primary packages included:
 - requests
 - pandas
 - openpyxl
+- xlwt
 
 The wheelhouse also includes transitive dependencies required by those packages.
 Windows-specific conditional dependencies are included as well, for example:
@@ -47,7 +48,7 @@ python3 -m pip download \
   --implementation cp \
   --python-version 311 \
   --abi cp311 \
-  DrissionPage requests pandas openpyxl
+  DrissionPage requests pandas openpyxl xlwt
 
 python3 -m pip download \
   --dest wheelhouse/windows-amd64 \
@@ -56,5 +57,5 @@ python3 -m pip download \
   --implementation cp \
   --python-version 311 \
   --abi cp311 \
-  DrissionPage requests pandas openpyxl
+  DrissionPage requests pandas openpyxl xlwt
 ```
