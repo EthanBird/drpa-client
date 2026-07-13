@@ -100,7 +100,8 @@ fn demo_snapshot() -> WorkspaceSnapshot {
             PackageSummary {
                 id: "com.drpa.invoice-hub".to_owned(),
                 name: "Invoice Hub".to_owned(),
-                description: "Collect, normalize and archive invoices across supplier portals.".to_owned(),
+                description: "Collect, normalize and archive invoices across supplier portals."
+                    .to_owned(),
                 version: "2.4.1".to_owned(),
                 runtime: "Python 3.11".to_owned(),
                 trust: TrustLevel::Verified,
@@ -165,7 +166,12 @@ mod tests {
         let state = HostState::demo();
         let run_id = state.start_run("com.drpa.invoice-hub", "monthly").unwrap();
         state.cancel_run(&run_id).unwrap();
-        let run = state.snapshot().runs.into_iter().find(|run| run.id == run_id).unwrap();
+        let run = state
+            .snapshot()
+            .runs
+            .into_iter()
+            .find(|run| run.id == run_id)
+            .unwrap();
         assert!(matches!(run.status, RunStatus::Cancelled));
     }
 }

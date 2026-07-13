@@ -118,7 +118,9 @@ pub enum RuntimeRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RuntimeEvent {
-    Ready { protocol: u16 },
+    Ready {
+        protocol: u16,
+    },
     Log {
         sequence: u64,
         level: LogLevel,
@@ -136,11 +138,17 @@ pub enum RuntimeEvent {
         label: String,
         media_type: Option<String>,
     },
-    Warning { sequence: u64, message: String },
+    Warning {
+        sequence: u64,
+        message: String,
+    },
     Error {
         sequence: u64,
         message: String,
         traceback: Option<String>,
     },
-    Completed { sequence: u64, exit_code: i32 },
+    Completed {
+        sequence: u64,
+        exit_code: i32,
+    },
 }

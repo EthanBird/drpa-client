@@ -48,7 +48,10 @@ pub struct PackageManifest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "runtime", rename_all = "lowercase")]
 pub enum Entrypoint {
-    Python { module: String, callable: String },
+    Python {
+        module: String,
+        callable: String,
+    },
     Command {
         executable: String,
         #[serde(default)]
@@ -108,8 +111,8 @@ pub enum ParameterKind {
 
 impl PackageManifest {
     pub fn from_yaml(source: &str) -> Result<Self, ManifestError> {
-        let manifest: Self =
-            serde_yaml::from_str(source).map_err(|error| ManifestError::Decode(error.to_string()))?;
+        let manifest: Self = serde_yaml::from_str(source)
+            .map_err(|error| ManifestError::Decode(error.to_string()))?;
         manifest.validate()?;
         Ok(manifest)
     }
@@ -231,7 +234,9 @@ pub fn safe_relative_path(value: &str) -> Result<PathBuf, ManifestError> {
         && !value.contains('\0')
         && !value.contains(':')
         && !path.is_absolute()
-        && path.components().all(|component| matches!(component, Component::Normal(_)));
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)));
     if valid {
         Ok(path.to_path_buf())
     } else {
