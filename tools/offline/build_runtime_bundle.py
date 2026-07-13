@@ -186,7 +186,7 @@ def smoke_test(stage: Path, chrome_platform: str) -> None:
     run([str(python), "-c", smoke_script], env={**offline_env, "DRPA_BROWSER_PATH": str(browser)})
     kernel_input = "\n".join(
         [
-            json.dumps({"type": "execute", "request_id": "one", "code": "value = 40\\nprint('ready')"}),
+            json.dumps({"type": "execute", "request_id": "one", "code": "value = 40\nprint('ready')"}),
             json.dumps({"type": "execute", "request_id": "two", "code": "value + 2"}),
             "",
         ]
