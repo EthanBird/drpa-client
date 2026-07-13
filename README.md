@@ -1,52 +1,91 @@
 # DRPA Next
 
-DRPA Next is a cross-platform code package runtime and operations workspace. It is designed for teams that need to distribute, configure, run, observe, and govern automation packages without asking end users to manage language runtimes.
+DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管理器。用户只需安装一次桌面应用，即可在不配置系统 Python 的情况下安装、开发、运行、观察和更新 `.rpaz` 自动化脚本包。
 
-The product is being rebuilt around three boundaries:
+当前版本为 `0.2.0` Windows x64 离线预览版。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
-- **Desktop experience** — Tauri 2, React, and TypeScript.
-- **Host control plane** — a Rust core that owns package installation, runtime selection, process supervision, audit history, permissions, and secrets.
-- **Runtime adapters** — Python first, with Node and native command adapters planned.
+## 当前能力
 
-The previous PySide6 desktop interface is no longer the product entry point. Its package format and task behavior are migration inputs for DRPA Next.
+- 中文默认界面，支持正常移动、缩放、最大化、最小化和关闭窗口。
+- 引导式、无注册表写入的 Windows NSIS 安装器；应用和用户数据均可放在非系统盘安装目录。
+- 内置 CPython 3.11、完整离线 wheels、Chrome for Testing、Fixed Version WebView2 和真实 Jupyter Kernel 依赖。
+- 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
+- 工作室可新建项目、编辑源码和 Notebook、直接运行工作副本、导出 `.rpaz`，也可将已安装包复制为可编辑项目。
+- 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路。
+- 文件级 `.drpa-update` 更新，包含散列校验、原子替换、失败回滚和自动重启，并始终保护安装目录下的 `data/`。
 
-## Repository layout
+Windows 预览版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v0.2.0-preview-10>
+
+> preview-7 等旧安装不包含更新器，需要先安装 preview-10 建立热更新基线。之后可在“设置 → Windows 文件级热更新”应用 `.drpa-update`。
+
+## 架构边界
 
 ```text
-apps/desktop/             Tauri desktop application and React UI
-crates/                   Rust domain and host-control crates
-runtime/python/           Python runtime adapter
-design-system/            Product-wide UI rules and page overrides
-docs/architecture/        Architecture decisions and migration plan
-legacy/                   Temporary compatibility material during migration
+React / TypeScript UI
+        │ typed Tauri invoke
+        ▼
+Rust Host ── package / runtime / run / update policy
+        │ versioned JSONL + Jupyter wire protocol
+        ▼
+Sealed Python 3.11 ── RPAZ worker / IPython kernel / Chrome
 ```
 
-## Frontend development
+- `apps/desktop/`：Tauri 2 桌面壳、React UI、窗口和更新器。
+- `crates/drpa-package/`：manifest、归档和路径安全规则。
+- `crates/drpa-host/`：包、运行记录和 Host 领域服务。
+- `crates/drpa-protocol/`：前后端与运行时共享 DTO/事件协议。
+- `runtime/python/`：RPAZ Python adapter、Runtime Context 和 Jupyter bridge。
+- `offline/`：离线运行时规范、精确依赖锁和引导脚本。
+- `installer/windows/`：无注册表 NSIS 安装器。
+- `tools/windows/`：Windows 文件级更新包生成器。
 
-The frontend can run without Tauri. When no Tauri host is detected it uses a deterministic local gateway, so visual development and component tests stay fast.
+UI 不是安全边界。所有文件路径、包清单、更新清单和运行请求都必须由 Rust Host 再次验证。
+
+## 本地开发
+
+要求 Node.js 24+、Rust stable 和 Tauri 2 的 Windows 构建依赖。前端浏览器预览使用确定性的 mock gateway，不需要启动 Rust Host：
 
 ```bash
-npm install
+npm ci
 npm run dev
 npm run typecheck
 npm run test
 npm run build
 ```
 
-## Desktop development
-
-Install the platform prerequisites from the Tauri documentation, then run:
+Windows 桌面联调：
 
 ```bash
 npm run tauri:dev
 ```
 
-## Product status
+Rust 与 Python 验证：
 
-The `codex/drpa-next-platform` branch is the architectural reset. It now includes a Chinese-first desktop shell, real schema-v2 package installation, a local Monaco-based RPaz Studio, manifest-driven workbench parameters, and the Host-to-sealed-Python execution bridge.
+```bash
+cargo fmt --all --check
+cargo clippy -p drpa-protocol -p drpa-package -p drpa-host --all-targets -- -D warnings
+cargo test -p drpa-protocol -p drpa-package -p drpa-host
+python -m pip install -e "./runtime/python[test]"
+python -m pytest -q runtime/python/tests
+python tools/offline/validate_requirements.py offline/requirements/runtime.txt
+```
 
-Offline machines use a native sealed runtime bundle, not the source-tree wheel cache. The current delivery is Windows x64 only. See [`offline/README.md`](offline/README.md) for the exact dependency policy, air-gap verification and GitHub release process.
+正式 Windows 安装包必须由 GitHub Actions 的原生 Windows runner 构建和进行最终安装布局验证，不要将本地前端 build 当成离线发布验收。
 
-See [`docs/RPAZ_DEVELOPMENT.md`](docs/RPAZ_DEVELOPMENT.md) for the package schema, Runtime Context API, direct-run Studio workflow, notebook development and Bing daily-image example. The source-based Jupyter design and supported feature boundary are recorded in [`docs/JUPYTER_INTEGRATION.md`](docs/JUPYTER_INTEGRATION.md); enabled and intentionally unavailable UI actions are listed in [`docs/UI_INTERACTION_AUDIT.md`](docs/UI_INTERACTION_AUDIT.md).
+## 文档导航
 
-Windows releases use a guided, per-user NSIS installer that performs file extraction and creates `.lnk` shortcuts only. It does not read or write application registry keys, does not register an uninstaller, and refuses installation on the Windows system drive. The sealed Python runtime, Fixed Version WebView2, projects, packages, run history, browser state and settings all remain beside the application.
+- [开发与交接手册](docs/DEVELOPMENT.md)：当前实现、目录、数据、测试、发布和接手清单。
+- [功能扩展路线](docs/ROADMAP.md)：离线基础环境、自动化任务和 AI Agent 辅助开发。
+- [RPAZ 开发](docs/RPAZ_DEVELOPMENT.md)：schema v2、Runtime Context、直接运行和示例包。
+- [Jupyter 集成](docs/JUPYTER_INTEGRATION.md)：真实能力、VS Code Jupyter 对照和明确边界。
+- [离线运行时](offline/README.md)：依赖策略、构建证明和缺包处理流程。
+- [Windows 发布说明](docs/PORTABLE_RELEASE.md)：安装、数据目录和热更新。
+- [架构设计](docs/architecture/DRPA_NEXT.md)：长期模块边界和安全原则。
+- [更新日志](CHANGELOG.md)：面向发布和接手者的变更记录。
+
+## 当前限制
+
+- 只发布 Windows x64；Linux/macOS 仍是未来适配目标，不属于当前交付承诺。
+- 当前更新入口使用本地 `.drpa-update`，尚未实现在线更新源、签名信任链和差分块下载。
+- Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
+- 自动调度、浏览器录制器、包签名/私有仓库和 AI Agent 均处于设计阶段，详见路线文档。

@@ -1,5 +1,7 @@
 # DRPA Client 功能设计文档
 
+> **历史文档：** 本文主体描述旧 PySide6 客户端，不能作为 DRPA Next 当前实现或发布承诺。当前能力请以仓库根目录 `README.md` 和 [`DEVELOPMENT.md`](DEVELOPMENT.md) 为准；未来扩展请看 [`ROADMAP.md`](ROADMAP.md)。保留本文仅用于迁移时核对旧产品流程。
+
 本文档描述 DRPA Client 的产品功能设计。`DEVELOPMENT.md` 更偏工程实现，本文更偏产品模块、用户流程、能力边界和后续演进。
 
 ## 1. 产品定位

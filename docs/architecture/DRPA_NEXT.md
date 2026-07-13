@@ -1,5 +1,7 @@
 # DRPA Next architecture
 
+> 本文记录长期目标架构。当前可交付基线是 Windows x64、单一 sealed Python 3.11 baseline 和本地 `.drpa-update`；尚未实现的 content-addressed 多环境、包签名、跨平台安装器和远程 worker 均属于路线目标。当前实现与接手说明以 [`../DEVELOPMENT.md`](../DEVELOPMENT.md) 为准。
+
 ## 1. Product definition
 
 DRPA Next is not a low-code designer and not merely a Python script launcher. It is a local-first control plane for executable code packages.
@@ -26,7 +28,7 @@ The initial market is Python and DrissionPage automation, but the domain model m
 
 ### Desktop shell
 
-- **Tauri 2** for Windows, macOS, and Linux packaging.
+- **Tauri 2** for the current Windows desktop package, while keeping host APIs portable for later macOS and Linux work.
 - **Rust** for privileged host operations, process supervision, filesystem policy, package verification, and persistence.
 - Tauri capabilities expose a deliberately small command surface to the webview.
 
@@ -128,7 +130,7 @@ Rules:
 
 ## 6. Runtime isolation
 
-One shared project virtual environment is removed.
+The current Windows preview creates one verified application baseline environment beside the install. A package cannot mutate it at runtime. Content-addressed per-lock environments remain the intended next isolation step:
 
 Environment key:
 
@@ -138,7 +140,7 @@ sha256(runtime adapter + runtime version + platform + architecture + lock file)
 
 Multiple packages may reuse an identical immutable environment. Updating one package cannot silently change another package's dependencies.
 
-Process controls are platform adapters:
+Future process controls remain platform adapters:
 
 - Windows: Job Objects for process-tree lifetime and resource limits.
 - Linux: process groups first; optional cgroup/namespace backend when available.
@@ -183,7 +185,8 @@ Budgets are CI-visible measurements, not marketing claims.
 
 ## 10. Delivery model
 
-- GitHub Actions matrix: Windows x64, macOS arm64/x64, Linux x64.
-- Signed installers and updater artifacts are a release requirement.
-- Runtime sidecars and wheel caches are separate versioned artifacts so a UI update does not redownload every runtime.
-- A software bill of materials and dependency licenses are generated per release.
+- Current release workflow: Windows x64 only, built and smoke-tested on a native Windows runner.
+- Current preview assets are unsigned and always include SHA-256 files; signed installers, update manifests and key rotation are stable-release requirements.
+- Runtime and desktop are separately versioned GitHub assets. The current desktop update may still contain large changed files; content-addressed delta delivery is future work.
+- A software bill of materials and dependency-license inventory are required before the stable release.
+- macOS and Linux remain future targets and must not be advertised until native offline runtime, installer, data-path and process-lifecycle tests pass.
