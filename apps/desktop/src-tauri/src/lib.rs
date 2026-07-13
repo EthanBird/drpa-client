@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use drpa_host::{HostState, RunLaunch};
-use drpa_package::{safe_relative_path, validate_package_id, PackageManifest};
-use drpa_protocol::{PackageSummary, RuntimeEvent, WorkspaceSnapshot, RUNTIME_PROTOCOL_VERSION};
+use drpa_package::{PackageManifest, safe_relative_path, validate_package_id};
+use drpa_protocol::{PackageSummary, RUNTIME_PROTOCOL_VERSION, RuntimeEvent, WorkspaceSnapshot};
 use serde::Serialize;
 use tauri::{Manager, State};
 use zip::write::SimpleFileOptions;
@@ -78,7 +78,8 @@ fn list_studio_projects(paths: State<'_, AppPaths>) -> Result<Vec<StudioProject>
             .and_then(|source| PackageManifest::from_yaml(&source).ok())
             .map_or_else(|| id.clone(), |manifest| manifest.name);
         let mut files = Vec::new();
-        collect_files(&entry.path(), &entry.path(), &mut files).map_err(|error| error.to_string())?;
+        collect_files(&entry.path(), &entry.path(), &mut files)
+            .map_err(|error| error.to_string())?;
         files.sort();
         projects.push(StudioProject { id, name, files });
     }
@@ -126,8 +127,14 @@ fn read_project_file(
 ) -> Result<String, String> {
     validate_package_id(&project_id).map_err(|error| error.to_string())?;
     let relative = safe_relative_path(&relative_path).map_err(|error| error.to_string())?;
-    fs::read_to_string(paths.workspace_root.join("projects").join(project_id).join(relative))
-        .map_err(|error| error.to_string())
+    fs::read_to_string(
+        paths
+            .workspace_root
+            .join("projects")
+            .join(project_id)
+            .join(relative),
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -139,7 +146,11 @@ fn write_project_file(
 ) -> Result<(), String> {
     validate_package_id(&project_id).map_err(|error| error.to_string())?;
     let relative = safe_relative_path(&relative_path).map_err(|error| error.to_string())?;
-    let target = paths.workspace_root.join("projects").join(project_id).join(relative);
+    let target = paths
+        .workspace_root
+        .join("projects")
+        .join(project_id)
+        .join(relative);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -147,15 +158,13 @@ fn write_project_file(
 }
 
 #[tauri::command]
-fn build_studio_project(
-    project_id: String,
-    paths: State<'_, AppPaths>,
-) -> Result<String, String> {
+fn build_studio_project(project_id: String, paths: State<'_, AppPaths>) -> Result<String, String> {
     validate_package_id(&project_id).map_err(|error| error.to_string())?;
     let root = paths.workspace_root.join("projects").join(&project_id);
     let manifest_source = fs::read_to_string(root.join("manifest.yaml"))
         .map_err(|error| format!("无法读取 manifest.yaml：{error}"))?;
-    let manifest = PackageManifest::from_yaml(&manifest_source).map_err(|error| error.to_string())?;
+    let manifest =
+        PackageManifest::from_yaml(&manifest_source).map_err(|error| error.to_string())?;
     let output_root = paths.workspace_root.join("build");
     fs::create_dir_all(&output_root).map_err(|error| error.to_string())?;
     let output = output_root.join(format!("{}-{}.rpaz", manifest.id, manifest.version));
@@ -174,7 +183,9 @@ fn build_studio_project(
         File::open(source)
             .and_then(|mut file| file.read_to_end(&mut content))
             .map_err(|error| error.to_string())?;
-        archive.write_all(&content).map_err(|error| error.to_string())?;
+        archive
+            .write_all(&content)
+            .map_err(|error| error.to_string())?;
     }
     archive.finish().map_err(|error| error.to_string())?;
     Ok(output.to_string_lossy().into_owned())
@@ -299,8 +310,7 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
 
     #[cfg(debug_assertions)]
     {
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../runtime/python/src");
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/python/src");
         if source.is_dir() {
             return Ok(RuntimeEnvironment {
                 python: PathBuf::from(if cfg!(windows) { "python" } else { "python3" }),

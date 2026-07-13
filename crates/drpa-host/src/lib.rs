@@ -174,7 +174,11 @@ impl HostState {
             .join("packages")
             .join(package_id)
             .join(&package.version);
-        let output_dir = self.workspace_root.join("runs").join(&run_id).join("outputs");
+        let output_dir = self
+            .workspace_root
+            .join("runs")
+            .join(&run_id)
+            .join("outputs");
         let run = RunSummary {
             id: run_id.clone(),
             package_name: package.name.clone(),
@@ -334,7 +338,10 @@ fn validate_archive(archive: &mut ZipArchive<File>) -> Result<(), HostError> {
         if !paths.insert(name.clone()) {
             return Err(HostError::UnsafeArchivePath(format!("重复路径：{name}")));
         }
-        if entry.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
             return Err(HostError::UnsafeArchivePath(name));
         }
         if !entry.is_dir() {
@@ -402,14 +409,17 @@ fn manifest_summary(manifest: &PackageManifest) -> PackageSummary {
         name: manifest.name.clone(),
         description: "本地安装的自动化脚本包".to_owned(),
         version: manifest.version.clone(),
-        runtime: manifest
-            .runtime
-            .python
-            .as_ref()
-            .map_or_else(|| "命令行".to_owned(), |version| format!("Python {version}")),
+        runtime: manifest.runtime.python.as_ref().map_or_else(
+            || "命令行".to_owned(),
+            |version| format!("Python {version}"),
+        ),
         trust: TrustLevel::Local,
         accent: "#57d6a0".to_owned(),
-        initials: if initials.is_empty() { "RP".to_owned() } else { initials },
+        initials: if initials.is_empty() {
+            "RP".to_owned()
+        } else {
+            initials
+        },
         parameters: manifest
             .parameters
             .iter()
@@ -473,7 +483,11 @@ mod tests {
         let installed = state.install_package(&archive_path).unwrap();
         assert_eq!(installed.id, "com.example.test");
         assert_eq!(installed.parameters.len(), 1);
-        assert!(workspace.join("packages/com.example.test/0.1.0/main.py").is_file());
+        assert!(
+            workspace
+                .join("packages/com.example.test/0.1.0/main.py")
+                .is_file()
+        );
 
         let launch = state
             .prepare_run(
@@ -490,7 +504,10 @@ mod tests {
                 exit_code: 0,
             },
         );
-        assert!(matches!(state.snapshot().runs[0].status, RunStatus::Success));
+        assert!(matches!(
+            state.snapshot().runs[0].status,
+            RunStatus::Success
+        ));
         assert_eq!(state.snapshot().stats.active_runs, 0);
 
         let restored = HostState::new(workspace);
