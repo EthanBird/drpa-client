@@ -164,7 +164,7 @@ fn create_studio_project(
     .map_err(|error| error.to_string())?;
     fs::write(
         root.join("notebook.ipynb"),
-        r#"{
+        r##"{
   "cells": [
     {
       "cell_type": "code",
@@ -181,7 +181,7 @@ fn create_studio_project(
   "nbformat": 4,
   "nbformat_minor": 5
 }
-"#,
+"##,
     )
     .map_err(|error| error.to_string())?;
     Ok(StudioProject {
