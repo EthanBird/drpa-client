@@ -36,6 +36,7 @@ def test_execute_request_emits_versioned_events(tmp_path: Path) -> None:
         package_dir=package_dir,
         output_dir=output_dir,
         entrypoint="main.py",
+        callable="main",
         parameters={},
     )
 
@@ -60,6 +61,7 @@ def test_execute_request_rejects_entrypoint_escape(tmp_path: Path) -> None:
         package_dir=package_dir,
         output_dir=tmp_path / "output",
         entrypoint="../outside.py",
+        callable="main",
         parameters={},
     )
 

@@ -4,6 +4,7 @@ import {
   Boxes,
   ChevronDown,
   CircleHelp,
+  Code2,
   Command,
   Gauge,
   KeyRound,
@@ -31,11 +32,12 @@ const primaryNavigation: Array<{
   icon: typeof Gauge;
   shortcut?: string;
 }> = [
-  { id: "overview", label: "Overview", icon: Gauge },
-  { id: "library", label: "Library", icon: Library },
-  { id: "workbench", label: "Workbench", icon: Blocks, shortcut: "⌘1" },
-  { id: "runs", label: "Runs", icon: ListTodo },
-  { id: "automations", label: "Automations", icon: Zap },
+  { id: "overview", label: "总览", icon: Gauge },
+  { id: "library", label: "脚本包", icon: Library },
+  { id: "studio", label: "开发工作室", icon: Code2 },
+  { id: "workbench", label: "运行工作台", icon: Blocks, shortcut: "⌘1" },
+  { id: "runs", label: "运行记录", icon: ListTodo },
+  { id: "automations", label: "自动化计划", icon: Zap },
 ];
 
 const infrastructureNavigation: Array<{
@@ -43,8 +45,8 @@ const infrastructureNavigation: Array<{
   label: string;
   icon: typeof Gauge;
 }> = [
-  { id: "runtimes", label: "Runtime Center", icon: Boxes },
-  { id: "secrets", label: "Secrets", icon: KeyRound },
+  { id: "runtimes", label: "运行环境", icon: Boxes },
+  { id: "secrets", label: "凭据保险箱", icon: KeyRound },
 ];
 
 export function AppShell({ children }: PropsWithChildren) {
@@ -73,37 +75,37 @@ export function AppShell({ children }: PropsWithChildren) {
           <span className="brand-name">DRPA</span>
           <span className="release-chip">NEXT</span>
         </div>
-        <button className="workspace-switcher" type="button">
+        <button className="workspace-switcher" type="button" disabled title="当前版本使用单一离线工作区">
           <span className="workspace-dot" />
-          Personal workspace
+          个人工作区
           <ChevronDown size={14} />
         </button>
         <div className="titlebar-spacer" />
-        <button className="sync-state" type="button" aria-label="Runtime status">
+        <button className="sync-state" type="button" aria-label="Host 状态" onClick={() => setActiveNavigation("runtimes")}>
           <span className="pulse-dot" />
-          Runtime healthy
+          Host 已连接
         </button>
-        <div className="window-controls" aria-label="Window controls">
-          <button type="button" aria-label="Minimize" onClick={() => controlWindow("minimize")}><Minus size={14} /></button>
-          <button type="button" aria-label="Maximize" onClick={() => controlWindow("maximize")}><Maximize2 size={13} /></button>
-          <button type="button" aria-label="Close" onClick={() => controlWindow("close")}><X size={14} /></button>
+        <div className="window-controls" aria-label="窗口控制">
+          <button type="button" aria-label="最小化" onClick={() => controlWindow("minimize")}><Minus size={14} /></button>
+          <button type="button" aria-label="最大化" onClick={() => controlWindow("maximize")}><Maximize2 size={13} /></button>
+          <button type="button" aria-label="关闭" onClick={() => controlWindow("close")}><X size={14} /></button>
         </div>
       </header>
 
       <aside className="sidebar">
         <button className="command-trigger" type="button" onClick={() => setCommandOpen(true)}>
           <Search size={15} />
-          <span>Search or run a command</span>
+          <span>搜索或运行命令</span>
           <kbd>⌘ K</kbd>
         </button>
 
-        <nav aria-label="Primary navigation">
+        <nav aria-label="主导航">
           <NavigationGroup
             items={primaryNavigation}
             activeId={activeNavigation}
             onSelect={setActiveNavigation}
           />
-          <div className="nav-label">Infrastructure</div>
+          <div className="nav-label">基础设施</div>
           <NavigationGroup
             items={infrastructureNavigation}
             activeId={activeNavigation}
@@ -112,25 +114,25 @@ export function AppShell({ children }: PropsWithChildren) {
         </nav>
 
         <div className="sidebar-spacer" />
-        <div className="quick-run-card">
+        <button className="quick-run-card" type="button" onClick={() => setActiveNavigation("library")}>
           <div className="quick-run-icon"><Sparkles size={16} /></div>
           <div>
-            <strong>Quick run</strong>
-            <span>Drop a package or Python file</span>
+            <strong>快速安装</strong>
+            <span>导入 rpaz 脚本包</span>
           </div>
           <Play size={14} fill="currentColor" />
-        </div>
+        </button>
         <div className="sidebar-utility">
-          <button type="button"><CircleHelp size={16} /><span>Help & diagnostics</span></button>
-          <button type="button"><Settings size={16} /><span>Settings</span></button>
+          <button type="button" onClick={() => setActiveNavigation("settings")}><CircleHelp size={16} /><span>帮助与诊断</span></button>
+          <button type="button" onClick={() => setActiveNavigation("settings")}><Settings size={16} /><span>设置</span></button>
           <button type="button" onClick={toggleCompactMode} aria-pressed={compactMode}>
             <PanelLeftClose size={16} />
-            <span>{compactMode ? "Comfortable density" : "Compact density"}</span>
+            <span>{compactMode ? "舒适布局" : "紧凑布局"}</span>
           </button>
         </div>
         <div className="account-card">
           <div className="avatar">EB</div>
-          <div><strong>Ethan Bird</strong><span>Administrator</span></div>
+          <div><strong>Ethan Bird</strong><span>管理员</span></div>
           <ChevronDown size={14} />
         </div>
       </aside>

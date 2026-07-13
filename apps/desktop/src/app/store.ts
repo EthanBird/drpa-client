@@ -20,12 +20,12 @@ interface AppStore {
 }
 
 export const useAppStore = create<AppStore>((set) => ({
-  activeNavigation: "workbench",
+  activeNavigation: "overview",
   commandOpen: false,
   compactMode: false,
   inspectorOpen: true,
-  selectedPackageId: "com.drpa.invoice-hub",
-  selectedProfileId: "monthly",
+  selectedPackageId: "",
+  selectedProfileId: "",
   snapshot: null,
   setActiveNavigation: (activeNavigation) => set({ activeNavigation }),
   setCommandOpen: (commandOpen) => set({ commandOpen }),

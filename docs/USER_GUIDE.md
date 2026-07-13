@@ -1,5 +1,7 @@
 # DRPA Client 使用文档
 
+> 本页保留的是旧版 PySide6 客户端流程，不适用于 DRPA Next 桌面端。DRPA Next 使用随应用发布的 sealed runtime，不会在离线机器下载 uv、Python 或 pip 依赖；RPaz 开发请阅读 [`RPAZ_DEVELOPMENT.md`](RPAZ_DEVELOPMENT.md)。
+
 本文档面向最终用户，说明如何安装依赖、安装脚本包、编辑参数、保存任务配置、运行任务和查看结果。
 
 ## 1. 启动程序

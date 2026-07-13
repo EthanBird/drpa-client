@@ -1,11 +1,13 @@
 export type NavigationId =
   | "overview"
   | "library"
+  | "studio"
   | "workbench"
   | "runs"
   | "automations"
   | "runtimes"
-  | "secrets";
+  | "secrets"
+  | "settings";
 
 export type RunStatus = "running" | "queued" | "success" | "failed" | "cancelled";
 export type TrustLevel = "verified" | "local" | "untrusted";
@@ -19,7 +21,20 @@ export interface PackageSummary {
   trust: TrustLevel;
   accent: string;
   initials: string;
+  parameters: ParameterSummary[];
   profiles: TaskProfile[];
+}
+
+export interface ParameterSummary {
+  id: string;
+  kind: "string" | "number" | "boolean" | "secret" | "file" | "directory";
+  required: boolean;
+}
+
+export interface StudioProject {
+  id: string;
+  name: string;
+  files: string[];
 }
 
 export interface TaskProfile {

@@ -1,22 +1,10 @@
-name: Desktop preview installers
+name: Desktop packaging validation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - codex/drpa-next-platform
-    paths:
-      - ".github/workflows/desktop-release.yml"
-      - "apps/desktop/**"
-      - "crates/**"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "package-lock.json"
-      - "package.json"
-      - "tools/release/**"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: desktop-preview-${{ github.ref }}
@@ -32,7 +20,7 @@ jobs:
           - platform: windows-x86_64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
-            bundles: nsis
+            bundles: portable-host
           - platform: linux-x86_64
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -68,17 +56,33 @@ jobs:
       - run: npm ci
       - name: Generate native icon formats
         run: npm exec --workspace @drpa/desktop -- tauri icon src-tauri/icons/icon.png
-      - name: Build native installer
+      - name: Build native package
+        if: runner.os != 'Windows'
         env:
           APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && '-' || '' }}
         run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
+      - name: Build Windows GUI host without an installer
+        if: runner.os == 'Windows'
+        run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --no-bundle
       - name: Normalize installer names and checksums
+        if: runner.os != 'Windows'
         run: >-
           python tools/release/collect_desktop_assets.py
           --platform "${{ matrix.platform }}"
           --version "0.2.0"
           --bundle-dir "target/${{ matrix.target }}/release/bundle"
           --output "${{ runner.temp }}/desktop-assets"
+      - name: Collect Windows host for engineering validation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $assets = Join-Path $env:RUNNER_TEMP "desktop-assets"
+          New-Item -ItemType Directory -Force -Path $assets | Out-Null
+          $binary = "target/${{ matrix.target }}/release/drpa-desktop.exe"
+          $archive = Join-Path $assets "drpa-next-0.2.0-windows-x86_64-host-only.zip"
+          Compress-Archive -Path $binary -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii "$archive.sha256"
       - name: Upload installer assets
         uses: actions/upload-artifact@v4
         with:
@@ -87,35 +91,3 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
-
-  publish:
-    name: Publish GitHub prerelease
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - name: Publish immutable desktop preview
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="desktop-v0.2.0-preview-${GITHUB_RUN_NUMBER}"
-          mapfile -t assets < <(find artifacts -type f | sort)
-          test "${#assets[@]}" -eq 10
-          cat > "${RUNNER_TEMP}/release-notes.md" <<'EOF'
-          Engineering preview of the DRPA Next desktop host and interface.
-
-          Included native packages:
-          - Windows x64 NSIS installer (with the WebView2 offline installer embedded)
-          - Linux x64 AppImage and Debian package
-          - macOS Apple Silicon and Intel disk images
-
-          Every installer has a matching SHA-256 file. This preview is intentionally unsigned and is not yet notarized; operating systems may show an unknown-publisher warning. The sealed, air-gap-tested Python runtime bundles are published separately in the latest `offline-runtime-*` prerelease. Runtime embedding and production signing are release gates, not claims of this preview.
-          EOF
-          gh release create "$tag" "${assets[@]}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --prerelease \
-            --title "DRPA Next desktop preview · run ${GITHUB_RUN_NUMBER}" \
-            --notes-file "${RUNNER_TEMP}/release-notes.md"

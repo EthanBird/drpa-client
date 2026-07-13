@@ -20,6 +20,7 @@ class ExecutionRequest:
     package_dir: Path
     output_dir: Path
     entrypoint: str
+    callable: str
     parameters: dict[str, Any]
 
     @classmethod
@@ -31,6 +32,7 @@ class ExecutionRequest:
             package_dir=Path(raw["package_dir"]),
             output_dir=Path(raw["output_dir"]),
             entrypoint=str(raw["entrypoint"]),
+            callable=str(raw.get("callable") or "main"),
             parameters=dict(raw.get("parameters") or {}),
         )
 
@@ -56,9 +58,9 @@ def execute_request(request: ExecutionRequest, events: EventWriter) -> int:
     events.emit("ready", protocol=1)
     try:
         module = _load_entrypoint(entrypoint, request.run_id)
-        entry = getattr(module, "main", None)
+        entry = getattr(module, request.callable, None)
         if not callable(entry):
-            raise TypeError("package entrypoint must define callable main(ctx)")
+            raise TypeError(f"package entrypoint must define callable {request.callable}(ctx)")
         entry(context)
     except KeyboardInterrupt:
         events.emit("warning", message="run cancelled")

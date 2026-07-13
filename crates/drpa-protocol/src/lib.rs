@@ -33,7 +33,17 @@ pub struct PackageSummary {
     pub trust: TrustLevel,
     pub accent: String,
     pub initials: String,
+    #[serde(default)]
+    pub parameters: Vec<ParameterSummary>,
     pub profiles: Vec<TaskProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParameterSummary {
+    pub id: String,
+    pub kind: String,
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

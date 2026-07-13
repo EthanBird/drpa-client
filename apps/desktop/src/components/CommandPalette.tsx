@@ -1,4 +1,4 @@
-import { ArrowRight, Blocks, Command, Library, Play, Search, Settings, Zap } from "lucide-react";
+import { ArrowRight, Blocks, Code2, Command, Library, Play, Search, Settings, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { NavigationId } from "../domain/models";
@@ -11,11 +11,12 @@ const commands: Array<{
   icon: typeof Search;
   navigation?: NavigationId;
 }> = [
-  { id: "run", label: "Run Monthly close", detail: "Invoice Hub", icon: Play, navigation: "workbench" },
-  { id: "workbench", label: "Open Workbench", detail: "Navigation", icon: Blocks, navigation: "workbench" },
-  { id: "library", label: "Browse package library", detail: "Navigation", icon: Library, navigation: "library" },
-  { id: "automation", label: "Create an automation", detail: "New", icon: Zap, navigation: "automations" },
-  { id: "settings", label: "Open settings", detail: "Application", icon: Settings },
+  { id: "run", label: "打开运行工作台", detail: "运行脚本包", icon: Play, navigation: "workbench" },
+  { id: "workbench", label: "配置任务参数", detail: "运行工作台", icon: Blocks, navigation: "workbench" },
+  { id: "library", label: "安装脚本包", detail: "脚本包管理", icon: Library, navigation: "library" },
+  { id: "studio", label: "新建 RPaz 项目", detail: "开发工作室", icon: Code2, navigation: "studio" },
+  { id: "automation", label: "创建自动化计划", detail: "任务编排", icon: Zap, navigation: "automations" },
+  { id: "settings", label: "打开设置", detail: "应用配置", icon: Settings, navigation: "settings" },
 ];
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
@@ -34,7 +35,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         className="command-palette"
         role="dialog"
         aria-modal="true"
-        aria-label="Command palette"
+        aria-label="命令面板"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="command-input-row">
@@ -43,11 +44,11 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Type a command or search packages…"
+            placeholder="输入命令或搜索脚本包…"
           />
           <kbd>ESC</kbd>
         </div>
-        <div className="command-section-label">Suggested</div>
+        <div className="command-section-label">建议操作</div>
         <div className="command-results">
           {filtered.map((item, index) => {
             const Icon = item.icon;
@@ -68,7 +69,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             );
           })}
         </div>
-        <footer><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span></footer>
+        <footer><span><kbd>↑</kbd><kbd>↓</kbd> 导航</span><span><kbd>↵</kbd> 选择</span></footer>
       </section>
     </div>
   );

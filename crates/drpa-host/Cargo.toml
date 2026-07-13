@@ -6,7 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+drpa-package = { path = "../drpa-package" }
 drpa-protocol = { path = "../drpa-protocol" }
 parking_lot = "0.12"
+serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+zip = { version = "4", default-features = false, features = ["deflate"] }

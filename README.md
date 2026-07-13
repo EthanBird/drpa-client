@@ -43,6 +43,10 @@ npm run tauri:dev
 
 ## Product status
 
-The `codex/drpa-next-platform` branch is the architectural reset. The first milestone establishes the new shell, design system, host protocol, package model, and compatibility plan before legacy behavior is removed.
+The `codex/drpa-next-platform` branch is the architectural reset. It now includes a Chinese-first desktop shell, real schema-v2 package installation, a local Monaco-based RPaz Studio, manifest-driven workbench parameters, and the Host-to-sealed-Python execution bridge.
 
 Offline machines use native sealed runtime bundles, not the source-tree wheel cache. See [`offline/README.md`](offline/README.md) for the four-platform support matrix, exact dependency policy, air-gap verification and GitHub release process.
+
+See [`docs/RPAZ_DEVELOPMENT.md`](docs/RPAZ_DEVELOPMENT.md) for the package schema, Runtime Context API, Studio workflow, manual packaging and Bing daily-image example.
+
+Windows release policy is portable-only: no NSIS/MSI installer, no service, no shortcuts and no application-created registry keys. Public desktop release publication remains gated until the portable archive includes both the sealed Python runtime and Microsoft Fixed Version WebView2 runtime.
