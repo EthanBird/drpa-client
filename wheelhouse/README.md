@@ -26,6 +26,7 @@ Platform directories:
 ```text
 wheelhouse/linux-x86_64/
 wheelhouse/windows-amd64/
+wheelhouse/common/
 ```
 
 Runtime behavior:
@@ -35,6 +36,8 @@ Runtime behavior:
 - Package-local wheels are still supported through `manifest.yaml -> dependencies.local`.
 - Wheel priority is global install-directory wheelhouse first, package-local wheels second.
 - DRPA Client generates a constraints file from this global wheelhouse so global wheel versions win over same-name wheels embedded in a `.rpaz`.
+
+This directory is retained for legacy v1 compatibility. DRPA Next release builds use the native, sealed bundles described in `offline/README.md`; those bundles also cover both macOS architectures and include CPython, uv and the browser executable.
 
 Regenerate command:
 

@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "bundleVersion": "0.2.0-dev",
+  "pythonVersion": "3.11.9",
+  "uvVersion": "0.11.28",
+  "chromeForTestingVersion": "150.0.7871.115",
+  "platforms": {
+    "windows-x86_64": {
+      "system": "Windows",
+      "machine": ["AMD64", "x86_64"],
+      "runner": "windows-latest",
+      "chromePlatform": "win64",
+      "archive": "zip"
+    },
+    "linux-x86_64": {
+      "system": "Linux",
+      "machine": ["x86_64", "AMD64"],
+      "runner": "ubuntu-22.04",
+      "chromePlatform": "linux64",
+      "archive": "tar.gz"
+    },
+    "macos-arm64": {
+      "system": "Darwin",
+      "machine": ["arm64", "aarch64"],
+      "runner": "macos-15",
+      "chromePlatform": "mac-arm64",
+      "archive": "tar.gz"
+    },
+    "macos-x86_64": {
+      "system": "Darwin",
+      "machine": ["x86_64", "AMD64"],
+      "runner": "macos-15-intel",
+      "chromePlatform": "mac-x64",
+      "archive": "tar.gz"
+    }
+  }
+}

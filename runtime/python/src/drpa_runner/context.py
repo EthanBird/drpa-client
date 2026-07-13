@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,9 @@ class RuntimeContext:
         if headless is None:
             headless = bool(self.params.get("headless", False))
         options = ChromiumOptions()
+        browser_path = os.environ.get("DRPA_BROWSER_PATH")
+        if browser_path:
+            options.set_browser_path(browser_path)
         options.headless(headless)
         download_dir = resolve_child(self.output_dir, "downloads")
         download_dir.mkdir(parents=True, exist_ok=True)

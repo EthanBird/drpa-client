@@ -44,3 +44,5 @@ npm run tauri:dev
 ## Product status
 
 The `codex/drpa-next-platform` branch is the architectural reset. The first milestone establishes the new shell, design system, host protocol, package model, and compatibility plan before legacy behavior is removed.
+
+Offline machines use native sealed runtime bundles, not the source-tree wheel cache. See [`offline/README.md`](offline/README.md) for the four-platform support matrix, exact dependency policy, air-gap verification and GitHub release process.

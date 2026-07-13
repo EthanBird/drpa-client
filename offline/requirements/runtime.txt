@@ -1,0 +1,28 @@
+# DRPA sealed runtime dependency set.
+# Every package is exact-pinned. URLs, VCS sources, editable installs and local paths are forbidden.
+DrissionPage==4.1.1.4
+DrissionGet==1.2.1
+DrissionRecord==2.0.1
+certifi==2026.6.17
+charset-normalizer==3.4.9
+click==8.4.2
+colorama==0.4.6; sys_platform == "win32"
+cssselect==1.4.0
+et_xmlfile==2.0.0
+filelock==3.29.7
+idna==3.18
+lxml==6.1.1
+numpy==2.2.6
+openpyxl==3.1.5
+pandas==2.3.2
+psutil==7.2.2
+python-dateutil==2.9.0.post0
+pytz==2026.2
+requests==2.34.2
+requests-file==3.0.1
+six==1.17.0
+tldextract==5.3.1
+tzdata==2026.2
+urllib3==2.7.0
+websocket-client==1.9.0
+xlwt==1.3.0
