@@ -1,4 +1,4 @@
-use std::collections::{hash_map::DefaultHasher, HashMap};
+use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -11,6 +11,7 @@ use drpa_package::{PackageManifest, safe_relative_path, validate_package_id};
 use drpa_protocol::{PackageSummary, RUNTIME_PROTOCOL_VERSION, RuntimeEvent, WorkspaceSnapshot};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
+use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
 struct AppPaths {
@@ -745,7 +746,10 @@ fn hide_child_window(_command: &mut Command) {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
     let mut context = tauri::generate_context!();
+    #[cfg(not(windows))]
+    let context = tauri::generate_context!();
     #[cfg(windows)]
     let main_window_config = context
         .config_mut()
