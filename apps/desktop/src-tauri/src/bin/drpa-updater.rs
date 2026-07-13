@@ -74,19 +74,14 @@ fn apply_from_args() -> Result<(), String> {
         if temporary.exists() {
             let _ = fs::remove_file(&temporary);
         }
-        fs::copy(&incoming, &temporary).map_err(|error| {
-            format!(
-                "无法写入临时更新文件 {}：{error}",
-                target.display()
-            )
-        })?;
+        fs::copy(&incoming, &temporary)
+            .map_err(|error| format!("无法写入临时更新文件 {}：{error}", target.display()))?;
         if target.exists() {
             if saved.exists() {
                 fs::remove_file(&saved).map_err(|error| error.to_string())?;
             }
-            fs::rename(&target, &saved).map_err(|error| {
-                format!("无法备份正在使用的文件 {}：{error}", target.display())
-            })?;
+            fs::rename(&target, &saved)
+                .map_err(|error| format!("无法备份正在使用的文件 {}：{error}", target.display()))?;
         }
         if let Err(error) = fs::rename(&temporary, &target) {
             if saved.exists() {
@@ -130,7 +125,9 @@ fn safe_relative_path(value: &str) -> Result<PathBuf, String> {
     let path = Path::new(value);
     if value.is_empty()
         || path.is_absolute()
-        || path.components().any(|part| !matches!(part, Component::Normal(_)))
+        || path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
         || value.contains('\\')
         || value.starts_with("data/")
         || value.eq_ignore_ascii_case("drpa-updater.exe")

@@ -543,8 +543,7 @@ fn apply_windows_update(
     }
     let package = Path::new(&package_path);
     let file = File::open(package).map_err(|error| format!("无法打开更新包：{error}"))?;
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|error| format!("更新包无效：{error}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| format!("更新包无效：{error}"))?;
     let manifest_source = {
         let mut entry = archive
             .by_name("update-manifest.json")
@@ -555,8 +554,8 @@ fn apply_windows_update(
             .map_err(|error| format!("无法读取更新清单：{error}"))?;
         source
     };
-    let manifest: WindowsUpdateManifest = serde_json::from_str(&manifest_source)
-        .map_err(|error| format!("更新清单无效：{error}"))?;
+    let manifest: WindowsUpdateManifest =
+        serde_json::from_str(&manifest_source).map_err(|error| format!("更新清单无效：{error}"))?;
     if manifest.schema != 1 || manifest.target != "windows-x86_64" {
         return Err("更新包格式或目标平台不匹配".to_owned());
     }
@@ -567,10 +566,11 @@ fn apply_windows_update(
         return Err("更新包文件数量异常".to_owned());
     }
 
-    let stage = paths
-        .workspace_root
-        .join("updates/staged")
-        .join(format!("{}-{}", manifest.version, Uuid::new_v4().simple()));
+    let stage = paths.workspace_root.join("updates/staged").join(format!(
+        "{}-{}",
+        manifest.version,
+        Uuid::new_v4().simple()
+    ));
     fs::create_dir_all(stage.join("files"))
         .map_err(|error| format!("无法创建更新暂存目录：{error}"))?;
     let extraction = (|| {
@@ -583,11 +583,7 @@ fn apply_windows_update(
             if !paths.insert(normalized.clone()) {
                 return Err(format!("更新清单包含重复路径：{normalized}"));
             }
-            if item.sha256.len() != 64
-                || !item
-                    .sha256
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit())
+            if item.sha256.len() != 64 || !item.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
             {
                 return Err(format!("更新文件 SHA-256 格式无效：{normalized}"));
             }
@@ -649,9 +645,7 @@ fn apply_windows_update(
         .ok_or_else(|| "无法定位安装目录".to_owned())?;
     let updater = install.join("drpa-updater.exe");
     if !updater.is_file() {
-        return Err(
-            "安装目录缺少 drpa-updater.exe，当前版本不能执行热更新".to_owned(),
-        );
+        return Err("安装目录缺少 drpa-updater.exe，当前版本不能执行热更新".to_owned());
     }
     let launch = executable
         .file_name()
@@ -922,7 +916,10 @@ fn inspect_runtime_status(paths: &AppPaths) -> Result<RuntimeStatus, String> {
             "运行环境不完整；请执行修复，应用只会重建 data 内的生成文件",
         )
     } else {
-        ("notInitialized", "运行环境尚未初始化；首次初始化完全离线完成")
+        (
+            "notInitialized",
+            "运行环境尚未初始化；首次初始化完全离线完成",
+        )
     };
     Ok(RuntimeStatus {
         state,
@@ -1004,14 +1001,10 @@ fn prepare_sealed_runtime(root: &Path, environment: &Path) -> Result<PathBuf, St
 
 fn read_offline_runtime_manifest(root: &Path) -> Result<OfflineRuntimeManifest, String> {
     let path = root.join("manifest.json");
-    let source = fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "无法读取封装运行时清单 {}：{error}",
-            path.display()
-        )
-    })?;
-    let manifest: OfflineRuntimeManifest = serde_json::from_str(&source)
-        .map_err(|error| format!("封装运行时清单无效：{error}"))?;
+    let source = fs::read_to_string(&path)
+        .map_err(|error| format!("无法读取封装运行时清单 {}：{error}", path.display()))?;
+    let manifest: OfflineRuntimeManifest =
+        serde_json::from_str(&source).map_err(|error| format!("封装运行时清单无效：{error}"))?;
     let expected_platform = if cfg!(windows) {
         "windows-x86_64"
     } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
@@ -1134,9 +1127,8 @@ mod tests {
     fn runtime_manifest_selects_the_base_python_not_the_venv_template() {
         let root = std::env::temp_dir().join(format!("drpa-runtime-test-{}", Uuid::new_v4()));
         let base = root.join("python/cpython-3.11.9-windows-x86_64-none/python.exe");
-        let template = root.join(
-            "python/cpython-3.11.9-windows-x86_64-none/Lib/venv/scripts/nt/python.exe",
-        );
+        let template =
+            root.join("python/cpython-3.11.9-windows-x86_64-none/Lib/venv/scripts/nt/python.exe");
         fs::create_dir_all(base.parent().unwrap()).unwrap();
         fs::create_dir_all(template.parent().unwrap()).unwrap();
         fs::write(&base, b"base").unwrap();
