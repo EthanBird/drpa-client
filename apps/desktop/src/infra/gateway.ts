@@ -1,7 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import { mockSnapshot } from "../data/mockSnapshot";
-import type { PackageSummary, RuntimeStatus, StudioCellResult, StudioProject, WorkspaceSnapshot } from "../domain/models";
+import type {
+  PackageSummary,
+  RuntimeStatus,
+  StudioCellResult,
+  StudioProject,
+  WindowsUpdateSession,
+  WindowsUpdateStatus,
+  WorkspaceSnapshot,
+} from "../domain/models";
 
 export interface DesktopGateway {
   getWorkspaceSnapshot(): Promise<WorkspaceSnapshot>;
@@ -15,6 +23,9 @@ export interface DesktopGateway {
   readProjectFile(projectId: string, relativePath: string): Promise<string>;
   writeProjectFile(projectId: string, relativePath: string, content: string): Promise<void>;
   createProjectDirectory(projectId: string, relativePath: string): Promise<void>;
+  renameProjectEntry(projectId: string, relativePath: string, targetPath: string): Promise<void>;
+  deleteProjectEntry(projectId: string, relativePath: string): Promise<void>;
+  deleteStudioProject(projectId: string): Promise<void>;
   importProjectFile(projectId: string, sourcePath: string, targetDirectory: string): Promise<string>;
   buildStudioProject(projectId: string): Promise<string>;
   runStudioProject(projectId: string, parameters: Record<string, unknown>): Promise<string>;
@@ -23,7 +34,9 @@ export interface DesktopGateway {
   getRuntimeStatus(): Promise<RuntimeStatus>;
   initializeRuntime(): Promise<RuntimeStatus>;
   repairRuntime(): Promise<RuntimeStatus>;
-  applyWindowsUpdate(packagePath: string): Promise<string>;
+  applyWindowsUpdate(packagePath: string): Promise<WindowsUpdateSession>;
+  getWindowsUpdateStatus(sessionId: string): Promise<WindowsUpdateStatus>;
+  restartForWindowsUpdate(sessionId: string): Promise<void>;
   getDataDirectory(): Promise<string>;
 }
 
@@ -63,6 +76,9 @@ const mockGateway: DesktopGateway = {
   },
   async writeProjectFile() {},
   async createProjectDirectory() {},
+  async renameProjectEntry() {},
+  async deleteProjectEntry() {},
+  async deleteStudioProject() {},
   async importProjectFile(_projectId, sourcePath, targetDirectory) {
     const fileName = sourcePath.split(/[\\/]/).pop() ?? "imported.file";
     return targetDirectory ? `${targetDirectory}/${fileName}` : fileName;
@@ -83,6 +99,8 @@ const mockGateway: DesktopGateway = {
   async initializeRuntime() { return this.getRuntimeStatus(); },
   async repairRuntime() { return this.getRuntimeStatus(); },
   async applyWindowsUpdate() { throw new Error("浏览器预览不能应用 Windows 更新包"); },
+  async getWindowsUpdateStatus() { throw new Error("浏览器预览没有更新会话"); },
+  async restartForWindowsUpdate() {},
   async getDataDirectory() {
     return "浏览器预览数据（内存）";
   },
@@ -100,6 +118,9 @@ const tauriGateway: DesktopGateway = {
   readProjectFile: (projectId, relativePath) => invoke<string>("read_project_file", { projectId, relativePath }),
   writeProjectFile: (projectId, relativePath, content) => invoke<void>("write_project_file", { projectId, relativePath, content }),
   createProjectDirectory: (projectId, relativePath) => invoke<void>("create_project_directory", { projectId, relativePath }),
+  renameProjectEntry: (projectId, relativePath, targetPath) => invoke<void>("rename_project_entry", { projectId, relativePath, targetPath }),
+  deleteProjectEntry: (projectId, relativePath) => invoke<void>("delete_project_entry", { projectId, relativePath }),
+  deleteStudioProject: (projectId) => invoke<void>("delete_studio_project", { projectId }),
   importProjectFile: (projectId, sourcePath, targetDirectory) => invoke<string>("import_project_file", { projectId, sourcePath, targetDirectory }),
   buildStudioProject: (projectId) => invoke<string>("build_studio_project", { projectId }),
   runStudioProject: (projectId, parameters) => invoke<string>("run_studio_project", { projectId, parameters }),
@@ -108,7 +129,9 @@ const tauriGateway: DesktopGateway = {
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),
   initializeRuntime: () => invoke<RuntimeStatus>("initialize_runtime"),
   repairRuntime: () => invoke<RuntimeStatus>("repair_runtime"),
-  applyWindowsUpdate: (packagePath) => invoke<string>("apply_windows_update", { packagePath }),
+  applyWindowsUpdate: (packagePath) => invoke<WindowsUpdateSession>("apply_windows_update", { packagePath }),
+  getWindowsUpdateStatus: (sessionId) => invoke<WindowsUpdateStatus>("get_windows_update_status", { sessionId }),
+  restartForWindowsUpdate: (sessionId) => invoke<void>("restart_for_windows_update", { sessionId }),
   getDataDirectory: () => invoke<string>("get_data_directory"),
 };
 

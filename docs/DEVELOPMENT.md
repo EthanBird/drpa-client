@@ -156,17 +156,22 @@ Rust 与 Python bridge 之间使用 JSONL；bridge 与 IPython Kernel 之间使�
 
 ## 7. Windows 更新
 
-`tools/windows/build_update_package.py` 从最终 stage 生成 `.drpa-update`。Host 在退出前完成：
+`tools/windows/build_update_package.py` 从最终 stage 生成完整 `install-manifest.json` 和 `.drpa-update`。
 
-1. 验证目标平台、schema 与版本。
-2. 拒绝绝对路径、父目录跳转、重复项和超限压缩。
-3. 拒绝任何 `data/` 与 `drpa-updater.exe` 覆盖。
-4. 校验每个文件的大小和 SHA-256。
-5. 将包暂存到 `data/updates/`，启动独立更新器后退出。
+清单记录安装目录中每个受管文件的路径、大小、SHA-256 与组件；传入 `--base-manifest` 时只打包新增/变化文件，并生成旧文件删除列表。
 
-更新器等待主程序结束，逐项备份和替换，失败时回滚，成功后重新启动主程序。更新器自身不能通过同一个更新事务替换；未来需要双更新器或安装器级方案时必须单独设计。
+默认策略：
 
-当前是本地包更新，不包含在线 feed、签名证书或 delta block。未来扩展见 [`ROADMAP.md`](ROADMAP.md)。
+1. `data/`、Fixed Version WebView2 和更新器安装副本始终受保护。
+2. 没有基线清单时，sealed runtime 与 Chrome 不进入日常更新包；有基线时也只有摘要变化的文件才会进入差量包。
+3. 更新包内嵌当前版本的独立 Worker，因此 Worker 自身可以随包升级，而不覆盖正在使用的安装副本。
+4. Host 在应用保持打开时校验路径、大小与 SHA-256，停止 Studio Kernel，并在 `data/updates/sessions/<id>/` 创建可审计会话。
+5. Worker 直接替换普通文件并持续写入 JSON 进度；只有主 EXE 需要替换时，前端显示“准备重启”后才退出。
+6. 任一替换失败都会按逆序恢复备份并把失败原因写回进度窗口；主程序退出后发生失败时会重新启动旧版本。
+
+CI 会从上一 Release 下载安装清单生成精确差量，并把新清单及 SHA-256 作为独立 Release 资产。
+
+当前仍从本地介质导入更新；在线 feed 与清单签名属于后续路线，见 [`ROADMAP.md`](ROADMAP.md)。
 
 ## 8. 开发与验证
 
@@ -220,7 +225,7 @@ python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 2. 修改版本时同步 root/npm/Tauri/runtime spec/workflow 中的版本来源，避免只改文件名。
 3. 确认 `offline/requirements/runtime.txt` 已通过精确依赖政策检查。
 4. 观察 Windows workflow 中 runtime bootstrap、Jupyter smoke、NSIS guard 全部通过。
-5. Release 必须同时包含 Setup、`.drpa-update`、示例 RPAZ 及三个 SHA-256 文件。
+5. Release 必须同时包含 Setup、`.drpa-update`、`install-manifest.json`、示例 RPAZ 及四个 SHA-256 文件。
 6. 在独立 Windows 测试机安装到非系统盘，执行环境验证、Bing 示例、Notebook 两单元和一次更新回滚演练。
 7. 预览版未签名时必须在发行说明中显式提示。
 

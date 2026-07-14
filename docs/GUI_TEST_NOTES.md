@@ -45,3 +45,17 @@
 - 自动化计划页当前是只读预览。真实 Host 数据只有带 schedule 的 profile 才会派生计划；现有示例 `.rpaz` 没有 schedule，因此该页在真实桌面 Host 中为空。
 - 当前阶段“新建计划”按钮保持 disabled，后续 P2 Scheduler 需要补创建向导、持久化、触发器计算和执行语义。
 - Computer-use 截图接口在该 Tauri 窗口上返回 `SetIsBorderRequired failed`，本次使用可访问性树检查真实窗口，并用前端集成测试补齐右键菜单交互覆盖；这属于测试工具与窗口捕获兼容性记录，不影响应用运行。
+
+## 2026-07-14 热更新与资源管理回归
+
+### 真实开发版窗口
+
+- 通过 `npm run tauri:dev` 启动 `target/debug/drpa-desktop.exe`，确认命令面板可在真实 WebView 窗口切换页面。
+- 设置页可访问性树确认：默认亮色说明、亮色/暗色单选控件、`Windows 轻量热更新` 卡片与“选择更新包”入口均已出现；紧凑/舒适布局入口已移除。
+- 开发工作室可访问性树确认：项目列表、项目项、新建文件、新建文件夹、导入文件均已出现；项目删除、文件内联新建/重命名/删除由 Testing Library 回归覆盖。
+- 运行日志的分级、搜索、跟随与 UTF-8 容错标记由前端回归和 Rust 事件测试覆盖；当前开发数据目录没有已安装脚本包，因此真实窗口进入的是工作台空状态。
+
+### 测试工具问题
+
+1. Windows.Graphics.Capture 对该无边框 Tauri 窗口仍返回 `SetIsBorderRequired failed: 不支持此接口 (0x80004002)`；可访问性文本读取正常。
+2. 该窗口的 UIA 点击/赋值接口分别返回“先调用 get_window_state”和 `read UIA value read-only state ... 0x80070057`，所以未通过坐标猜测继续操作；对应交互使用真实 Tauri 页面可访问性检查与 11 项 Vitest 回归交叉验证。

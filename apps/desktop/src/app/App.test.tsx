@@ -35,7 +35,7 @@ describe("DRPA Next desktop shell", () => {
     useAppStore.setState({
       activeNavigation: "workbench",
       commandOpen: false,
-      compactMode: false,
+      theme: "light",
       inspectorOpen: true,
       selectedPackageId: "com.drpa.invoice-hub",
       selectedProfileId: "monthly",
@@ -78,6 +78,17 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByText("发票中心")).toBeVisible();
   });
 
+  it("uses light theme by default and switches theme from settings", async () => {
+    render(<App />);
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const darkTheme = await screen.findByRole("radio", { name: "暗色" });
+    fireEvent.click(darkTheme);
+
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    expect(screen.queryByText("紧凑布局")).not.toBeInTheDocument();
+  });
+
   it("shows automation schedules from the workspace snapshot", async () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "自动化计划" }));
@@ -113,6 +124,38 @@ describe("DRPA Next desktop shell", () => {
     expect(menu).toHaveTextContent("新建文件");
     expect(menu).toHaveTextContent("新建文件夹");
     expect(menu).toHaveTextContent("导入文件");
+  });
+
+  it("creates Studio files with an inline explorer input", async () => {
+    const project = { id: "project-000000000000000000000001", name: "测试项目", files: ["main.py"] };
+    const prompt = vi.spyOn(window, "prompt");
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue(project.files.length ? [project] : []);
+    const writeFile = vi.spyOn(desktopGateway, "writeProjectFile").mockResolvedValue();
+    render(<StudioPage />);
+
+    await screen.findByText("测试项目");
+    fireEvent.click(screen.getByTitle("新建文件"));
+    const input = screen.getByLabelText("新文件名称");
+    fireEvent.change(input, { target: { value: "worker.py" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(writeFile).toHaveBeenCalledWith(project.id, "worker.py", ""));
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("deletes a Studio project from its context menu after in-app confirmation", async () => {
+    const project = { id: "project-000000000000000000000001", name: "待删除项目", files: ["main.py"] };
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValueOnce([project]).mockResolvedValue([]);
+    const deleteProject = vi.spyOn(desktopGateway, "deleteStudioProject").mockResolvedValue();
+    render(<StudioPage />);
+
+    const projectButton = await screen.findByRole("button", { name: /待删除项目/ });
+    fireEvent.contextMenu(projectButton);
+    fireEvent.click(screen.getByRole("button", { name: "删除开发项目" }));
+    expect(screen.getByRole("dialog", { name: "确认删除" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /^删除$/ }));
+
+    await waitFor(() => expect(deleteProject).toHaveBeenCalledWith(project.id));
   });
 
   it("creates and selects a local task profile", async () => {

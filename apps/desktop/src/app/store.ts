@@ -6,7 +6,7 @@ import type { NavigationId, WorkspaceSnapshot } from "../domain/models";
 interface AppStore {
   activeNavigation: NavigationId;
   commandOpen: boolean;
-  compactMode: boolean;
+  theme: "light" | "dark";
   inspectorOpen: boolean;
   dragActive: boolean;
   operationNotice: string;
@@ -15,7 +15,7 @@ interface AppStore {
   snapshot: WorkspaceSnapshot | null;
   setActiveNavigation: (id: NavigationId) => void;
   setCommandOpen: (open: boolean) => void;
-  toggleCompactMode: () => void;
+  setTheme: (theme: "light" | "dark") => void;
   toggleInspector: () => void;
   selectPackage: (packageId: string, profileId?: string) => void;
   selectProfile: (profileId: string) => void;
@@ -27,7 +27,7 @@ interface AppStore {
 export const useAppStore = create<AppStore>()(persist((set) => ({
   activeNavigation: "overview",
   commandOpen: false,
-  compactMode: false,
+  theme: "light",
   inspectorOpen: true,
   dragActive: false,
   operationNotice: "",
@@ -36,7 +36,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   snapshot: null,
   setActiveNavigation: (activeNavigation) => set({ activeNavigation }),
   setCommandOpen: (commandOpen) => set({ commandOpen }),
-  toggleCompactMode: () => set((state) => ({ compactMode: !state.compactMode })),
+  setTheme: (theme) => set({ theme }),
   toggleInspector: () => set((state) => ({ inspectorOpen: !state.inspectorOpen })),
   selectPackage: (selectedPackageId, selectedProfileId) =>
     set((state) => ({
@@ -49,5 +49,5 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setOperationNotice: (operationNotice) => set({ operationNotice }),
 }), {
   name: "drpa-ui-preferences",
-  partialize: (state) => ({ compactMode: state.compactMode }),
+  partialize: (state) => ({ theme: state.theme }),
 }));

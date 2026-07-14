@@ -8,7 +8,10 @@ use std::sync::Mutex;
 
 use drpa_host::{HostState, RunLaunch};
 use drpa_package::{PackageManifest, safe_relative_path, validate_package_id};
-use drpa_protocol::{PackageSummary, RUNTIME_PROTOCOL_VERSION, RuntimeEvent, WorkspaceSnapshot};
+use drpa_protocol::{
+    PackageSummary, RUNTIME_PROTOCOL_VERSION, RuntimeEvent, WindowsUpdatePhase,
+    WindowsUpdateSession, WindowsUpdateStatus, WorkspaceSnapshot,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{Manager, State};
@@ -260,6 +263,76 @@ fn create_project_directory(
             .join(relative),
     )
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn rename_project_entry(
+    project_id: String,
+    relative_path: String,
+    target_path: String,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    validate_project_id(&project_id)?;
+    let source_relative = safe_relative_path(relative_path.trim_end_matches('/'))
+        .map_err(|error| error.to_string())?;
+    let target_relative =
+        safe_relative_path(target_path.trim_end_matches('/')).map_err(|error| error.to_string())?;
+    let project_root = paths.workspace_root.join("projects").join(project_id);
+    let source = project_root.join(source_relative);
+    let target = project_root.join(target_relative);
+    if !source.exists() {
+        return Err("要重命名的文件或文件夹不存在".to_owned());
+    }
+    if target.exists() {
+        return Err("目标名称已存在".to_owned());
+    }
+    let parent = target.parent().ok_or_else(|| "目标路径无效".to_owned())?;
+    if !parent.is_dir() {
+        return Err("目标文件夹不存在".to_owned());
+    }
+    fs::rename(source, target).map_err(|error| format!("重命名失败：{error}"))
+}
+
+#[tauri::command]
+fn delete_project_entry(
+    project_id: String,
+    relative_path: String,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    validate_project_id(&project_id)?;
+    let relative = safe_relative_path(relative_path.trim_end_matches('/'))
+        .map_err(|error| error.to_string())?;
+    let target = paths
+        .workspace_root
+        .join("projects")
+        .join(project_id)
+        .join(relative);
+    if target.is_dir() {
+        fs::remove_dir_all(target).map_err(|error| format!("删除文件夹失败：{error}"))
+    } else if target.is_file() {
+        fs::remove_file(target).map_err(|error| format!("删除文件失败：{error}"))
+    } else {
+        Err("要删除的文件或文件夹不存在".to_owned())
+    }
+}
+
+#[tauri::command]
+fn delete_studio_project(
+    project_id: String,
+    kernels: State<'_, StudioKernelManager>,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    validate_project_id(&project_id)?;
+    kernels
+        .sessions
+        .lock()
+        .map_err(|_| "Studio Kernel 状态已损坏".to_owned())?
+        .remove(&project_id);
+    let project_root = paths.workspace_root.join("projects").join(project_id);
+    if !project_root.is_dir() {
+        return Err("开发项目不存在".to_owned());
+    }
+    fs::remove_dir_all(project_root).map_err(|error| format!("删除开发项目失败：{error}"))
 }
 
 #[tauri::command]
@@ -584,8 +657,12 @@ struct RuntimeStatus {
 struct WindowsUpdateManifest {
     schema: u32,
     version: String,
+    base_version: Option<String>,
     target: String,
     files: Vec<WindowsUpdateFile>,
+    #[serde(default)]
+    remove: Vec<String>,
+    worker: WindowsUpdateWorker,
 }
 
 #[derive(Deserialize)]
@@ -595,17 +672,32 @@ struct WindowsUpdateFile {
     sha256: String,
 }
 
+#[derive(Deserialize)]
+struct WindowsUpdateWorker {
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+struct WindowsInstallCatalog {
+    version: String,
+}
+
 #[tauri::command]
 fn apply_windows_update(
     package_path: String,
-    app: tauri::AppHandle,
+    host: State<'_, HostState>,
+    kernels: State<'_, StudioKernelManager>,
     paths: State<'_, AppPaths>,
-) -> Result<String, String> {
+) -> Result<WindowsUpdateSession, String> {
     if !cfg!(windows) {
-        return Err("文件级热更新当前只对 Windows 开放".to_owned());
+        return Err("文件热更新当前只支持 Windows 平台".to_owned());
+    }
+    if host.snapshot().stats.active_runs > 0 {
+        return Err("存在正在运行的任务，请等待任务结束后再更新".to_owned());
     }
     let package = Path::new(&package_path);
-    let file = File::open(package).map_err(|error| format!("无法打开更新包：{error}"))?;
+    let file = File::open(package).map_err(|error| format!("打开更新包失败：{error}"))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|error| format!("更新包无效：{error}"))?;
     let manifest_source = {
         let mut entry = archive
@@ -614,7 +706,7 @@ fn apply_windows_update(
         let mut source = String::new();
         entry
             .read_to_string(&mut source)
-            .map_err(|error| format!("无法读取更新清单：{error}"))?;
+            .map_err(|error| format!("读取更新清单失败：{error}"))?;
         source
     };
     let manifest: WindowsUpdateManifest =
@@ -625,39 +717,81 @@ fn apply_windows_update(
     if !is_safe_update_version(&manifest.version) {
         return Err("更新包版本标识无效".to_owned());
     }
-    if manifest.files.is_empty() || manifest.files.len() > 50_000 {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let install = executable
+        .parent()
+        .ok_or_else(|| "定位安装目录失败".to_owned())?;
+    if let Some(base_version) = &manifest.base_version {
+        if !is_safe_update_version(base_version) {
+            return Err("更新包基线版本标识无效".to_owned());
+        }
+        let catalog_source = fs::read_to_string(install.join("install-manifest.json"))
+            .map_err(|_| "当前安装缺少 install-manifest.json，不能应用差量更新".to_owned())?;
+        let catalog: WindowsInstallCatalog = serde_json::from_str(&catalog_source)
+            .map_err(|error| format!("当前安装文件清单无效：{error}"))?;
+        if catalog.version != *base_version {
+            return Err(format!(
+                "更新基线不匹配：当前为 {}，更新包要求 {}",
+                catalog.version, base_version
+            ));
+        }
+    }
+    if manifest.files.is_empty()
+        || manifest.files.len().saturating_add(manifest.remove.len()) > 50_000
+    {
         return Err("更新包文件数量异常".to_owned());
     }
 
-    let stage = paths.workspace_root.join("updates/staged").join(format!(
-        "{}-{}",
-        manifest.version,
-        Uuid::new_v4().simple()
-    ));
+    let session_id = Uuid::new_v4().simple().to_string();
+    let session_root = paths
+        .workspace_root
+        .join("updates/sessions")
+        .join(&session_id);
+    let stage = session_root.join("stage");
+    let status_path = session_root.join("status.json");
+    let restart_request = session_root.join("restart-requested");
     fs::create_dir_all(stage.join("files"))
-        .map_err(|error| format!("无法创建更新暂存目录：{error}"))?;
+        .map_err(|error| format!("创建更新暂存目录失败：{error}"))?;
+    let total_bytes = manifest.files.iter().try_fold(0_u64, |total, item| {
+        total.checked_add(item.bytes).ok_or("更新包大小溢出")
+    })?;
+    let total_files = u32::try_from(manifest.files.len() + manifest.remove.len())
+        .map_err(|_| "更新包文件数量溢出".to_owned())?;
+    write_windows_update_status(
+        &status_path,
+        &WindowsUpdateStatus {
+            session_id: session_id.clone(),
+            version: manifest.version.clone(),
+            phase: WindowsUpdatePhase::Verifying,
+            progress: 1,
+            completed_files: 0,
+            total_files,
+            current_file: None,
+            message: "正在校验更新包完整性".to_owned(),
+        },
+    )?;
+
     let extraction = (|| {
         let mut total = 0_u64;
-        let mut paths = HashSet::new();
+        let mut package_paths = HashSet::new();
         for item in &manifest.files {
             let relative = safe_relative_path(&item.path)
                 .map_err(|error| format!("更新清单包含不安全路径：{error}"))?;
             let normalized = relative.to_string_lossy().replace('\\', "/");
-            if !paths.insert(normalized.clone()) {
+            let folded = normalized.to_ascii_lowercase();
+            if !package_paths.insert(folded.clone()) {
                 return Err(format!("更新清单包含重复路径：{normalized}"));
             }
             if item.sha256.len() != 64 || !item.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
             {
                 return Err(format!("更新文件 SHA-256 格式无效：{normalized}"));
             }
-            if normalized.starts_with("data/")
-                || normalized.eq_ignore_ascii_case("drpa-updater.exe")
-            {
-                return Err(format!("更新包不得覆盖受保护路径：{normalized}"));
+            if folded.starts_with("data/") || folded == "drpa-updater.exe" {
+                return Err(format!("更新包试图覆盖受保护路径：{normalized}"));
             }
             total = total
                 .checked_add(item.bytes)
-                .ok_or_else(|| "更新包体积溢出".to_owned())?;
+                .ok_or_else(|| "更新包过大".to_owned())?;
             if total > 2 * 1024 * 1024 * 1024 {
                 return Err("更新包解压后超过 2 GiB 限制".to_owned());
             }
@@ -693,27 +827,67 @@ fn apply_windows_update(
                 return Err(format!("更新文件 SHA-256 不匹配：{normalized}"));
             }
         }
+        let mut remove_paths = HashSet::new();
+        for item in &manifest.remove {
+            let relative = safe_relative_path(item)
+                .map_err(|error| format!("删除清单包含不安全路径：{error}"))?;
+            let normalized = relative.to_string_lossy().replace('\\', "/");
+            let folded = normalized.to_ascii_lowercase();
+            if !remove_paths.insert(folded.clone()) || package_paths.contains(&folded) {
+                return Err(format!("删除清单包含重复或冲突路径：{normalized}"));
+            }
+            if folded.starts_with("data/")
+                || folded.starts_with("webview2/")
+                || folded == "drpa-updater.exe"
+            {
+                return Err(format!("删除清单包含受保护路径：{normalized}"));
+            }
+        }
         fs::write(stage.join("update-manifest.json"), &manifest_source)
             .map_err(|error| error.to_string())?;
         Ok(())
     })();
     if let Err(error) = extraction {
-        let _ = fs::remove_dir_all(&stage);
+        let _ = fs::remove_dir_all(&session_root);
         return Err(error);
     }
 
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let install = executable
-        .parent()
-        .ok_or_else(|| "无法定位安装目录".to_owned())?;
-    let updater = install.join("drpa-updater.exe");
-    if !updater.is_file() {
-        return Err("安装目录缺少 drpa-updater.exe，当前版本不能执行热更新".to_owned());
+    let updater = session_root.join("update-worker.exe");
+    let worker = &manifest.worker;
+    if worker.sha256.len() != 64 || !worker.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("更新 Worker SHA-256 格式无效".to_owned());
     }
+    let mut entry = archive
+        .by_name("worker/drpa-updater.exe")
+        .map_err(|_| "更新包缺少 worker/drpa-updater.exe".to_owned())?;
+    if entry.is_dir() || entry.size() != worker.bytes {
+        return Err("更新 Worker 大小不匹配".to_owned());
+    }
+    let mut output = File::create(&updater).map_err(|error| error.to_string())?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = entry.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        output
+            .write_all(&buffer[..read])
+            .map_err(|error| error.to_string())?;
+    }
+    if !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(&worker.sha256) {
+        return Err("更新 Worker SHA-256 不匹配".to_owned());
+    }
+    kernels
+        .sessions
+        .lock()
+        .map_err(|_| "停止 Studio Kernel 失败".to_owned())?
+        .clear();
     let launch = executable
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| "无法读取主程序文件名".to_owned())?;
+        .ok_or_else(|| "读取主程序文件名失败".to_owned())?;
     let mut command = Command::new(updater);
     command
         .arg("--stage")
@@ -722,19 +896,82 @@ fn apply_windows_update(
         .arg(install)
         .arg("--launch")
         .arg(launch)
+        .arg("--status")
+        .arg(&status_path)
+        .arg("--restart-request")
+        .arg(&restart_request)
+        .arg("--session")
+        .arg(&session_id)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     hide_child_window(&mut command);
     command
         .spawn()
-        .map_err(|error| format!("无法启动无界面更新器：{error}"))?;
-    let version = manifest.version;
+        .map_err(|error| format!("启动无界面更新 Worker 失败：{error}"))?;
+    Ok(WindowsUpdateSession {
+        id: session_id,
+        version: manifest.version,
+        total_files,
+        total_bytes,
+    })
+}
+
+#[tauri::command]
+fn get_windows_update_status(
+    session_id: String,
+    paths: State<'_, AppPaths>,
+) -> Result<WindowsUpdateStatus, String> {
+    validate_update_session_id(&session_id)?;
+    let source = fs::read_to_string(
+        paths
+            .workspace_root
+            .join("updates/sessions")
+            .join(&session_id)
+            .join("status.json"),
+    )
+    .map_err(|error| format!("读取更新进度失败：{error}"))?;
+    serde_json::from_str(&source).map_err(|error| format!("更新进度数据无效：{error}"))
+}
+
+#[tauri::command]
+fn restart_for_windows_update(
+    session_id: String,
+    app: tauri::AppHandle,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    validate_update_session_id(&session_id)?;
+    let session_root = paths
+        .workspace_root
+        .join("updates/sessions")
+        .join(&session_id);
+    let source = fs::read_to_string(session_root.join("status.json"))
+        .map_err(|error| format!("读取更新进度失败：{error}"))?;
+    let status: WindowsUpdateStatus =
+        serde_json::from_str(&source).map_err(|error| format!("更新进度数据无效：{error}"))?;
+    if status.phase != WindowsUpdatePhase::WaitingForRestart {
+        return Err("更新尚未进入重启阶段".to_owned());
+    }
+    fs::write(session_root.join("restart-requested"), b"restart\n")
+        .map_err(|error| format!("创建重启请求失败：{error}"))?;
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(450));
+        std::thread::sleep(std::time::Duration::from_millis(350));
         app.exit(0);
     });
-    Ok(format!("更新 {version} 已验证，应用即将重启"))
+    Ok(())
+}
+
+fn validate_update_session_id(session_id: &str) -> Result<(), String> {
+    if session_id.len() == 32 && session_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err("更新会话标识无效".to_owned())
+    }
+}
+
+fn write_windows_update_status(target: &Path, status: &WindowsUpdateStatus) -> Result<(), String> {
+    let source = serde_json::to_vec_pretty(status).map_err(|error| error.to_string())?;
+    fs::write(target, source).map_err(|error| format!("写入更新进度失败：{error}"))
 }
 
 fn is_safe_update_version(version: &str) -> bool {
@@ -1228,6 +1465,9 @@ pub fn run() {
             read_project_file,
             write_project_file,
             create_project_directory,
+            rename_project_entry,
+            delete_project_entry,
+            delete_studio_project,
             import_project_file,
             build_studio_project,
             run_studio_project,
@@ -1237,6 +1477,8 @@ pub fn run() {
             initialize_runtime,
             repair_runtime,
             apply_windows_update,
+            get_windows_update_status,
+            restart_for_windows_update,
             get_data_directory
         ])
         .run(context)
@@ -1306,5 +1548,12 @@ mod tests {
         );
         let event = serde_json::from_str::<RuntimeEvent>(&line).unwrap();
         assert!(matches!(event, RuntimeEvent::Log { .. }));
+    }
+
+    #[test]
+    fn update_session_id_requires_exactly_32_hex_characters() {
+        assert!(validate_update_session_id("0123456789abcdef0123456789ABCDEF").is_ok());
+        assert!(validate_update_session_id("../updates/session").is_err());
+        assert!(validate_update_session_id("0123456789abcdef").is_err());
     }
 }

@@ -26,6 +26,39 @@ pub struct WorkspaceStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WindowsUpdateSession {
+    pub id: String,
+    pub version: String,
+    pub total_files: u32,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsUpdateStatus {
+    pub session_id: String,
+    pub version: String,
+    pub phase: WindowsUpdatePhase,
+    pub progress: u8,
+    pub completed_files: u32,
+    pub total_files: u32,
+    pub current_file: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowsUpdatePhase {
+    Verifying,
+    Applying,
+    WaitingForRestart,
+    Restarting,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageSummary {
     pub id: String,
     pub name: String,

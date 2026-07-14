@@ -13,7 +13,6 @@ import {
   Maximize2,
   Minimize2,
   Minus,
-  PanelLeftClose,
   Play,
   Search,
   Settings,
@@ -54,8 +53,6 @@ export function AppShell({ children }: PropsWithChildren) {
   const activeNavigation = useAppStore((state) => state.activeNavigation);
   const setActiveNavigation = useAppStore((state) => state.setActiveNavigation);
   const setCommandOpen = useAppStore((state) => state.setCommandOpen);
-  const compactMode = useAppStore((state) => state.compactMode);
-  const toggleCompactMode = useAppStore((state) => state.toggleCompactMode);
   const inDesktopHost = "__TAURI_INTERNALS__" in window;
   const [maximized, setMaximized] = useState(false);
 
@@ -142,10 +139,6 @@ export function AppShell({ children }: PropsWithChildren) {
         <div className="sidebar-utility">
           <button type="button" onClick={() => setActiveNavigation("settings")}><CircleHelp size={16} /><span>帮助与诊断</span></button>
           <button type="button" onClick={() => setActiveNavigation("settings")}><Settings size={16} /><span>设置</span></button>
-          <button type="button" onClick={toggleCompactMode} aria-pressed={compactMode}>
-            <PanelLeftClose size={16} />
-            <span>{compactMode ? "舒适布局" : "紧凑布局"}</span>
-          </button>
         </div>
         <div className="account-card">
           <div className="avatar">EB</div>

@@ -15,6 +15,7 @@ import {
   FolderPlus,
   FolderTree,
   PackageCheck,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -51,14 +52,31 @@ interface NotebookDocument {
 interface FileContextMenu {
   x: number;
   y: number;
+  target?: string;
 }
+
+interface ProjectContextMenu {
+  x: number;
+  y: number;
+  project: StudioProject;
+}
+
+type InlineDraft =
+  | { mode: "create"; kind: "file" | "folder"; value: string }
+  | { mode: "rename"; source: string; value: string };
+
+type PendingDelete =
+  | { kind: "project"; project: StudioProject }
+  | { kind: "entry"; path: string };
 
 export function StudioPage() {
   const snapshot = useAppStore((state) => state.snapshot);
   const setSnapshot = useAppStore((state) => state.setSnapshot);
+  const theme = useAppStore((state) => state.theme);
   const [projects, setProjects] = useState<StudioProject[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [selectedFile, setSelectedFile] = useState("main.py");
+  const [selectedEntry, setSelectedEntry] = useState("main.py");
   const [content, setContent] = useState("");
   const [projectName, setProjectName] = useState("我的自动化项目");
   const [installedPackageId, setInstalledPackageId] = useState("");
@@ -66,11 +84,19 @@ export function StudioPage() {
   const [notice, setNotice] = useState("工作室已就绪");
   const [busy, setBusy] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
+  const [projectMenu, setProjectMenu] = useState<ProjectContextMenu | null>(null);
+  const [inlineDraft, setInlineDraft] = useState<InlineDraft | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 
   const selected = useMemo(() => projects.find((item) => item.id === selectedId), [projects, selectedId]);
   const packages = snapshot?.packages ?? [];
   const files = selected?.files ?? [];
-  const currentDirectory = selectedFile.includes("/") ? selectedFile.slice(0, selectedFile.lastIndexOf("/")) : "";
+  const normalizedEntry = selectedEntry.replace(/\/$/, "");
+  const currentDirectory = selectedEntry.endsWith("/")
+    ? normalizedEntry
+    : normalizedEntry.includes("/")
+      ? normalizedEntry.slice(0, normalizedEntry.lastIndexOf("/"))
+      : "";
 
   const pickInitialFile = (project: StudioProject | undefined) => {
     if (!project) return "main.py";
@@ -86,6 +112,12 @@ export function StudioPage() {
       setSelectedId(project.id);
       const nextFile = preferredFile && project.files.includes(preferredFile) ? preferredFile : pickInitialFile(project);
       setSelectedFile(nextFile);
+      setSelectedEntry(nextFile);
+    } else {
+      setSelectedId("");
+      setSelectedFile("");
+      setSelectedEntry("");
+      setContent("");
     }
   };
 
@@ -133,34 +165,76 @@ export function StudioPage() {
     finally { setBusy(false); }
   };
 
-  const createFile = async () => {
+  const startCreate = (kind: "file" | "folder") => {
     if (!selectedId) return;
     setFileMenu(null);
-    const initial = currentDirectory ? `${currentDirectory}/new_file.py` : "new_file.py";
-    const relativePath = window.prompt("新建文件路径", initial)?.trim();
-    if (!relativePath) return;
-    setBusy(true);
-    try {
-      await desktopGateway.writeProjectFile(selectedId, relativePath, "");
-      await refresh(relativePath);
-      setNotice(`已新建文件 ${relativePath}`);
-    } catch (error) { setNotice(`新建文件失败：${String(error)}`); }
-    finally { setBusy(false); }
+    setInlineDraft({ mode: "create", kind, value: kind === "file" ? "new_file.py" : "new_folder" });
   };
 
-  const createFolder = async () => {
-    if (!selectedId) return;
+  const startRename = (source: string) => {
+    const normalized = source.replace(/\/$/, "");
     setFileMenu(null);
-    const initial = currentDirectory ? `${currentDirectory}/new_folder` : "new_folder";
-    const relativePath = window.prompt("新建文件夹路径", initial)?.trim();
-    if (!relativePath) return;
+    setSelectedEntry(source);
+    setInlineDraft({ mode: "rename", source, value: normalized.split("/").pop() ?? normalized });
+  };
+
+  const commitInlineDraft = async () => {
+    if (!selectedId || !inlineDraft) return;
+    const name = inlineDraft.value.trim();
+    if (!name || name === "." || name === ".." || /[\\/]/.test(name)) {
+      setNotice("名称不能为空，也不能包含路径分隔符");
+      return;
+    }
     setBusy(true);
     try {
-      await desktopGateway.createProjectDirectory(selectedId, relativePath);
-      await refresh(selectedFile);
-      setNotice(`已新建文件夹 ${relativePath}`);
-    } catch (error) { setNotice(`新建文件夹失败：${String(error)}`); }
-    finally { setBusy(false); }
+      if (inlineDraft.mode === "create") {
+        const relativePath = currentDirectory ? `${currentDirectory}/${name}` : name;
+        if (inlineDraft.kind === "file") {
+          await desktopGateway.writeProjectFile(selectedId, relativePath, "");
+          await refresh(relativePath);
+          setNotice(`已新建文件 ${relativePath}`);
+        } else {
+          await desktopGateway.createProjectDirectory(selectedId, relativePath);
+          await refresh(selectedFile);
+          setSelectedEntry(`${relativePath}/`);
+          setNotice(`已新建文件夹 ${relativePath}`);
+        }
+      } else {
+        const source = inlineDraft.source.replace(/\/$/, "");
+        const parent = source.includes("/") ? source.slice(0, source.lastIndexOf("/")) : "";
+        const target = parent ? `${parent}/${name}` : name;
+        await desktopGateway.renameProjectEntry(selectedId, source, target);
+        const directory = inlineDraft.source.endsWith("/");
+        const nextFile = directory && selectedFile.startsWith(`${source}/`)
+          ? `${target}${selectedFile.slice(source.length)}`
+          : selectedFile === source ? target : selectedFile;
+        await refresh(nextFile);
+        setSelectedEntry(directory ? `${target}/` : target);
+        setNotice(`已重命名为 ${target}`);
+      }
+      setInlineDraft(null);
+    } catch (error) {
+      setNotice(`文件操作失败：${String(error)}`);
+    } finally { setBusy(false); }
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    setBusy(true);
+    try {
+      if (pendingDelete.kind === "project") {
+        await desktopGateway.deleteStudioProject(pendingDelete.project.id);
+        await refresh(undefined, "");
+        setNotice(`已删除开发项目：${pendingDelete.project.name}`);
+      } else if (selectedId) {
+        await desktopGateway.deleteProjectEntry(selectedId, pendingDelete.path.replace(/\/$/, ""));
+        await refresh();
+        setNotice(`已删除 ${pendingDelete.path}`);
+      }
+      setPendingDelete(null);
+    } catch (error) {
+      setNotice(`删除失败：${String(error)}`);
+    } finally { setBusy(false); }
   };
 
   const importPaths = useCallback(async (paths: string[]) => {
@@ -241,7 +315,7 @@ export function StudioPage() {
   const notebook = selectedFile.endsWith(".ipynb");
 
   return (
-    <div className="page studio-page" onClick={() => setFileMenu(null)}>
+    <div className="page studio-page" onClick={() => { setFileMenu(null); setProjectMenu(null); }}>
       <header className="page-header studio-header">
         <div><div className="eyebrow">RPaz + Notebook 集成开发环境</div><h1>开发工作室</h1><p>编辑源码、直接运行项目，并使用持久 Python Kernel 交互调试。</p></div>
         <div className="header-actions">
@@ -266,10 +340,21 @@ export function StudioPage() {
           <div className="studio-pane-title"><FolderTree size={15} /> 项目</div>
           {projects.length === 0 && <p className="empty-hint">尚无项目，请在上方新建。</p>}
           {projects.map((project) => (
-            <button type="button" key={project.id} className={project.id === selectedId ? "selected" : ""} onClick={() => { setSelectedId(project.id); setSelectedFile(pickInitialFile(project)); }}>
+            <button
+              type="button"
+              key={project.id}
+              className={project.id === selectedId ? "selected" : ""}
+              onClick={() => { const file = pickInitialFile(project); setSelectedId(project.id); setSelectedFile(file); setSelectedEntry(file); }}
+              onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedId(project.id); setProjectMenu({ x: event.clientX, y: event.clientY, project }); }}
+            >
               <Box size={14} /><span><strong>{project.name}</strong><small>内部 ID · {project.id.slice(-8)}</small></span>
             </button>
           ))}
+          {projectMenu && (
+            <div className="studio-context-menu" style={{ left: projectMenu.x, top: projectMenu.y }} onClick={(event) => event.stopPropagation()}>
+              <button type="button" className="danger" onClick={() => { setPendingDelete({ kind: "project", project: projectMenu.project }); setProjectMenu(null); }}><Trash2 size={14} /> 删除开发项目</button>
+            </div>
+          )}
         </aside>
         <aside
           className="studio-files"
@@ -280,42 +365,91 @@ export function StudioPage() {
           <div className="studio-pane-title studio-pane-title-actions">
             <span><Code2 size={15} /> 文件</span>
             <span className="studio-file-actions">
-              <button type="button" title="新建文件" onClick={createFile} disabled={!selectedId || busy}><FilePlus2 size={13} /></button>
-              <button type="button" title="新建文件夹" onClick={createFolder} disabled={!selectedId || busy}><FolderPlus size={13} /></button>
+              <button type="button" title="新建文件" onClick={() => startCreate("file")} disabled={!selectedId || busy}><FilePlus2 size={13} /></button>
+              <button type="button" title="新建文件夹" onClick={() => startCreate("folder")} disabled={!selectedId || busy}><FolderPlus size={13} /></button>
               <button type="button" title="导入文件" onClick={pickAndImport} disabled={!selectedId || busy || !("__TAURI_INTERNALS__" in window)}><Upload size={13} /></button>
             </span>
           </div>
-          {files.length === 0 && <p className="empty-hint">当前项目还没有文件，可右键新建或拖拽导入。</p>}
+          {files.length === 0 && !inlineDraft && <p className="empty-hint">当前项目还没有文件，可右键新建或拖拽导入。</p>}
+          {inlineDraft?.mode === "create" && (
+            <div className="studio-inline-entry">
+              {inlineDraft.kind === "folder" ? <Folder size={14} /> : <FileCode2 size={14} />}
+              {currentDirectory && <span>{currentDirectory}/</span>}
+              <input
+                autoFocus
+                aria-label={inlineDraft.kind === "folder" ? "新文件夹名称" : "新文件名称"}
+                value={inlineDraft.value}
+                onChange={(event) => setInlineDraft({ ...inlineDraft, value: event.target.value })}
+                onFocus={(event) => event.currentTarget.select()}
+                onBlur={() => { if (!busy) setInlineDraft(null); }}
+                onKeyDown={(event) => { if (event.key === "Enter") void commitInlineDraft(); if (event.key === "Escape") setInlineDraft(null); }}
+              />
+            </div>
+          )}
           {files.map((file) => {
             const directory = file.endsWith("/");
+            if (inlineDraft?.mode === "rename" && inlineDraft.source === file) {
+              return (
+                <div className="studio-inline-entry" key={file}>
+                  {directory ? <Folder size={14} /> : <FileCode2 size={14} />}
+                  <input
+                    autoFocus
+                    aria-label="重命名"
+                    value={inlineDraft.value}
+                    onChange={(event) => setInlineDraft({ ...inlineDraft, value: event.target.value })}
+                    onFocus={(event) => event.currentTarget.select()}
+                    onBlur={() => { if (!busy) setInlineDraft(null); }}
+                    onKeyDown={(event) => { if (event.key === "Enter") void commitInlineDraft(); if (event.key === "Escape") setInlineDraft(null); }}
+                  />
+                </div>
+              );
+            }
             return (
-              <button type="button" key={file} className={file === selectedFile ? "selected" : ""} onClick={() => { if (!directory) setSelectedFile(file); }}>
+              <button
+                type="button"
+                key={file}
+                className={file === selectedEntry ? "selected" : ""}
+                onClick={() => { setSelectedEntry(file); if (!directory) setSelectedFile(file); }}
+                onDoubleClick={() => startRename(file)}
+                onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedEntry(file); setFileMenu({ x: event.clientX, y: event.clientY, target: file }); }}
+              >
                 {directory ? <Folder size={14} /> : file.endsWith(".ipynb") ? <BookOpen size={14} /> : <FileCode2 size={14} />} {file}
               </button>
             );
           })}
           {fileMenu && (
             <div className="studio-context-menu" style={{ left: fileMenu.x, top: fileMenu.y }} onClick={(event) => event.stopPropagation()}>
-              <button type="button" onClick={createFile}><FilePlus2 size={14} /> 新建文件</button>
-              <button type="button" onClick={createFolder}><FolderPlus size={14} /> 新建文件夹</button>
+              <button type="button" onClick={() => startCreate("file")}><FilePlus2 size={14} /> 新建文件</button>
+              <button type="button" onClick={() => startCreate("folder")}><FolderPlus size={14} /> 新建文件夹</button>
+              <button type="button" onClick={() => fileMenu.target && startRename(fileMenu.target)} disabled={!fileMenu.target}><Pencil size={14} /> 重命名</button>
               <button type="button" onClick={pickAndImport} disabled={!("__TAURI_INTERNALS__" in window)}><Upload size={14} /> 导入文件</button>
+              <button type="button" className="danger" onClick={() => { if (fileMenu.target) setPendingDelete({ kind: "entry", path: fileMenu.target }); setFileMenu(null); }} disabled={!fileMenu.target}><Trash2 size={14} /> 删除</button>
             </div>
           )}
         </aside>
         <section className={notebook ? "studio-editor notebook-editor" : "studio-editor"}>
           {notebook ? (
-            <NotebookWorkspace projectId={selectedId} content={content} onChange={setContent} onNotice={setNotice} />
+            <NotebookWorkspace projectId={selectedId} content={content} onChange={setContent} onNotice={setNotice} theme={theme} />
           ) : (
-            <><div className="editor-tab"><FileCode2 size={14} /> {selectedFile || "未选择文件"}<span>{language}</span></div><Editor height="100%" language={language} value={content} onChange={(value) => setContent(value ?? "")} theme="vs-dark" options={{ fontSize: 14, minimap: { enabled: false }, automaticLayout: true, tabSize: 4, wordWrap: "on" }} /></>
+            <><div className="editor-tab"><FileCode2 size={14} /> {selectedFile || "未选择文件"}<span>{language}</span></div><Editor height="100%" language={language} value={content} onChange={(value) => setContent(value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 14, minimap: { enabled: false }, automaticLayout: true, tabSize: 4, wordWrap: "on" }} /></>
           )}
         </section>
         <footer className="studio-console"><TerminalSquare size={15} /><strong>任务输出</strong><span>{notice}</span></footer>
       </div>
+      {pendingDelete && (
+        <div className="studio-confirm-overlay" role="dialog" aria-modal="true" aria-label="确认删除" onClick={(event) => event.stopPropagation()}>
+          <section className="studio-confirm-dialog">
+            <Trash2 size={22} />
+            <div><h2>{pendingDelete.kind === "project" ? "删除开发项目？" : "删除文件？"}</h2><p>{pendingDelete.kind === "project" ? `项目“${pendingDelete.project.name}”及其全部文件将被删除。` : `“${pendingDelete.path}”将从当前项目中删除。`}</p></div>
+            <footer><button className="button ghost" type="button" onClick={() => setPendingDelete(null)} disabled={busy}>取消</button><button className="button danger" type="button" onClick={() => void confirmDelete()} disabled={busy}><Trash2 size={14} /> {busy ? "删除中…" : "删除"}</button></footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
 
-function NotebookWorkspace({ projectId, content, onChange, onNotice }: { projectId: string; content: string; onChange: (value: string) => void; onNotice: (value: string) => void }) {
+function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { projectId: string; content: string; onChange: (value: string) => void; onNotice: (value: string) => void; theme: "light" | "dark" }) {
   const [document, setDocument] = useState<NotebookDocument>(() => parseNotebook(content));
   const [executing, setExecuting] = useState<number | null>(null);
   const [variables, setVariables] = useState<StudioVariable[]>([]);
@@ -408,7 +542,7 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice }: { project
             <div className="cell-gutter"><button type="button" aria-label={`运行单元格 ${index + 1}`} onClick={() => runCell(index)} disabled={cell.cell_type !== "code" || executing !== null}><Play size={13} fill="currentColor" /></button><span>[{cell.execution_count ?? " "}]</span></div>
             <div className="cell-body">
               {cell.cell_type === "code" ? (
-                <Editor height={`${Math.max(92, sourceText(cell.source).split("\n").length * 20 + 30)}px`} language="python" value={sourceText(cell.source)} onChange={(value) => updateSource(index, value ?? "")} theme="vs-dark" options={{ fontSize: 13, minimap: { enabled: false }, automaticLayout: true, lineNumbers: "on", scrollBeyondLastLine: false, folding: false }} />
+                <Editor height={`${Math.max(92, sourceText(cell.source).split("\n").length * 20 + 30)}px`} language="python" value={sourceText(cell.source)} onChange={(value) => updateSource(index, value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 13, minimap: { enabled: false }, automaticLayout: true, lineNumbers: "on", scrollBeyondLastLine: false, folding: false }} />
               ) : <textarea className="markdown-cell" value={sourceText(cell.source)} onChange={(event) => updateSource(index, event.target.value)} placeholder="Markdown 说明…" />}
               {cell.outputs.length > 0 && <div className="cell-output">{cell.outputs.map((output, outputIndex) => <NotebookOutput output={output} key={outputIndex} />)}</div>}
             </div>

@@ -12,11 +12,11 @@ DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管�
 - 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
 - 工作室可新建项目、编辑源码和 Notebook、直接运行工作副本、导出 `.rpaz`，也可将已安装包复制为可编辑项目。
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路。
-- 文件级 `.drpa-update` 更新，包含散列校验、原子替换、失败回滚和自动重启，并始终保护安装目录下的 `data/`。
+- 清单差量 `.drpa-update` 更新，包含可视化进度、散列校验、直接文件替换、失败回滚和末段自动重启；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。
 
 Windows 预览版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v0.2.0-preview-10>
 
-> preview-7 等旧安装不包含更新器，需要先安装 preview-10 建立热更新基线。之后可在“设置 → Windows 文件级热更新”应用 `.drpa-update`。
+> 旧安装首次升级仍由旧更新器执行；新轻量包不再重复携带 runtime/浏览器文件。首次过渡成功后，后续更新使用包内独立 Worker 和可视化进度；若旧版过渡失败，运行最新 Setup 建立新基线。
 
 ## 架构边界
 
@@ -86,6 +86,6 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 ## 当前限制
 
 - 只发布 Windows x64；Linux/macOS 仍是未来适配目标，不属于当前交付承诺。
-- 当前更新入口使用本地 `.drpa-update`，尚未实现在线更新源、签名信任链和差分块下载。
+- 当前更新入口使用本地 `.drpa-update`，已支持逐文件差量；尚未实现在线更新源、签名信任链和大文件块级差分。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
 - 自动调度、浏览器录制器、包签名/私有仓库和 AI Agent 均处于设计阶段，详见路线文档。

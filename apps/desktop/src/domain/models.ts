@@ -67,6 +67,32 @@ export interface RuntimeStatus {
   message: string;
 }
 
+export type WindowsUpdatePhase =
+  | "verifying"
+  | "applying"
+  | "waitingForRestart"
+  | "restarting"
+  | "completed"
+  | "failed";
+
+export interface WindowsUpdateSession {
+  id: string;
+  version: string;
+  totalFiles: number;
+  totalBytes: number;
+}
+
+export interface WindowsUpdateStatus {
+  sessionId: string;
+  version: string;
+  phase: WindowsUpdatePhase;
+  progress: number;
+  completedFiles: number;
+  totalFiles: number;
+  currentFile?: string;
+  message: string;
+}
+
 export interface TaskProfile {
   id: string;
   name: string;

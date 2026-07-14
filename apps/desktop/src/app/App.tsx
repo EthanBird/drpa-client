@@ -18,7 +18,7 @@ const StudioPage = lazy(() => import("../pages/StudioPage").then((module) => ({ 
 export function App() {
   const activeNavigation = useAppStore((state) => state.activeNavigation);
   const commandOpen = useAppStore((state) => state.commandOpen);
-  const compactMode = useAppStore((state) => state.compactMode);
+  const theme = useAppStore((state) => state.theme);
   const dragActive = useAppStore((state) => state.dragActive);
   const operationNotice = useAppStore((state) => state.operationNotice);
   const setCommandOpen = useAppStore((state) => state.setCommandOpen);
@@ -31,6 +31,11 @@ export function App() {
   useEffect(() => {
     void desktopGateway.getWorkspaceSnapshot().then(setSnapshot);
   }, [setSnapshot]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+  }, [theme]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -88,7 +93,7 @@ export function App() {
   }, [activeNavigation, selectPackage, setActiveNavigation, setDragActive, setOperationNotice, setSnapshot]);
 
   return (
-    <div className={compactMode ? "app density-compact" : "app"}>
+    <div className="app">
       <AppShell>
         {activeNavigation === "overview" && <OverviewPage />}
         {activeNavigation === "library" && <LibraryPage />}

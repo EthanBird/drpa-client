@@ -73,10 +73,10 @@ impl HostState {
                 runs: Vec::new(),
                 logs: vec![LogEntry {
                     id: 1,
-                    time: "现在".to_owned(),
+                    time: log_timestamp(),
                     level: LogLevel::Info,
                     scope: "host".to_owned(),
-                    message: "DRPA 工作区已就绪".to_owned(),
+                    message: "Host 初始化完成；工作区状态与本地脚本包索引已载入".to_owned(),
                 }],
             }),
             sequence: AtomicU64::new(2),
@@ -135,10 +135,13 @@ impl HostState {
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
         snapshot.logs.push(LogEntry {
             id: sequence,
-            time: "现在".to_owned(),
+            time: log_timestamp(),
             level: LogLevel::Success,
             scope: "package".to_owned(),
-            message: format!("已安装 {} v{}", summary.name, summary.version),
+            message: format!(
+                "脚本包安装完成 · package={} · version={}",
+                summary.id, summary.version
+            ),
         });
         Ok(summary)
     }
@@ -166,7 +169,10 @@ impl HostState {
             &mut snapshot,
             LogLevel::Info,
             "package",
-            format!("已卸载 {} v{}", package.name, package.version),
+            format!(
+                "脚本包卸载完成 · package={} · version={}",
+                package.id, package.version
+            ),
         );
         Ok(())
     }
@@ -216,7 +222,7 @@ impl HostState {
             package_name: package.name.clone(),
             profile_name: profile.name.clone(),
             status: RunStatus::Running,
-            started_at: "刚刚".to_owned(),
+            started_at: log_timestamp(),
             duration: "—".to_owned(),
             progress: None,
         };
@@ -225,12 +231,12 @@ impl HostState {
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
         snapshot.logs.push(LogEntry {
             id: sequence,
-            time: "现在".to_owned(),
+            time: log_timestamp(),
             level: LogLevel::Info,
             scope: "host".to_owned(),
             message: format!(
-                "运行 {run_id} 已启动 · {} 个参数",
-                parameters.as_object().map_or(0, |map| map.len())
+                "任务已创建 · run={run_id} · package={package_id} · profile={profile_id} · parameters={}",
+                parameters.as_object().map_or(0, |map| map.len()),
             ),
         });
         Ok(RunLaunch {
@@ -267,7 +273,7 @@ impl HostState {
                 package_name: manifest.name.clone(),
                 profile_name: "Studio 直接运行".to_owned(),
                 status: RunStatus::Running,
-                started_at: "刚刚".to_owned(),
+                started_at: log_timestamp(),
                 duration: "—".to_owned(),
                 progress: None,
             },
@@ -276,12 +282,13 @@ impl HostState {
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
         snapshot.logs.push(LogEntry {
             id: sequence,
-            time: "现在".to_owned(),
+            time: log_timestamp(),
             level: LogLevel::Info,
             scope: "studio".to_owned(),
             message: format!(
-                "开发态运行 {run_id} 已启动 · {} 个参数",
-                parameters.as_object().map_or(0, |map| map.len())
+                "Studio 任务已创建 · run={run_id} · package={} · parameters={}",
+                manifest.id,
+                parameters.as_object().map_or(0, |map| map.len()),
             ),
         });
         Ok(RunLaunch {
@@ -301,7 +308,7 @@ impl HostState {
                 &mut snapshot,
                 LogLevel::Info,
                 "runtime",
-                "封装 Python 运行时已就绪".to_owned(),
+                format!("运行时握手完成 · run={run_id} · protocol=drpa-runtime-v1"),
             ),
             RuntimeEvent::Log {
                 level,
@@ -321,7 +328,7 @@ impl HostState {
                 &mut snapshot,
                 LogLevel::Success,
                 "artifact",
-                format!("已生成 {label} · {path}"),
+                format!("产物已登记 · run={run_id} · label={label} · path={path}"),
             ),
             RuntimeEvent::Warning { message, .. } => {
                 self.push_log(&mut snapshot, LogLevel::Warning, "runtime", message);
@@ -338,9 +345,15 @@ impl HostState {
                 };
                 finish_run(&mut snapshot, run_id, status);
                 let (level, message) = if exit_code == 0 {
-                    (LogLevel::Success, "运行完成".to_owned())
+                    (
+                        LogLevel::Success,
+                        format!("任务完成 · run={run_id} · exitCode=0"),
+                    )
                 } else {
-                    (LogLevel::Error, format!("运行失败，退出码 {exit_code}"))
+                    (
+                        LogLevel::Error,
+                        format!("任务失败 · run={run_id} · exitCode={exit_code}"),
+                    )
                 };
                 self.push_log(&mut snapshot, level, "runtime", message);
             }
@@ -376,12 +389,23 @@ impl HostState {
     ) {
         snapshot.logs.push(LogEntry {
             id: self.sequence.fetch_add(1, Ordering::Relaxed),
-            time: "现在".to_owned(),
+            time: log_timestamp(),
             level,
             scope: scope.to_owned(),
             message,
         });
     }
+}
+
+fn log_timestamp() -> String {
+    let milliseconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() % 86_400_000);
+    let hours = milliseconds / 3_600_000;
+    let minutes = (milliseconds / 60_000) % 60;
+    let seconds = (milliseconds / 1_000) % 60;
+    let fraction = milliseconds % 1_000;
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{fraction:03}Z")
 }
 
 fn finish_run(snapshot: &mut WorkspaceSnapshot, run_id: &str, status: RunStatus) {
