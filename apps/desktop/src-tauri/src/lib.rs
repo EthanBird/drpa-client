@@ -18,14 +18,15 @@ use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
 mod agent;
+mod knowledge;
 
 const WINDOWS_UPDATE_SCHEMA: u32 = 2;
 const WINDOWS_UPDATE_HOST_PROTOCOL: u32 = 2;
 const WINDOWS_UPDATE_WORKER_PROTOCOL: u32 = 2;
 
 #[derive(Clone)]
-struct AppPaths {
-    workspace_root: PathBuf,
+pub(crate) struct AppPaths {
+    pub(crate) workspace_root: PathBuf,
 }
 
 #[derive(Clone)]
@@ -1729,6 +1730,7 @@ pub fn run() {
                 }
             };
             fs::create_dir_all(&workspace_root)?;
+            knowledge::seed_default_knowledge(&workspace_root)?;
 
             #[cfg(windows)]
             {
@@ -1779,7 +1781,15 @@ pub fn run() {
             get_latest_windows_update_status,
             restart_for_windows_update,
             get_data_directory,
-            get_current_user
+            get_current_user,
+            knowledge::list_knowledge_entries,
+            knowledge::read_knowledge_file,
+            knowledge::write_knowledge_file,
+            knowledge::create_knowledge_entry,
+            knowledge::rename_knowledge_entry,
+            knowledge::delete_knowledge_entry,
+            knowledge::import_knowledge_files,
+            knowledge::export_knowledge_file
         ])
         .run(context)
         .expect("failed to run DRPA Next desktop host");

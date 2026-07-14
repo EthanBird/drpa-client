@@ -13,10 +13,10 @@
 - 自动化计划只读预览页：展示任务、触发器、下一次运行、执行策略与健康状态，并在 Host/前端快照协议中新增 `automations` 字段。
 - 开发工作室文件菜单：新建文件、文件夹、选择导入与拖拽导入。
 - 运行工作台支持创建本地任务配置，并读取 manifest 参数默认值。
-- 基础设施增加轻量 RPAZ AI Agent：支持 OpenAI-compatible URL、model、会话级可选 key、项目绑定、六个内置工具和最多 8 轮 function calling。
+- 基础设施增加轻量 RPAZ AI Agent：支持 OpenAI-compatible URL、model、会话级可选 key、项目绑定、六个项目工具、三个知识库工具和最多 8 轮 function calling。
 - AI Agent 工具支持项目文件读取/写入、manifest 校验、RPAZ 构建和 30 秒 sealed Python 辅助，并显示工具事件、用量与耗时。
 - AI Agent 增加本地对话列表：支持新建、切换、自动命名、重命名、删除和清空会话；每个会话独立保存项目绑定与最近消息，配置面板可随时隐藏或显示。
-- 原“帮助与诊断”入口升级为“开发文档”，内置开发概览、RPAZ、离线运行环境、AI Agent 和发布更新五组 HTML 文档，可在 DRPA 内离线切换阅读。
+- 原静态 HTML“开发文档”升级为本地 Markdown“知识文档”：支持目录树、搜索、阅读/编辑/分栏渲染、自动保存、相对链接、内联创建/重命名/删除、拖拽导入和原生导入导出；首次初始化 11 篇详细 RPAZ 指南，重点覆盖 manifest、ctx 默认配置和 DrissionPage。
 - 左下角账户卡片从 Host 获取当前系统用户，不再显示固定示例账户。
 
 ### 修复

@@ -29,6 +29,9 @@ import type { AgentConversationMessage, AgentMessage, AgentToolEvent, StudioProj
 import { desktopGateway } from "../infra/gateway";
 
 const toolLabels: Record<string, string> = {
+  knowledge_list_documents: "列出知识文档",
+  knowledge_read_document: "读取知识文档",
+  knowledge_write_document: "写入知识文档",
   rpaz_list_files: "列出项目文件",
   rpaz_read_file: "读取项目文件",
   rpaz_write_file: "写入项目文件",
@@ -204,7 +207,7 @@ export function AgentPage() {
               <div className="agent-welcome">
                 <div className="agent-orbit"><Sparkles size={24} /></div>
                 <h2>从一个 RPAZ 开发任务开始</h2>
-                <p>{selectedProject ? `Agent 已绑定“${selectedProject.name}”，可以按需读取和修改项目文件。` : "选择右侧开发项目后，Agent 将启用六个内置 RPAZ 工具。"}</p>
+                <p>{selectedProject ? `Agent 已绑定“${selectedProject.name}”，可以按需读取和修改项目文件与知识文档。` : "三个知识库工具已启用；选择右侧开发项目后再启用六个 RPAZ 工具。"}</p>
                 <div className="agent-suggestions">
                   {suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => void send(suggestion)}><MessageSquarePlus size={14} /><span>{suggestion}</span></button>)}
                 </div>
@@ -265,8 +268,8 @@ export function AgentPage() {
             </section>
 
             <section className="agent-config-section agent-tools-section">
-              <h2><Wrench size={13} /> 内置工具 <span>{agentProjectId ? "6 ACTIVE" : "LOCKED"}</span></h2>
-              <div className="agent-tool-list">{Object.entries(toolLabels).map(([name, label]) => <div className={agentProjectId ? "active" : ""} key={name}><CheckCircle2 size={12} /><span><strong>{label}</strong><code>{name}</code></span></div>)}</div>
+              <h2><Wrench size={13} /> 内置工具 <span>{agentProjectId ? "9 ACTIVE" : "3 ACTIVE"}</span></h2>
+              <div className="agent-tool-list">{Object.entries(toolLabels).map(([name, label]) => { const active = name.startsWith("knowledge_") || Boolean(agentProjectId); return <div className={active ? "active" : ""} key={name}><CheckCircle2 size={12} /><span><strong>{label}</strong><code>{name}</code></span></div>; })}</div>
             </section>
           </div>
           <footer><span className="agent-limit-dot" /> 单 Agent · 最多 8 轮工具调用 · Python 30 秒</footer>

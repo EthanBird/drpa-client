@@ -16,7 +16,7 @@ const commands: Array<{
   { id: "library", label: "安装脚本包", detail: "脚本包管理", icon: Library, navigation: "library" },
   { id: "studio", label: "新建 RPaz 项目", detail: "开发工作室", icon: Code2, navigation: "studio" },
   { id: "agent", label: "打开 AI Agent", detail: "RPAZ 开发助手", icon: Bot, navigation: "agent" },
-  { id: "docs", label: "打开开发文档", detail: "本地 HTML 文档", icon: BookOpen, navigation: "docs" },
+  { id: "docs", label: "打开知识文档", detail: "本地 Markdown 知识库", icon: BookOpen, navigation: "docs" },
   { id: "runs", label: "打开运行记录", detail: "执行与审计", icon: ListTodo, navigation: "runs" },
   { id: "automation", label: "打开自动化计划", detail: "任务编排", icon: Zap, navigation: "automations" },
   { id: "settings", label: "打开设置", detail: "应用配置", icon: Settings, navigation: "settings" },

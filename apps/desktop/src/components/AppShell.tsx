@@ -144,7 +144,7 @@ export function AppShell({ children }: PropsWithChildren) {
           <Play size={14} fill="currentColor" />
         </button>
         <div className="sidebar-utility">
-          <button type="button" onClick={() => setActiveNavigation("docs")}><CircleHelp size={16} /><span>开发文档</span></button>
+          <button type="button" onClick={() => setActiveNavigation("docs")}><CircleHelp size={16} /><span>知识文档</span></button>
           <button type="button" onClick={() => setActiveNavigation("settings")}><Settings size={16} /><span>设置</span></button>
         </div>
         <div className="account-card">

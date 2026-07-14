@@ -75,6 +75,14 @@ export interface CurrentUser {
   initials: string;
 }
 
+export interface KnowledgeEntry {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+  size: number;
+  modifiedAt: number;
+}
+
 export interface AgentMessage {
   role: "user" | "assistant";
   content: string;

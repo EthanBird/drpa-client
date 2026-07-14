@@ -180,9 +180,9 @@ CI 默认执行 `update` 发布：只 stage 主程序和更新器，使用 `--pa
 
 ## 7.1 AI Agent
 
-Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker 调用 OpenAI-compatible Chat Completions，并执行最多 8 轮 RPAZ function tools。当前工具仅覆盖项目文件、manifest 校验、RPAZ 构建和 30 秒 sealed Python；API key 只保存在前端会话内。前端持久化最多 50 个本地对话及每个对话最近 120 条消息，支持逐会话项目绑定和配置面板折叠。实现与约束见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
+Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker 调用 OpenAI-compatible Chat Completions，并执行最多 8 轮 function tools。三个知识库工具始终可用；绑定项目后再启用六个项目文件、manifest、构建和 30 秒 sealed Python 工具。API key 只保存在前端会话内。前端持久化最多 50 个本地对话及每个对话最近 120 条消息，支持逐会话项目绑定和配置面板折叠。实现与约束见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
 
-“开发文档”页面读取 `apps/desktop/public/docs/` 下的静态 HTML/CSS，并通过同源 iframe 在 Tauri 内离线展示。新增文档时同时更新 `DocsPage.tsx` 的导航清单，并确认 Vite 输出目录保留对应文件。
+“知识文档”使用安装数据目录 `knowledge/` 作为 Markdown 工作区。Rust Host 提供列表、UTF-8 读写、内联创建、重命名、递归删除、导入和导出命令，并对相对路径、扩展名、符号链接和 8 MiB 单文档上限做校验；写入使用同目录临时文件和替换。`apps/desktop/src-tauri/knowledge_seed/` 通过 `include_str!` 编译进 Host，首次初始化为 `RPAZ 开发指南/`，marker 存在后不覆盖用户修改。前端 `DocsPage.tsx` 提供树、搜索、自动保存、预览/编辑/分栏、GFM 渲染、相对文档跳转和拖拽导入。
 
 当前仍从本地介质导入更新；在线 feed 与清单签名属于后续路线，见 [`ROADMAP.md`](ROADMAP.md)。
 

@@ -1,5 +1,15 @@
 # GUI 测试记录
 
+## 2026-07-14 · Markdown 知识库回归
+
+- 构建并启动 `target/debug/drpa-desktop.exe`，实际 Host 在 `target/debug/data/knowledge/RPAZ 开发指南/` 首次生成 11 篇 Markdown；逐文件确认存在，`03_ctx上下文与默认配置.md` 为 UTF-8 且内容完整。
+- Windows Computer Use 已启动无边框 Tauri 测试窗口，但截图辅助返回 `SetIsBorderRequired failed: 不支持此接口 (0x80004002)`，因此停止该控制链路；这是测试辅助对窗口捕获的兼容问题，未观察到 DRPA 崩溃。
+- 隐藏启动 Vite 后使用应用 GUI 浏览器预览回归，避免再弹出控制台窗口。1280×720 下知识库 header、270px 文件树、阅读区和底部状态栏没有溢出。
+- 通过 GUI 验证：从“知识文档”入口打开、相对 Markdown 链接跳转、编辑模式、分栏实时渲染、GFM 任务列表、代码块、内联新建并自动补 `.md`、目录名称搜索。
+- AI Agent 未绑定项目时显示 `3 ACTIVE`，`knowledge_list_documents`、`knowledge_read_document`、`knowledge_write_document` 可见；绑定项目后合计 9 个工具。
+- 浏览器控制台 warning/error 为 0。GUI 预览结束后关闭测试标签和隐藏 Vite 服务，没有保留可见控制台。
+- 自动化门禁：Vitest 15/15、desktop Rust 12/12、workspace Rust 全部通过、Python 5/5；`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+
 ## 2026-07-14 全量运行时实体文件回归
 
 - 复现：本地 `target/update-debug/v2-gui/install` 曾使用指向旧安装目录的 Junction 复用 `runtime/python`、`runtime/browser`、`runtime/tools` 与 `webview2`。删除旧安装后，运行环境页报告缺少 `runtime/browser/chrome-win64/chrome.exe`。

@@ -26,10 +26,13 @@ React Agent UI
 
 工具结果以 `role=tool` 和原始 `tool_call_id` 回送模型。Host 限制最近 40 条历史、单消息 100 KiB、单工具输出 20 KiB。模型请求与本地工具执行都离开 Tauri UI 线程。
 
-## MVP 工具
+## 内置工具
 
 | 工具 | 行为 |
 | --- | --- |
+| `knowledge_list_documents` | 列出本地 Markdown 知识目录和文档，无需绑定项目 |
+| `knowledge_read_document` | 读取知识库 UTF-8 Markdown，单篇最大 8 MiB |
+| `knowledge_write_document` | 原子创建/覆盖 Markdown，并按安全相对路径创建父目录 |
 | `rpaz_list_files` | 列出项目文件，忽略缓存、字节码与符号链接 |
 | `rpaz_read_file` | 读取项目内 UTF-8 文本，单文件最大 2 MiB |
 | `rpaz_write_file` | 在项目内创建或覆盖 UTF-8 文件，单文件最大 2 MiB |
@@ -37,7 +40,7 @@ React Agent UI
 | `rpaz_build` | 校验后在工作区 `build/` 生成 `.rpaz` |
 | `rpaz_python` | 使用 sealed Python 在项目目录执行辅助代码，30 秒超时 |
 
-路径先经过 `safe_relative_path`，再校验现有父目录的 canonical path。工具不读取凭据保险箱、不访问安装包目录、不暴露任意 Tauri command，也没有通用 shell。
+路径先经过 `safe_relative_path`，再校验目录链和符号链接。知识工具限定在数据目录 `knowledge/`；RPAZ 工具限定在绑定项目。工具不读取凭据保险箱、不访问安装包目录、不暴露任意 Tauri command，也没有通用 shell。
 
 ## 产品参考与取舍
 

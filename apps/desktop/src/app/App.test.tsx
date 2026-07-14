@@ -145,14 +145,43 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByText("项目校验通过。")).toBeVisible();
   });
 
-  it("opens bundled multi-page HTML development documentation", async () => {
+  it("opens the local Markdown knowledge library, follows links, edits and creates inline", async () => {
+    const write = vi.spyOn(desktopGateway, "writeKnowledgeFile");
+    const create = vi.spyOn(desktopGateway, "createKnowledgeEntry");
+    const rename = vi.spyOn(desktopGateway, "renameKnowledgeEntry");
+    const remove = vi.spyOn(desktopGateway, "deleteKnowledgeEntry");
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "开发文档" }));
+    fireEvent.click(screen.getByRole("button", { name: "知识文档" }));
 
-    expect(await screen.findByRole("heading", { name: "开发文档" })).toBeVisible();
-    expect(screen.getByTitle("DRPA 开发概览")).toHaveAttribute("src", expect.stringContaining("docs/index.html"));
-    fireEvent.click(screen.getByRole("button", { name: /RPAZ 规范/ }));
-    expect(screen.getByTitle("DRPA RPAZ 规范")).toHaveAttribute("src", expect.stringContaining("docs/rpaz.html"));
+    expect(await screen.findByRole("heading", { name: "知识文档" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "RPAZ 开发指南" })).toBeVisible();
+    fireEvent.click(screen.getByRole("link", { name: "快速开始" }));
+    expect(await screen.findByRole("heading", { name: "快速开始" })).toBeVisible();
+
+    fireEvent.click(screen.getByTitle("编辑"));
+    const editor = screen.getByLabelText("Markdown 编辑器");
+    fireEvent.change(editor, { target: { value: "# 已修改\n" } });
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    await waitFor(() => expect(write).toHaveBeenCalledWith("RPAZ 开发指南/01_快速开始.md", "# 已修改\n"));
+
+    fireEvent.click(screen.getByRole("button", { name: "新建文档" }));
+    const nameInput = screen.getByLabelText("新文档名称");
+    fireEvent.change(nameInput, { target: { value: "测试笔记" } });
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+    await waitFor(() => expect(create).toHaveBeenCalledWith("RPAZ 开发指南/测试笔记.md", "file"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "测试笔记.md 菜单" }));
+    fireEvent.click(screen.getByRole("button", { name: "重命名" }));
+    const renameInput = screen.getByLabelText("重命名知识条目");
+    fireEvent.change(renameInput, { target: { value: "已重命名" } });
+    fireEvent.keyDown(renameInput, { key: "Enter" });
+    await waitFor(() => expect(rename).toHaveBeenCalledWith("RPAZ 开发指南/测试笔记.md", "RPAZ 开发指南/已重命名.md"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "已重命名.md 菜单" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    expect(screen.getByText("删除文档？")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("RPAZ 开发指南/已重命名.md"));
   });
 
   it("shows automation schedules from the workspace snapshot", async () => {

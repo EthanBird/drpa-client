@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
+use crate::knowledge;
+
 const MAX_AGENT_ROUNDS: usize = 8;
 const MAX_HISTORY_MESSAGES: usize = 40;
 const MAX_MESSAGE_BYTES: usize = 100_000;
@@ -108,11 +110,7 @@ pub(crate) fn run_agent_turn(
         messages.push(json!({"role": message.role, "content": message.content}));
     }
 
-    let tools = if context.project_root.is_some() {
-        rpaz_tool_definitions()
-    } else {
-        Vec::new()
-    };
+    let tools = agent_tool_definitions(context.project_root.is_some());
     let mut events = Vec::new();
     let mut usage = AgentUsage::default();
 
@@ -294,20 +292,41 @@ fn system_prompt(has_project: bool) -> String {
     let context = if has_project {
         "当前已绑定一个开发工作室项目，可以使用 RPAZ 工具读取、修改、校验、构建项目，也可以运行限时 Python 辅助分析。"
     } else {
-        "当前未绑定开发项目。先回答问题，并提示用户在右侧选择项目后再执行文件或 Python 工具。"
+        "当前未绑定开发项目，项目文件和 Python 工具暂不可用，但仍可读取或维护本地知识文档。"
     };
     format!(
         "你是 DRPA Next 内置的轻量 RPAZ 开发 Agent。{context}\n\
          RPAZ 是根目录含 manifest.yaml 的 ZIP，当前 schema 为 2；Python 入口实现 main(ctx)，\
          参数来自 ctx.params，产物使用 ctx.output_file，进度使用 ctx.progress。\n\
-         只处理 RPAZ 项目开发，不假装使用未提供的终端、浏览器或网络工具。\n\
+         你可以使用 knowledge 工具读取和维护本地 Markdown 知识库。只处理 RPAZ 项目开发，\
+         不假装使用未提供的终端、浏览器或网络工具。\n\
          修改文件后应调用 rpaz_validate；需要交付归档时调用 rpaz_build。\n\
          回答使用简体中文，先给结论，再列出实际完成的文件与验证结果。"
     )
 }
 
-fn rpaz_tool_definitions() -> Vec<Value> {
-    vec![
+fn agent_tool_definitions(has_project: bool) -> Vec<Value> {
+    let mut tools = vec![
+        tool_definition(
+            "knowledge_list_documents",
+            "列出 DRPA 本地知识库中的 Markdown 文档和目录。",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "knowledge_read_document",
+            "读取本地知识库中的一篇 UTF-8 Markdown 文档。",
+            json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "knowledge_write_document",
+            "创建或覆盖本地知识库中的 Markdown 文档；父目录会按安全相对路径创建。",
+            json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}),
+        ),
+    ];
+    if !has_project {
+        return tools;
+    }
+    tools.extend([
         tool_definition(
             "rpaz_list_files",
             "列出当前 RPAZ 开发项目的文件。",
@@ -338,7 +357,8 @@ fn rpaz_tool_definitions() -> Vec<Value> {
             "在当前项目目录用 DRPA 内置 Python 执行最多 30 秒的辅助代码，适合检查 JSON、生成模板或验证纯 Python 逻辑。",
             json!({"type":"object","properties":{"code":{"type":"string"}},"required":["code"],"additionalProperties":false}),
         ),
-    ]
+    ]);
+    tools
 }
 
 fn tool_definition(name: &str, description: &str, parameters: Value) -> Value {
@@ -357,6 +377,37 @@ fn execute_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<ToolResult, String> {
+    match name {
+        "knowledge_list_documents" => {
+            let entries = knowledge::list_for_agent(&context.workspace_root)?;
+            let count = entries.len();
+            return Ok(ToolResult {
+                output: json!({"ok": true, "entries": entries}),
+                summary: format!("已列出 {count} 个知识条目"),
+            });
+        }
+        "knowledge_read_document" => {
+            let relative = argument_string(arguments, "path")?;
+            let content = knowledge::read_for_agent(&context.workspace_root, relative)?;
+            return Ok(ToolResult {
+                output: json!({"ok": true, "path": relative, "content": content}),
+                summary: format!(
+                    "已读取知识文档 {relative}（{} 字符）",
+                    content.chars().count()
+                ),
+            });
+        }
+        "knowledge_write_document" => {
+            let relative = argument_string(arguments, "path")?;
+            let content = argument_string(arguments, "content")?;
+            knowledge::write_for_agent(&context.workspace_root, relative, content)?;
+            return Ok(ToolResult {
+                output: json!({"ok": true, "path": relative, "bytes": content.len()}),
+                summary: format!("已写入知识文档 {relative}（{} 字节）", content.len()),
+            });
+        }
+        _ => {}
+    }
     let project_root = context
         .project_root
         .as_deref()
@@ -717,6 +768,41 @@ mod tests {
                 &context,
                 "rpaz_read_file",
                 &json!({"path": "../outside.txt"})
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn knowledge_tools_work_without_a_bound_project() {
+        let workspace =
+            std::env::temp_dir().join(format!("drpa-agent-knowledge-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace).unwrap();
+        let context = AgentContext {
+            workspace_root: workspace.clone(),
+            project_root: None,
+            python: PathBuf::from("python"),
+        };
+
+        execute_tool(
+            &context,
+            "knowledge_write_document",
+            &json!({"path": "业务/说明.md", "content": "# 说明\n"}),
+        )
+        .unwrap();
+        let read = execute_tool(
+            &context,
+            "knowledge_read_document",
+            &json!({"path": "业务/说明.md"}),
+        )
+        .unwrap();
+        assert_eq!(read.output["content"], "# 说明\n");
+        assert!(
+            execute_tool(
+                &context,
+                "knowledge_write_document",
+                &json!({"path": "../outside.md", "content": "bad"}),
             )
             .is_err()
         );

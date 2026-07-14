@@ -5,6 +5,7 @@ import type {
   AgentTurnRequest,
   AgentTurnResult,
   CurrentUser,
+  KnowledgeEntry,
   PackageSummary,
   RuntimeStatus,
   StudioCellResult,
@@ -45,6 +46,14 @@ export interface DesktopGateway {
   restartForWindowsUpdate(sessionId: string): Promise<void>;
   getDataDirectory(): Promise<string>;
   getCurrentUser(): Promise<CurrentUser>;
+  listKnowledgeEntries(): Promise<KnowledgeEntry[]>;
+  readKnowledgeFile(relativePath: string): Promise<string>;
+  writeKnowledgeFile(relativePath: string, content: string): Promise<void>;
+  createKnowledgeEntry(relativePath: string, kind: "file" | "directory"): Promise<void>;
+  renameKnowledgeEntry(relativePath: string, targetPath: string): Promise<void>;
+  deleteKnowledgeEntry(relativePath: string): Promise<void>;
+  importKnowledgeFiles(sourcePaths: string[], targetDirectory: string): Promise<string[]>;
+  exportKnowledgeFile(relativePath: string, targetPath: string): Promise<string>;
 }
 
 function isTauriHost(): boolean {
@@ -53,6 +62,20 @@ function isTauriHost(): boolean {
 
 const mockStudioProjects: StudioProject[] = [];
 const mockStudioContents = new Map<string, Map<string, string>>();
+const mockKnowledgeDirectories = new Set(["RPAZ 开发指南"]);
+const mockKnowledgeContents = new Map<string, string>([
+  ["RPAZ 开发指南/00_阅读指南.md", "# RPAZ 开发指南\n\n这是浏览器预览知识库。桌面 Host 会提供完整的默认文档、导入、导出和本地文件管理。\n\n- [快速开始](./01_快速开始.md)\n- [Context](./03_ctx上下文与默认配置.md)\n"],
+  ["RPAZ 开发指南/01_快速开始.md", "# 快速开始\n\n在开发工作室新建项目，编辑 `manifest.yaml` 和 `main.py`，直接运行后再导出 `.rpaz`。\n"],
+  ["RPAZ 开发指南/03_ctx上下文与默认配置.md", "# ctx 上下文\n\n入口函数使用 `def main(ctx)`。通过 `ctx.params`、`ctx.log`、`ctx.progress()`、`ctx.output_file()` 和 `ctx.browser()` 访问 Host 能力。\n"],
+]);
+
+function mockKnowledgeEntries(): KnowledgeEntry[] {
+  const now = Date.now();
+  return [
+    ...Array.from(mockKnowledgeDirectories, (path): KnowledgeEntry => ({ path, name: path.split("/").at(-1) ?? path, kind: "directory", size: 0, modifiedAt: now })),
+    ...Array.from(mockKnowledgeContents, ([path, content]): KnowledgeEntry => ({ path, name: path.split("/").at(-1) ?? path, kind: "file", size: new Blob([content]).size, modifiedAt: now })),
+  ].sort((left, right) => left.path.localeCompare(right.path, "zh-CN"));
+}
 
 function addMockProject(project: StudioProject): StudioProject {
   const existing = mockStudioProjects.find((item) => item.id === project.id);
@@ -175,6 +198,44 @@ const mockGateway: DesktopGateway = {
   async getCurrentUser() {
     return { displayName: "本地用户", accountName: "browser-preview", initials: "本地" };
   },
+  async listKnowledgeEntries() {
+    return structuredClone(mockKnowledgeEntries());
+  },
+  async readKnowledgeFile(relativePath) {
+    const content = mockKnowledgeContents.get(relativePath);
+    if (content === undefined) throw new Error("知识文档不存在");
+    return content;
+  },
+  async writeKnowledgeFile(relativePath, content) {
+    mockKnowledgeContents.set(relativePath, content);
+  },
+  async createKnowledgeEntry(relativePath, kind) {
+    if (mockKnowledgeContents.has(relativePath) || mockKnowledgeDirectories.has(relativePath)) throw new Error("同名条目已存在");
+    if (kind === "directory") mockKnowledgeDirectories.add(relativePath);
+    else mockKnowledgeContents.set(relativePath, "# 新文档\n\n在这里开始记录。\n");
+  },
+  async renameKnowledgeEntry(relativePath, targetPath) {
+    if (mockKnowledgeContents.has(relativePath)) {
+      mockKnowledgeContents.set(targetPath, mockKnowledgeContents.get(relativePath) ?? "");
+      mockKnowledgeContents.delete(relativePath);
+      return;
+    }
+    const affectedDirectories = Array.from(mockKnowledgeDirectories).filter((path) => path === relativePath || path.startsWith(`${relativePath}/`));
+    const affectedFiles = Array.from(mockKnowledgeContents).filter(([path]) => path.startsWith(`${relativePath}/`));
+    affectedDirectories.forEach((path) => { mockKnowledgeDirectories.delete(path); mockKnowledgeDirectories.add(`${targetPath}${path.slice(relativePath.length)}`); });
+    affectedFiles.forEach(([path, content]) => { mockKnowledgeContents.delete(path); mockKnowledgeContents.set(`${targetPath}${path.slice(relativePath.length)}`, content); });
+  },
+  async deleteKnowledgeEntry(relativePath) {
+    mockKnowledgeContents.delete(relativePath);
+    Array.from(mockKnowledgeContents.keys()).filter((path) => path.startsWith(`${relativePath}/`)).forEach((path) => mockKnowledgeContents.delete(path));
+    Array.from(mockKnowledgeDirectories).filter((path) => path === relativePath || path.startsWith(`${relativePath}/`)).forEach((path) => mockKnowledgeDirectories.delete(path));
+  },
+  async importKnowledgeFiles(sourcePaths, targetDirectory) {
+    return sourcePaths.map((path) => `${targetDirectory ? `${targetDirectory}/` : ""}${path.split(/[\\/]/).at(-1) ?? "imported.md"}`);
+  },
+  async exportKnowledgeFile(_relativePath, targetPath) {
+    return targetPath;
+  },
 };
 
 const tauriGateway: DesktopGateway = {
@@ -208,6 +269,14 @@ const tauriGateway: DesktopGateway = {
   restartForWindowsUpdate: (sessionId) => invoke<void>("restart_for_windows_update", { sessionId }),
   getDataDirectory: () => invoke<string>("get_data_directory"),
   getCurrentUser: () => invoke<CurrentUser>("get_current_user"),
+  listKnowledgeEntries: () => invoke<KnowledgeEntry[]>("list_knowledge_entries"),
+  readKnowledgeFile: (relativePath) => invoke<string>("read_knowledge_file", { relativePath }),
+  writeKnowledgeFile: (relativePath, content) => invoke<void>("write_knowledge_file", { relativePath, content }),
+  createKnowledgeEntry: (relativePath, kind) => invoke<void>("create_knowledge_entry", { relativePath, kind }),
+  renameKnowledgeEntry: (relativePath, targetPath) => invoke<void>("rename_knowledge_entry", { relativePath, targetPath }),
+  deleteKnowledgeEntry: (relativePath) => invoke<void>("delete_knowledge_entry", { relativePath }),
+  importKnowledgeFiles: (sourcePaths, targetDirectory) => invoke<string[]>("import_knowledge_files", { sourcePaths, targetDirectory }),
+  exportKnowledgeFile: (relativePath, targetPath) => invoke<string>("export_knowledge_file", { relativePath, targetPath }),
 };
 
 export const desktopGateway: DesktopGateway = isTauriHost() ? tauriGateway : mockGateway;

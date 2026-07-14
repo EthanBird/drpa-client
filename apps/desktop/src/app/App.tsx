@@ -73,6 +73,11 @@ export function App() {
           setOperationNotice(`已将 ${event.payload.paths.length} 个文件交给开发工作室`);
           return;
         }
+        if (activeNavigation === "docs") {
+          window.dispatchEvent(new CustomEvent("drpa-knowledge-file-drop", { detail: { paths: event.payload.paths } }));
+          setOperationNotice(`已将 ${event.payload.paths.length} 个文件交给知识文档`);
+          return;
+        }
         const archives = event.payload.paths.filter((path) => path.toLowerCase().endsWith(".rpaz"));
         if (archives.length === 0) {
           setOperationNotice("拖入的文件不是 .rpaz 脚本包");
@@ -115,7 +120,7 @@ export function App() {
         )}
         {activeNavigation === "settings" && <SettingsPage />}
       </AppShell>
-      {dragActive && <div className="drop-overlay"><div><strong>释放以安装 RPAZ</strong><span>支持同时拖入多个 `.rpaz` 脚本包</span></div></div>}
+      {dragActive && <div className="drop-overlay"><div><strong>{activeNavigation === "docs" ? "释放以导入 Markdown" : activeNavigation === "studio" ? "释放以添加项目文件" : "释放以安装 RPAZ"}</strong><span>{activeNavigation === "docs" ? "支持同时导入多个 `.md` / `.markdown` 文档" : activeNavigation === "studio" ? "文件将添加到当前项目目录" : "支持同时拖入多个 `.rpaz` 脚本包"}</span></div></div>}
       {operationNotice && <button className="global-notice" type="button" onClick={() => setOperationNotice("")}>{operationNotice}<span>×</span></button>}
       {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} />}
     </div>

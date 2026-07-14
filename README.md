@@ -12,8 +12,8 @@ DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管�
 - 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
 - 工作室可新建项目、编辑源码和 Notebook、直接运行工作副本、导出 `.rpaz`，也可将已安装包复制为可编辑项目。
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路。
-- 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model 与会话级可选 key，通过六个项目受限工具完成读取、写入、校验、构建和 sealed Python 辅助；支持本地会话列表、逐会话项目绑定、重命名/删除及配置面板折叠。
-- 内置多页离线开发文档，在应用内阅读开发概览、RPAZ、运行环境、Agent 与更新协议，无需浏览器或网络。
+- 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model 与会话级可选 key，通过六个项目工具和三个知识库工具完成读取、写入、校验、构建和 sealed Python 辅助；支持本地会话列表、逐会话项目绑定、重命名/删除及配置面板折叠。
+- 内置本地 Markdown 知识库：支持目录树、阅读/编辑/分栏渲染、相对文档跳转、内联新建/重命名/删除、拖拽导入、原生导入导出与自动保存，并首次初始化多篇详细 RPAZ 开发指南。
 - 协议化 `.drpa-update` 差量更新，包含可视化进度、结构/大小检查、精确基线匹配、独立 Worker、失败回滚和新 Host 启动确认；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。
 
 Windows 预览版下载：<https://github.com/EthanBird/drpa-client/releases>
