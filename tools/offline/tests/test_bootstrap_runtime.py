@@ -27,7 +27,7 @@ class RuntimeBootstrapTests(unittest.TestCase):
             (root / "wheelhouse" / "drpa_runtime_python-0.3.0-py3-none-any.whl").write_bytes(b"new-adapter")
             uv_name = "uv.exe" if os.name == "nt" else "uv"
             (root / "tools" / uv_name).write_bytes(b"uv")
-            python = environment / "Scripts" / "python.exe"
+            python = bootstrap_runtime.environment_python(environment)
             python.parent.mkdir(parents=True)
             python.write_bytes(b"python")
             sentinel = environment / "keep-me.txt"
