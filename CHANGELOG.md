@@ -2,6 +2,14 @@
 
 本项目从 `0.2.0` 开始维护面向开发者和发布使用者的变更记录。格式参考 Keep a Changelog；预览版可能继续调整内部协议，稳定版发布前必须明确迁移策略。
 
+## [1.0.0] - 2026-07-15
+
+### 发布
+
+- 发布首个稳定版 Windows x64 全量离线安装包，统一桌面端、Rust workspace、Python 运行时、安装器、示例包和发布流水线的产品版本。
+- 全量安装包包含 DRPA Next、独立更新 Worker、封装 Python 3.11/Jupyter/DrissionPage 运行时、Chrome for Testing、Fixed Version WebView2、知识文档和 Bing 每日一图示例。
+- GitHub 全量发布使用稳定标签 `desktop-v1.0.0`；后续无必要时继续发布轻量 `.drpa-update`，避免重复分发浏览器和运行时依赖。
+
 ## [0.3.0] - 2026-07-14
 
 ### 新增

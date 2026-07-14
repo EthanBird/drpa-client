@@ -1,4 +1,4 @@
-name: Publish Windows offline desktop preview
+name: Publish Windows offline desktop releases
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: desktop-offline-preview-${{ github.ref }}
+  group: desktop-offline-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -51,7 +51,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 0.3.0
+      DRPA_VERSION: 1.0.0
       RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || 'update' }}
     steps:
       - uses: actions/checkout@v4
@@ -161,7 +161,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Installed-layout Python/Jupyter import smoke failed" }
           Remove-Item (Join-Path $portable "data") -Recurse -Force
 
-          python tools/windows/build_update_package.py --stage $portable --version "$env:DRPA_VERSION-preview-$env:GITHUB_RUN_NUMBER" --catalog-only
+          python tools/windows/build_update_package.py --stage $portable --version "$env:DRPA_VERSION" --catalog-only
           if ($LASTEXITCODE -ne 0) { throw "Failed to build the full install catalog" }
           $catalog = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-install-manifest.json"
           Copy-Item "$portable/install-manifest.json" $catalog
@@ -185,12 +185,12 @@ jobs:
           retention-days: 30
 
   publish:
-    name: Publish GitHub prerelease
+    name: Publish GitHub release
     needs: build
     runs-on: ubuntu-latest
     env:
       RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || 'update' }}
-      DRPA_VERSION: 0.3.0
+      DRPA_VERSION: 1.0.0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -214,18 +214,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="desktop-v${DRPA_VERSION}-preview-${GITHUB_RUN_NUMBER}"
           mapfile -t assets < <(find artifacts -type f | sort)
           if [[ "$RELEASE_KIND" == "full" ]]; then
-            title="DRPA Next ${DRPA_VERSION} 全量离线基线 · ${GITHUB_RUN_NUMBER}"
-            notes=$'DRPA Next 0.3.0 Windows x64 full offline baseline.\n\nIncludes the registry-free Setup, sealed Python 3.11/Chrome runtime, Fixed Version WebView2, schema-2 install inventory, and Bing daily image RPAZ. This full installer is the required migration baseline for pre-0.3 installations. Future lightweight releases use a package-owned detached Worker, explicit base/protocol compatibility, size and path validation, durable progress, startup acknowledgement, and automatic rollback.'
+            tag="desktop-v${DRPA_VERSION}"
+            title="DRPA Next ${DRPA_VERSION} 全量离线安装包"
+            notes="$(printf 'DRPA Next %s Windows x64 稳定版全量离线安装包。\n\n包含免注册表 Setup、封装的 Python 3.11/Chrome 运行时、Fixed Version WebView2、schema-2 安装库存和 Bing 每日一图 RPAZ 示例。后续日常版本使用轻量更新包，仅替换变化文件，并保留可视化进度、启动确认和失败回滚。' "$DRPA_VERSION")"
           else
+            tag="desktop-v${DRPA_VERSION}-preview-${GITHUB_RUN_NUMBER}"
             title="DRPA Next ${DRPA_VERSION} 轻量更新 · ${GITHUB_RUN_NUMBER}"
-            notes=$'DRPA Next 0.3.0 Windows x64 lightweight update.\n\nContains changed application/updater files plus the merged install inventory. Existing sealed Python, Chrome runtime, Fixed Version WebView2 and user data remain in place. Protocol and exact base-version compatibility are checked before exit; the detached package Worker keeps backups until the relaunched Host acknowledges successful window startup.'
+            notes="$(printf 'DRPA Next %s Windows x64 轻量更新包。\n\n仅包含变化的应用、更新器文件和合并后的安装库存；保留现有 Python、Chrome、Fixed Version WebView2 与用户数据。更新前检查协议和精确基线版本，重启后的 Host 确认窗口成功启动后才清理备份。' "$DRPA_VERSION")"
           fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes" --prerelease
+            if [[ "$RELEASE_KIND" == "full" ]]; then
+              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes" --latest
+            else
+              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes" --prerelease
+            fi
           else
-            gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "$title" --notes "$notes"
+            if [[ "$RELEASE_KIND" == "full" ]]; then
+              gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title "$title" --notes "$notes"
+            else
+              gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "$title" --notes "$notes"
+            fi
           fi

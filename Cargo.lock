@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-desktop"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "drpa-host",
  "drpa-package",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-host"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "drpa-package",
  "drpa-protocol",
@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-package"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-protocol"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",

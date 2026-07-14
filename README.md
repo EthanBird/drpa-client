@@ -2,7 +2,7 @@
 
 DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管理器。用户只需安装一次桌面应用，即可在不配置系统 Python 的情况下安装、开发、运行、观察和更新 `.rpaz` 自动化脚本包。
 
-当前版本为 `0.3.0` Windows x64 离线预览版。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
+当前版本为 `1.0.0` Windows x64 稳定版。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
 ## 当前能力
 
@@ -16,9 +16,9 @@ DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管�
 - 内置本地 Markdown 知识库：支持目录树、阅读/编辑/分栏渲染、相对文档跳转、内联新建/重命名/删除、拖拽导入、原生导入导出与自动保存，并首次初始化多篇详细 RPAZ 开发指南。
 - 协议化 `.drpa-update` 差量更新，包含可视化进度、结构/大小检查、精确基线匹配、独立 Worker、失败回滚和新 Host 启动确认；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。
 
-Windows 预览版下载：<https://github.com/EthanBird/drpa-client/releases>
+Windows 版本下载：<https://github.com/EthanBird/drpa-client/releases>
 
-> `0.3.0` 是新的全量更新基线。`0.2.x` 及更早安装缺少 protocol-2 安装库存，升级时直接运行最新 Setup；完成一次全量安装后，后续版本使用轻量 `.drpa-update`，不会再次打包 WebView2、未变化的 Chrome/runtime 或用户数据。
+> `1.0.0` 是当前推荐的全量安装基线。`0.2.x` 及更早安装缺少 protocol-2 安装库存，升级时直接运行最新 Setup；完成一次全量安装后，后续版本使用轻量 `.drpa-update`，不会再次打包 WebView2、未变化的 Chrome/runtime 或用户数据。
 
 ## 架构边界
 
