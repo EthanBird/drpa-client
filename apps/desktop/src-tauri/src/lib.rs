@@ -13,12 +13,15 @@ use drpa_protocol::{
     WindowsUpdateSession, WindowsUpdateStatus, WorkspaceSnapshot,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tauri::{Manager, State};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
 mod agent;
+
+const WINDOWS_UPDATE_SCHEMA: u32 = 2;
+const WINDOWS_UPDATE_HOST_PROTOCOL: u32 = 2;
+const WINDOWS_UPDATE_WORKER_PROTOCOL: u32 = 2;
 
 #[derive(Clone)]
 struct AppPaths {
@@ -744,6 +747,10 @@ struct RuntimeStatus {
 #[serde(rename_all = "camelCase")]
 struct WindowsUpdateManifest {
     schema: u32,
+    host_protocol: u32,
+    worker_protocol: u32,
+    package_kind: String,
+    minimum_host_version: String,
     version: String,
     base_version: Option<String>,
     target: String,
@@ -757,18 +764,19 @@ struct WindowsUpdateManifest {
 struct WindowsUpdateFile {
     path: String,
     bytes: u64,
-    sha256: String,
 }
 
 #[derive(Deserialize)]
 struct WindowsUpdateWorker {
     bytes: u64,
-    sha256: String,
 }
 
 #[derive(Deserialize)]
 struct WindowsInstallCatalog {
+    schema: u32,
     version: String,
+    target: String,
+    update_protocol: u32,
 }
 
 #[tauri::command]
@@ -799,8 +807,35 @@ fn apply_windows_update(
     };
     let manifest: WindowsUpdateManifest =
         serde_json::from_str(&manifest_source).map_err(|error| format!("更新清单无效：{error}"))?;
-    if manifest.schema != 1 || manifest.target != "windows-x86_64" {
-        return Err("更新包格式或目标平台不匹配".to_owned());
+    if manifest.schema != WINDOWS_UPDATE_SCHEMA {
+        return Err(format!(
+            "更新协议不兼容：当前支持 schema {}，更新包为 schema {}。请先安装对应版本的全量安装包",
+            WINDOWS_UPDATE_SCHEMA, manifest.schema
+        ));
+    }
+    if manifest.host_protocol > WINDOWS_UPDATE_HOST_PROTOCOL
+        || manifest.worker_protocol != WINDOWS_UPDATE_WORKER_PROTOCOL
+    {
+        return Err(format!(
+            "更新协议版本不兼容：Host {}/{}，Worker {}/{}。请先安装对应版本的全量安装包",
+            WINDOWS_UPDATE_HOST_PROTOCOL,
+            manifest.host_protocol,
+            WINDOWS_UPDATE_WORKER_PROTOCOL,
+            manifest.worker_protocol
+        ));
+    }
+    if manifest.target != "windows-x86_64" {
+        return Err("更新包目标平台不是 windows-x86_64".to_owned());
+    }
+    if !version_is_at_least(env!("CARGO_PKG_VERSION"), &manifest.minimum_host_version) {
+        return Err(format!(
+            "当前客户端版本 {} 低于更新包要求的 {}，请先安装全量安装包",
+            env!("CARGO_PKG_VERSION"),
+            manifest.minimum_host_version
+        ));
+    }
+    if manifest.package_kind != "delta" {
+        return Err("客户端只接受 delta 文件更新；完整版本请运行全量安装包".to_owned());
     }
     if !is_safe_update_version(&manifest.version) {
         return Err("更新包版本标识无效".to_owned());
@@ -809,20 +844,31 @@ fn apply_windows_update(
     let install = executable
         .parent()
         .ok_or_else(|| "定位安装目录失败".to_owned())?;
-    if let Some(base_version) = &manifest.base_version {
-        if !is_safe_update_version(base_version) {
-            return Err("更新包基线版本标识无效".to_owned());
-        }
-        let catalog_source = fs::read_to_string(install.join("install-manifest.json"))
-            .map_err(|_| "当前安装缺少 install-manifest.json，不能应用差量更新".to_owned())?;
-        let catalog: WindowsInstallCatalog = serde_json::from_str(&catalog_source)
-            .map_err(|error| format!("当前安装文件清单无效：{error}"))?;
-        if catalog.version != *base_version {
-            return Err(format!(
-                "更新基线不匹配：当前为 {}，更新包要求 {}",
-                catalog.version, base_version
-            ));
-        }
+    let base_version = manifest
+        .base_version
+        .as_ref()
+        .ok_or_else(|| "delta 更新包缺少 baseVersion".to_owned())?;
+    if !is_safe_update_version(base_version) {
+        return Err("更新包基线版本标识无效".to_owned());
+    }
+    let catalog_source =
+        fs::read_to_string(install.join("install-manifest.json")).map_err(|_| {
+            "当前安装不是受支持的更新基线（缺少 install-manifest.json），请安装 0.3.0 全量安装包"
+                .to_owned()
+        })?;
+    let catalog: WindowsInstallCatalog = serde_json::from_str(&catalog_source)
+        .map_err(|error| format!("当前安装文件清单无效：{error}"))?;
+    if catalog.schema != WINDOWS_UPDATE_SCHEMA
+        || catalog.update_protocol != WINDOWS_UPDATE_HOST_PROTOCOL
+        || catalog.target != "windows-x86_64"
+    {
+        return Err("当前安装清单属于旧更新协议，请安装 0.3.0 全量安装包".to_owned());
+    }
+    if catalog.version != *base_version {
+        return Err(format!(
+            "更新基线不匹配：当前为 {}，更新包要求 {}",
+            catalog.version, base_version
+        ));
     }
     if manifest.files.is_empty()
         || manifest.files.len().saturating_add(manifest.remove.len()) > 50_000
@@ -855,7 +901,7 @@ fn apply_windows_update(
             completed_files: 0,
             total_files,
             current_file: None,
-            message: "正在校验更新包完整性".to_owned(),
+            message: "正在读取更新包清单与文件结构".to_owned(),
         },
     )?;
 
@@ -869,10 +915,6 @@ fn apply_windows_update(
             let folded = normalized.to_ascii_lowercase();
             if !package_paths.insert(folded.clone()) {
                 return Err(format!("更新清单包含重复路径：{normalized}"));
-            }
-            if item.sha256.len() != 64 || !item.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Err(format!("更新文件 SHA-256 格式无效：{normalized}"));
             }
             if folded.starts_with("data/") || folded.starts_with("webview2/") {
                 return Err(format!("更新包试图覆盖受保护路径：{normalized}"));
@@ -898,21 +940,10 @@ fn apply_windows_update(
                 fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
             let mut output = File::create(&target).map_err(|error| error.to_string())?;
-            let mut digest = Sha256::new();
-            let mut buffer = [0_u8; 1024 * 1024];
-            loop {
-                let read = entry.read(&mut buffer).map_err(|error| error.to_string())?;
-                if read == 0 {
-                    break;
-                }
-                digest.update(&buffer[..read]);
-                output
-                    .write_all(&buffer[..read])
-                    .map_err(|error| error.to_string())?;
-            }
-            let actual = format!("{:x}", digest.finalize());
-            if !actual.eq_ignore_ascii_case(&item.sha256) {
-                return Err(format!("更新文件 SHA-256 不匹配：{normalized}"));
+            let written =
+                std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
+            if written != item.bytes {
+                return Err(format!("更新文件写入大小不匹配：{normalized}"));
             }
         }
         let mut remove_paths = HashSet::new();
@@ -939,9 +970,6 @@ fn apply_windows_update(
 
     let updater = session_root.join("update-worker.exe");
     let worker = &manifest.worker;
-    if worker.sha256.len() != 64 || !worker.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("更新 Worker SHA-256 格式无效".to_owned());
-    }
     let mut entry = archive
         .by_name("worker/drpa-updater.exe")
         .map_err(|_| "更新包缺少 worker/drpa-updater.exe".to_owned())?;
@@ -949,20 +977,9 @@ fn apply_windows_update(
         return Err("更新 Worker 大小不匹配".to_owned());
     }
     let mut output = File::create(&updater).map_err(|error| error.to_string())?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
-    loop {
-        let read = entry.read(&mut buffer).map_err(|error| error.to_string())?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-        output
-            .write_all(&buffer[..read])
-            .map_err(|error| error.to_string())?;
-    }
-    if !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(&worker.sha256) {
-        return Err("更新 Worker SHA-256 不匹配".to_owned());
+    let written = std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
+    if written != worker.bytes {
+        return Err("更新 Worker 写入大小不匹配".to_owned());
     }
     kernels
         .sessions
@@ -973,27 +990,31 @@ fn apply_windows_update(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| "读取主程序文件名失败".to_owned())?;
-    let mut command = Command::new(updater);
-    command
-        .arg("--stage")
-        .arg(&stage)
-        .arg("--install")
-        .arg(install)
-        .arg("--launch")
-        .arg(launch)
-        .arg("--status")
-        .arg(&status_path)
-        .arg("--restart-request")
-        .arg(&restart_request)
-        .arg("--session")
-        .arg(&session_id)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    hide_child_window(&mut command);
-    command
-        .spawn()
-        .map_err(|error| format!("启动无界面更新 Worker 失败：{error}"))?;
+    if let Err(error) = spawn_windows_update_worker(
+        &updater,
+        &stage,
+        install,
+        launch,
+        &status_path,
+        &restart_request,
+        &session_id,
+    ) {
+        let message = format!("启动无界面更新 Worker 失败：{error}");
+        let _ = write_windows_update_status(
+            &status_path,
+            &WindowsUpdateStatus {
+                session_id: session_id.clone(),
+                version: manifest.version.clone(),
+                phase: WindowsUpdatePhase::Failed,
+                progress: 0,
+                completed_files: 0,
+                total_files,
+                current_file: None,
+                message: message.clone(),
+            },
+        );
+        return Err(message);
+    }
     Ok(WindowsUpdateSession {
         id: session_id,
         version: manifest.version,
@@ -1020,6 +1041,43 @@ fn get_windows_update_status(
 }
 
 #[tauri::command]
+fn get_latest_windows_update_status(
+    paths: State<'_, AppPaths>,
+) -> Result<Option<WindowsUpdateStatus>, String> {
+    let sessions = paths.workspace_root.join("updates/sessions");
+    if !sessions.is_dir() {
+        return Ok(None);
+    }
+    let mut latest = None;
+    for entry in fs::read_dir(&sessions)
+        .map_err(|error| format!("读取更新会话目录失败：{error}"))?
+        .flatten()
+    {
+        let status_path = entry.path().join("status.json");
+        let Ok(metadata) = fs::metadata(&status_path) else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if latest
+            .as_ref()
+            .is_none_or(|(latest_modified, _)| modified > *latest_modified)
+        {
+            latest = Some((modified, status_path));
+        }
+    }
+    let Some((_, status_path)) = latest else {
+        return Ok(None);
+    };
+    let source = fs::read_to_string(status_path)
+        .map_err(|error| format!("读取最近更新状态失败：{error}"))?;
+    serde_json::from_str(&source)
+        .map(Some)
+        .map_err(|error| format!("最近更新状态无效：{error}"))
+}
+
+#[tauri::command]
 fn restart_for_windows_update(
     session_id: String,
     app: tauri::AppHandle,
@@ -1036,6 +1094,9 @@ fn restart_for_windows_update(
         serde_json::from_str(&source).map_err(|error| format!("更新进度数据无效：{error}"))?;
     if status.phase != WindowsUpdatePhase::WaitingForRestart {
         return Err("更新尚未进入重启阶段".to_owned());
+    }
+    if !session_root.join("worker-ready").is_file() {
+        return Err("更新 Worker 尚未就绪，应用保持运行".to_owned());
     }
     fs::write(session_root.join("restart-requested"), b"restart\n")
         .map_err(|error| format!("创建重启请求失败：{error}"))?;
@@ -1054,9 +1115,39 @@ fn validate_update_session_id(session_id: &str) -> Result<(), String> {
     }
 }
 
+fn update_session_root(workspace_root: &Path, session_id: &str) -> Result<PathBuf, String> {
+    validate_update_session_id(session_id)?;
+    Ok(workspace_root.join("updates/sessions").join(session_id))
+}
+
+fn acknowledge_windows_update_startup(workspace_root: &Path) -> std::io::Result<()> {
+    let Some(session_id) = std::env::var_os("DRPA_UPDATE_SESSION_ID") else {
+        return Ok(());
+    };
+    let session_id = session_id.to_string_lossy();
+    let Ok(session_root) = update_session_root(workspace_root, &session_id) else {
+        return Ok(());
+    };
+    if !session_root.join("status.json").is_file() {
+        return Ok(());
+    }
+    let target = session_root.join("startup-ack");
+    let temporary = session_root.join("startup-ack.tmp");
+    fs::write(&temporary, format!("pid={}\n", std::process::id()))?;
+    if target.exists() {
+        fs::remove_file(&target)?;
+    }
+    fs::rename(temporary, target)
+}
+
 fn write_windows_update_status(target: &Path, status: &WindowsUpdateStatus) -> Result<(), String> {
     let source = serde_json::to_vec_pretty(status).map_err(|error| error.to_string())?;
-    fs::write(target, source).map_err(|error| format!("写入更新进度失败：{error}"))
+    let temporary = target.with_extension("json.tmp");
+    fs::write(&temporary, source).map_err(|error| format!("写入更新进度失败：{error}"))?;
+    if target.exists() {
+        fs::remove_file(target).map_err(|error| format!("替换更新进度失败：{error}"))?;
+    }
+    fs::rename(temporary, target).map_err(|error| format!("提交更新进度失败：{error}"))
 }
 
 fn is_safe_update_version(version: &str) -> bool {
@@ -1065,6 +1156,26 @@ fn is_safe_update_version(version: &str) -> bool {
         && version
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
+fn numeric_version(value: &str) -> Option<[u64; 3]> {
+    let core = value.split_once('-').map_or(value, |(core, _)| core);
+    let mut parts = core.split('.');
+    let version = [
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ];
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(version)
+}
+
+fn version_is_at_least(current: &str, minimum: &str) -> bool {
+    numeric_version(current)
+        .zip(numeric_version(minimum))
+        .is_some_and(|(current, minimum)| current >= minimum)
 }
 
 #[tauri::command]
@@ -1478,6 +1589,103 @@ fn resolve_runtime_manifest_path(root: &Path, relative: &str) -> Result<PathBuf,
     }
 }
 
+fn update_worker_command(
+    updater: &Path,
+    stage: &Path,
+    install: &Path,
+    launch: &str,
+    status_path: &Path,
+    restart_request: &Path,
+    session_id: &str,
+) -> Command {
+    let mut command = Command::new(updater);
+    command
+        .arg("--stage")
+        .arg(stage)
+        .arg("--install")
+        .arg(install)
+        .arg("--launch")
+        .arg(launch)
+        .arg("--status")
+        .arg(status_path)
+        .arg("--restart-request")
+        .arg(restart_request)
+        .arg("--session")
+        .arg(session_id)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+#[cfg(windows)]
+fn spawn_windows_update_worker(
+    updater: &Path,
+    stage: &Path,
+    install: &Path,
+    launch: &str,
+    status_path: &Path,
+    restart_request: &Path,
+    session_id: &str,
+) -> std::io::Result<Child> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    let detached_flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS;
+
+    let mut command = update_worker_command(
+        updater,
+        stage,
+        install,
+        launch,
+        status_path,
+        restart_request,
+        session_id,
+    );
+    command.creation_flags(detached_flags | CREATE_BREAKAWAY_FROM_JOB);
+    match command.spawn() {
+        Ok(child) => Ok(child),
+        Err(_) => {
+            let mut fallback = update_worker_command(
+                updater,
+                stage,
+                install,
+                launch,
+                status_path,
+                restart_request,
+                session_id,
+            );
+            fallback.creation_flags(detached_flags);
+            fallback.spawn()
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn spawn_windows_update_worker(
+    updater: &Path,
+    stage: &Path,
+    install: &Path,
+    launch: &str,
+    status_path: &Path,
+    restart_request: &Path,
+    session_id: &str,
+) -> std::io::Result<Child> {
+    update_worker_command(
+        updater,
+        stage,
+        install,
+        launch,
+        status_path,
+        restart_request,
+        session_id,
+    )
+    .spawn()
+}
+
 #[cfg(windows)]
 fn hide_child_window(command: &mut Command) {
     use std::os::windows::process::CommandExt;
@@ -1532,10 +1740,13 @@ pub fn run() {
             }
 
             app.manage(HostState::new(workspace_root.clone()));
-            app.manage(AppPaths { workspace_root });
+            app.manage(AppPaths {
+                workspace_root: workspace_root.clone(),
+            });
             app.manage(StudioKernelManager {
                 sessions: Arc::new(Mutex::new(HashMap::new())),
             });
+            acknowledge_windows_update_startup(&workspace_root)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1565,6 +1776,7 @@ pub fn run() {
             repair_runtime,
             apply_windows_update,
             get_windows_update_status,
+            get_latest_windows_update_status,
             restart_for_windows_update,
             get_data_directory,
             get_current_user
@@ -1643,5 +1855,13 @@ mod tests {
         assert!(validate_update_session_id("0123456789abcdef0123456789ABCDEF").is_ok());
         assert!(validate_update_session_id("../updates/session").is_err());
         assert!(validate_update_session_id("0123456789abcdef").is_err());
+    }
+
+    #[test]
+    fn update_minimum_version_uses_numeric_semver_core() {
+        assert!(version_is_at_least("0.3.0", "0.3.0"));
+        assert!(version_is_at_least("0.3.1-preview-2", "0.3.0"));
+        assert!(!version_is_at_least("0.2.99", "0.3.0"));
+        assert!(!version_is_at_least("preview", "0.3.0"));
     }
 }

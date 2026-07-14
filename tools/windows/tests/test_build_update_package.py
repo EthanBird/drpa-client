@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
+
+import pytest
 
 
 MODULE_PATH = Path(__file__).parents[1] / "build_update_package.py"
@@ -40,6 +44,13 @@ def test_default_update_omits_repeated_runtime_components(tmp_path: Path) -> Non
     manifest = MODULE.build(stage, output, "0.2.1-preview-1")
     paths = {item["path"] for item in manifest["files"]}
 
+    assert manifest["schema"] == 2
+    assert manifest["hostProtocol"] == 2
+    assert manifest["workerProtocol"] == 2
+    assert manifest["packageKind"] == "bootstrap"
+    assert manifest["minimumHostVersion"] == "0.3.0"
+    assert all("sha256" not in item for item in manifest["files"])
+    assert "sha256" not in manifest["worker"]
     assert "DRPA Next.exe" in paths
     assert "README.md" in paths
     assert "install-manifest.json" in paths
@@ -82,6 +93,7 @@ def test_base_catalog_includes_only_changed_files_and_removed_paths(tmp_path: Pa
     manifest = MODULE.build(stage, output, "0.2.1-preview-2", base_manifest=base)
     paths = {item["path"] for item in manifest["files"]}
 
+    assert manifest["packageKind"] == "delta"
     assert paths == {"DRPA Next.exe", "install-manifest.json"}
     assert manifest["remove"] == ["obsolete.dll"]
 
@@ -133,3 +145,27 @@ def test_partial_update_merges_overlay_into_complete_inventory(tmp_path: Path) -
     assert "runtime/python/python.exe" in merged_paths
     assert "runtime/browser/chrome.exe" in merged_paths
     assert "webview2/msedgewebview2.exe" in merged_paths
+
+
+def test_catalog_rejects_external_directory_links(tmp_path: Path) -> None:
+    stage = tmp_path / "stage"
+    external = tmp_path / "external-runtime"
+    stage.mkdir()
+    external.mkdir()
+    (stage / "DRPA Next.exe").write_bytes(b"host")
+    (external / "python.exe").write_bytes(b"python")
+    link = stage / "runtime"
+    if os.name == "nt":
+        created = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(external)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if created.returncode != 0:
+            pytest.skip(f"directory junctions are unavailable: {created.stderr}")
+    else:
+        os.symlink(external, link, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="link or reparse point"):
+        MODULE.make_catalog(stage, "0.3.0")

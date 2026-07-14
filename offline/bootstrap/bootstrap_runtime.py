@@ -100,7 +100,7 @@ def prepare(root: Path | None = None, environment_override: Path | None = None) 
             str(wheelhouse),
             "--requirement",
             str(requirements),
-            "drpa-runtime-python==0.2.0",
+            "drpa-runtime-python==0.3.0",
         ],
         cwd=root,
         env=offline_env,

@@ -6,6 +6,7 @@ export type NavigationId =
   | "runs"
   | "automations"
   | "agent"
+  | "docs"
   | "runtimes"
   | "secrets"
   | "settings";
@@ -93,6 +94,22 @@ export interface AgentToolEvent {
   status: "completed" | "failed";
   summary: string;
   output: string;
+}
+
+export interface AgentConversationMessage extends AgentMessage {
+  id: string;
+  tools?: AgentToolEvent[];
+  durationMs?: number;
+  tokens?: number;
+}
+
+export interface AgentConversationSession {
+  id: string;
+  title: string;
+  projectId: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: AgentConversationMessage[];
 }
 
 export interface AgentTurnResult {

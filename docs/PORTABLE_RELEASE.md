@@ -4,11 +4,10 @@
 
 ## 首次安装
 
-1. 下载 `drpa-next-<version>-windows-x86_64-setup.exe` 和对应 `.sha256`。
-2. 在联网区与离线机器分别核对 SHA-256。
-3. 运行图形安装向导，选择非系统盘目录。
-4. 启动后打开“运行环境”并执行初始化/验证。
-5. 安装 Bing 示例 RPAZ，运行一次并检查日志和图片产物。
+1. 下载 `drpa-next-<version>-windows-x86_64-setup.exe`。
+2. 运行图形安装向导，选择非系统盘目录。
+3. 启动后打开“运行环境”并执行初始化/验证。
+4. 安装 Bing 示例 RPAZ，运行一次并检查日志和图片产物。
 
 安装器不申请管理员权限、不注册卸载项、不读写应用注册表，只释放文件并创建 `.lnk` 快捷方式。CI 会扫描并拒绝 NSIS 中的注册表指令。内置 WebView2 通过进程级配置加载。
 
@@ -17,6 +16,8 @@
 ```text
 <install>/
 ├── DRPA Next.exe
+├── drpa-updater.exe
+├── install-manifest.json  protocol-2 完整受管文件库存
 ├── runtime/
 ├── webview2/
 └── data/                 包、项目、环境、历史、产物和更新状态
@@ -26,21 +27,22 @@
 
 ## 文件级更新
 
-包含“可视化更新会话 + 内嵌 Worker”的 Release 是新热更新基线。旧版 Host 首次升级仍会使用旧更新器；新的轻量包已排除重复 runtime/浏览器文件，通常可以完成这次过渡。过渡失败时直接运行最新 Setup 建立新基线，之后的更新均使用包内 Worker。
+`0.3.0` 全量安装包是新的热更新基线。`0.2.x` 及更早安装没有 schema-2 库存和 protocol-2 启动确认，直接运行最新 Setup 完成迁移；不要使用轻量包跨越该边界。完成全量安装后，后续版本均使用包内 Worker。
 
 后续更新步骤：
 
-1. 下载 `.drpa-update` 与对应 `.sha256`。
-2. 核对散列。
-3. 打开“设置 → Windows 文件级热更新”，选择更新包。
-4. 更新窗口会显示校验、文件替换、当前文件与完成比例；普通文件替换期间应用保持打开。
-5. 只有主程序需要替换时才会在最后短暂关闭并自动重启；失败则恢复备份、重新打开旧版本并保留错误记录。
+1. 下载 `.drpa-update`。
+2. 打开“设置 → Windows 文件级热更新”，选择更新包。
+3. 更新窗口会显示包结构读取、Worker 就绪、当前文件与完成比例；Host 只有确认 Worker 独立运行后才短暂关闭。
+4. Worker 等待文件锁释放后替换清单文件，从安装目录启动新版本，并保留备份直到新 Host 确认主窗口已创建；早退、确认超时或替换失败时恢复备份、重新打开旧版本并保留错误记录。
 
-Host 会检查平台、schema、版本、安全路径、文件大小和 SHA-256。更新器只替换清单列出的应用文件，并明确保护 `data/`、WebView2 和更新器安装副本；因此包、项目、运行历史和环境不会被日常应用更新波及。
+Host 会检查平台、schema、Host/Worker protocol、最低 Host 版本、精确基线版本、安全路径、文件数量与写入大小，不执行逐文件哈希验证。更新器只替换清单列出的应用文件，并明确保护 `data/` 和 WebView2；因此包、项目、运行历史和环境不会被日常应用更新波及。
 
-完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。push 默认只发布轻量 update：主程序、更新器、合并后的完整库存及 SHA-256。只有手工选择 full 发布时才重新生成 Setup、runtime、WebView2 和示例资产。
+完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。push 默认只发布轻量 update：主程序、更新器和合并后的完整库存。只有手工选择 full 发布时才重新生成 Setup、runtime、WebView2 和示例资产。
 
-当前更新包由用户本地选择，尚未实现自动联网检查、数字签名和块级差分。预览版也未进行代码签名；只使用可信 GitHub Release，并在转移前后验证散列。
+发布 stage 内的文件必须是实体文件。库存生成器拒绝 symlink、Junction 和 reparse point，防止安装包在构建机器上通过、复制到离线机器后才暴露缺失依赖。
+
+当前更新包由用户本地选择，尚未实现自动联网检查、数字签名和块级差分。预览版也未进行代码签名；更新文件从项目 GitHub Release 获取。
 
 ## 卸载与备份
 
@@ -50,11 +52,11 @@ Host 会检查平台、schema、版本、安全路径、文件大小和 SHA-256�
 
 ## 发布资产
 
-Windows Release 应严格包含八个文件：
+日常 update Release 应严格包含两个文件：
 
-- Setup EXE 与 SHA-256。
-- `.drpa-update` 与 SHA-256。
-- `install-manifest.json` 与 SHA-256。
-- Bing 每日一图示例 `.rpaz` 与 SHA-256。
+- `.drpa-update`。
+- `install-manifest.json`。
+
+手工 full 基线 Release 包含 Setup EXE、`install-manifest.json` 与 Bing 每日一图示例 `.rpaz`，共三个文件。全量基线不附带 `.drpa-update`；下一次日常发布才以该库存为基线生成轻量包。
 
 开发和发布流程见 [`DEVELOPMENT.md`](DEVELOPMENT.md)，完整依赖处理见 [`../offline/README.md`](../offline/README.md)。

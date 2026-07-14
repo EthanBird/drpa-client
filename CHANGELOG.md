@@ -2,7 +2,7 @@
 
 本项目从 `0.2.0` 开始维护面向开发者和发布使用者的变更记录。格式参考 Keep a Changelog；预览版可能继续调整内部协议，稳定版发布前必须明确迁移策略。
 
-## [未发布]
+## [0.3.0] - 2026-07-14
 
 ### 新增
 
@@ -15,16 +15,22 @@
 - 运行工作台支持创建本地任务配置，并读取 manifest 参数默认值。
 - 基础设施增加轻量 RPAZ AI Agent：支持 OpenAI-compatible URL、model、会话级可选 key、项目绑定、六个内置工具和最多 8 轮 function calling。
 - AI Agent 工具支持项目文件读取/写入、manifest 校验、RPAZ 构建和 30 秒 sealed Python 辅助，并显示工具事件、用量与耗时。
+- AI Agent 增加本地对话列表：支持新建、切换、自动命名、重命名、删除和清空会话；每个会话独立保存项目绑定与最近消息，配置面板可随时隐藏或显示。
+- 原“帮助与诊断”入口升级为“开发文档”，内置开发概览、RPAZ、离线运行环境、AI Agent 和发布更新五组 HTML 文档，可在 DRPA 内离线切换阅读。
 - 左下角账户卡片从 Host 获取当前系统用户，不再显示固定示例账户。
 
 ### 修复
 
+- 修复旧安装缺少库存清单、更新协议又没有明确兼容边界时仍可能进入退出阶段的问题。`0.3.0` 建立 schema-2 全量基线；Host 在退出前检查 schema、Host/Worker 协议、最低客户端版本和精确 `baseVersion`。
+- 更新 Worker 采用独立进程组并优先脱离父进程 Job；新程序固定从安装目录启动，只有在新 Host 创建主窗口并写入 `startup-ack` 后才清理备份，早退或 30 秒未确认时自动结束新进程、回滚并恢复旧版本。
+- 更新应用取消逐文件 SHA-256 校验，改为 schema、平台、基线版本、安全路径、文件数量和写入大小检查；桌面 Release 取消独立 `.sha256` 资产。
 - 修复旧更新流程过早退出、替换失败后不恢复窗口的问题；普通文件现在保持应用打开进行替换，失败自动回滚，主 EXE 只在末段短暂重启。
 - 日常更新不再重复携带 Fixed Version WebView2、Chrome 和未变化的 sealed runtime；WebView2 保持安装器专用基线组件。
 - Windows Python 运行时事件统一为 UTF-8/ASCII-safe JSONL，并对异常字节进行容错解码，修复 Bing 每日一图运行失败。
 - Studio 文件列表和 RPAZ 构建过滤 Python 字节码缓存。
 - Notebook Kernel 初始化和单元执行移入后台 worker，首次运行不再阻塞 WebView；多单元列表和超长代码单元使用分层滚动约束，避免溢出工作区。
 - 桌面发布流水线默认只生成轻量 update 与完整合并库存；sealed runtime、Chrome、WebView2、NSIS Setup 和示例只在手工 full 发布时重建。
+- 安装库存构建现在拒绝符号链接、目录联接和其他 reparse point，避免完整安装包或本地验收夹具依赖另一个安装目录；全量基线中的 Python、Chrome、uv 与 WebView2 必须是实体文件。
 
 ### 计划
 

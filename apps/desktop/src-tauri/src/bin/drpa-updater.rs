@@ -1,11 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use drpa_protocol::{WindowsUpdatePhase, WindowsUpdateStatus};
 use serde::Deserialize;
@@ -13,6 +14,9 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateManifest {
+    schema: u32,
+    worker_protocol: u32,
+    package_kind: String,
     version: String,
     files: Vec<UpdateFile>,
     #[serde(default)]
@@ -22,6 +26,7 @@ struct UpdateManifest {
 #[derive(Deserialize)]
 struct UpdateFile {
     path: String,
+    bytes: u64,
 }
 
 struct UpdateContext {
@@ -33,6 +38,8 @@ struct UpdateContext {
     restart_request: PathBuf,
     log_path: PathBuf,
     backup: PathBuf,
+    ready_path: PathBuf,
+    startup_ack: PathBuf,
 }
 
 struct ReplacedFile {
@@ -69,7 +76,12 @@ fn run() -> Result<(), String> {
         restart_request,
         log_path: session_root.join("update.log"),
         backup: session_root.join("backup"),
+        ready_path: session_root.join("worker-ready"),
+        startup_ack: session_root.join("startup-ack"),
     };
+
+    let _ = fs::remove_file(&context.ready_path);
+    let _ = fs::remove_file(&context.startup_ack);
 
     if let Err(error) = apply_update(&context) {
         let mut status = read_status(&context.status_path).unwrap_or_else(|| WindowsUpdateStatus {
@@ -86,8 +98,14 @@ fn run() -> Result<(), String> {
         status.message = format!("更新已回滚：{error}");
         let _ = write_status(&context.status_path, &status);
         log(&context.log_path, &status.message);
-        if context.restart_request.is_file() {
-            let _ = Command::new(install.join(launch)).spawn();
+        let _ = fs::remove_file(&context.ready_path);
+        if context.restart_request.is_file()
+            && OpenOptions::new()
+                .write(true)
+                .open(context.install.join(&context.launch))
+                .is_ok()
+        {
+            let _ = installed_app_command(&context).spawn();
         }
         return Err(error);
     }
@@ -99,9 +117,16 @@ fn apply_update(context: &UpdateContext) -> Result<(), String> {
         .map_err(|error| format!("读取更新清单失败：{error}"))?;
     let manifest: UpdateManifest =
         serde_json::from_str(&source).map_err(|error| format!("更新清单无效：{error}"))?;
+    if manifest.schema != 2 || manifest.worker_protocol != 2 || manifest.package_kind != "delta" {
+        return Err(format!(
+            "更新 Worker 协议不兼容：schema={}，workerProtocol={}，packageKind={}",
+            manifest.schema, manifest.worker_protocol, manifest.package_kind
+        ));
+    }
     if !is_safe_version(&manifest.version) {
         return Err("更新清单版本标识无效".to_owned());
     }
+    validate_staged_payload(context, &manifest)?;
     fs::create_dir_all(&context.backup).map_err(|error| format!("创建更新备份失败：{error}"))?;
     log(
         &context.log_path,
@@ -110,18 +135,6 @@ fn apply_update(context: &UpdateContext) -> Result<(), String> {
 
     let total_files = u32::try_from(manifest.files.len() + manifest.remove.len())
         .map_err(|_| "更新文件数量溢出".to_owned())?;
-    let mut status = WindowsUpdateStatus {
-        session_id: context.session_id.clone(),
-        version: manifest.version.clone(),
-        phase: WindowsUpdatePhase::Applying,
-        progress: 5,
-        completed_files: 0,
-        total_files,
-        current_file: None,
-        message: "正在替换应用文件".to_owned(),
-    };
-    write_status(&context.status_path, &status)?;
-
     let mut normal_files = Vec::new();
     let mut launch_file = None;
     for item in &manifest.files {
@@ -135,6 +148,31 @@ fn apply_update(context: &UpdateContext) -> Result<(), String> {
             normal_files.push(relative);
         }
     }
+    let launch_file = launch_file.ok_or_else(|| "delta 更新缺少主程序文件".to_owned())?;
+
+    let mut status = WindowsUpdateStatus {
+        session_id: context.session_id.clone(),
+        version: manifest.version.clone(),
+        phase: WindowsUpdatePhase::WaitingForRestart,
+        progress: 15,
+        completed_files: 0,
+        total_files,
+        current_file: None,
+        message: "更新 Worker 已就绪，等待应用安全退出".to_owned(),
+    };
+    write_status(&context.status_path, &status)?;
+    fs::write(
+        &context.ready_path,
+        format!("session={}\n", context.session_id),
+    )
+    .map_err(|error| format!("写入 Worker 就绪标记失败：{error}"))?;
+    wait_for_restart_request(&context.restart_request)?;
+    wait_until_replaceable(&context.install.join(&context.launch))?;
+
+    status.phase = WindowsUpdatePhase::Applying;
+    status.progress = 20;
+    status.message = "应用已退出，正在原子替换文件".to_owned();
+    write_status(&context.status_path, &status)?;
 
     let mut replaced = Vec::new();
     let operation = (|| {
@@ -157,24 +195,20 @@ fn apply_update(context: &UpdateContext) -> Result<(), String> {
             write_status(&context.status_path, &status)?;
         }
 
-        if let Some(relative) = launch_file {
-            status.phase = WindowsUpdatePhase::WaitingForRestart;
-            status.progress = 92;
-            status.current_file = Some(relative.to_string_lossy().replace('\\', "/"));
-            status.message = "文件已准备完成，正在安全重启应用".to_owned();
-            write_status(&context.status_path, &status)?;
-            wait_for_restart_request(&context.restart_request)?;
-            wait_until_replaceable(&context.install.join(&context.launch))?;
-            replace_file(context, &relative, &mut replaced)?;
-            advance_status(&mut status);
-            status.phase = WindowsUpdatePhase::Restarting;
-            status.progress = 98;
-            status.message = "应用文件替换完成，正在启动新版本".to_owned();
-            write_status(&context.status_path, &status)?;
-            Command::new(context.install.join(&context.launch))
-                .spawn()
-                .map_err(|error| format!("启动更新后的应用失败：{error}"))?;
-        }
+        status.current_file = Some(launch_file.to_string_lossy().replace('\\', "/"));
+        status.message = "正在替换主程序".to_owned();
+        write_status(&context.status_path, &status)?;
+        replace_file(context, &launch_file, &mut replaced)?;
+        advance_status(&mut status);
+        status.phase = WindowsUpdatePhase::Restarting;
+        status.progress = 96;
+        status.message = "文件替换完成，正在等待新版本确认启动".to_owned();
+        write_status(&context.status_path, &status)?;
+        let _ = fs::remove_file(&context.startup_ack);
+        let mut child = updated_app_command(context)
+            .spawn()
+            .map_err(|error| format!("启动更新后的应用失败：{error}"))?;
+        wait_for_startup_ack(&mut child, &context.startup_ack, Duration::from_secs(30))?;
 
         status.phase = WindowsUpdatePhase::Completed;
         status.progress = 100;
@@ -182,6 +216,7 @@ fn apply_update(context: &UpdateContext) -> Result<(), String> {
         status.message = format!("版本 {} 更新完成", manifest.version);
         write_status(&context.status_path, &status)?;
         log(&context.log_path, &status.message);
+        let _ = fs::remove_file(&context.ready_path);
         let _ = fs::remove_dir_all(&context.stage);
         let _ = fs::remove_dir_all(&context.backup);
         Ok(())
@@ -190,6 +225,34 @@ fn apply_update(context: &UpdateContext) -> Result<(), String> {
     if let Err(error) = operation {
         rollback(&replaced, &context.log_path);
         return Err(error);
+    }
+    Ok(())
+}
+
+fn validate_staged_payload(
+    context: &UpdateContext,
+    manifest: &UpdateManifest,
+) -> Result<(), String> {
+    let mut paths = HashSet::new();
+    for item in &manifest.files {
+        let relative = safe_relative_path(&item.path)?;
+        let normalized = relative.to_string_lossy().to_ascii_lowercase();
+        if !paths.insert(normalized) {
+            return Err(format!("更新清单包含重复路径：{}", item.path));
+        }
+        let incoming = context.stage.join("files").join(&relative);
+        let metadata = fs::metadata(&incoming)
+            .map_err(|error| format!("更新文件缺失 {}：{error}", item.path))?;
+        if !metadata.is_file() || metadata.len() != item.bytes {
+            return Err(format!("更新文件大小不匹配：{}", item.path));
+        }
+    }
+    for value in &manifest.remove {
+        let relative = safe_relative_path(value)?;
+        let normalized = relative.to_string_lossy().to_ascii_lowercase();
+        if paths.contains(&normalized) {
+            return Err(format!("更新清单的替换与删除路径冲突：{value}"));
+        }
     }
     Ok(())
 }
@@ -293,14 +356,53 @@ fn wait_for_restart_request(path: &Path) -> Result<(), String> {
     Err("等待应用确认重启超时，更新已回滚".to_owned())
 }
 
+fn installed_app_command(context: &UpdateContext) -> Command {
+    let mut command = Command::new(context.install.join(&context.launch));
+    command
+        .current_dir(&context.install)
+        .env_remove("DRPA_UPDATE_SESSION_ID");
+    command
+}
+
+fn updated_app_command(context: &UpdateContext) -> Command {
+    let mut command = installed_app_command(context);
+    command.env("DRPA_UPDATE_SESSION_ID", &context.session_id);
+    command
+}
+
+fn wait_for_startup_ack(
+    child: &mut Child,
+    startup_ack: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if startup_ack.is_file() {
+            return Ok(());
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("检查新版本启动状态失败：{error}"))?
+        {
+            return Err(format!("新版本未确认启动便退出，退出状态：{status}"));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("新版本未在 30 秒内确认主窗口启动".to_owned());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn advance_status(status: &mut WindowsUpdateStatus) {
     status.completed_files = status.completed_files.saturating_add(1);
     if let Some(ratio) = status
         .completed_files
-        .saturating_mul(85)
+        .saturating_mul(70)
         .checked_div(status.total_files)
     {
-        status.progress = u8::try_from(5 + ratio).unwrap_or(90).min(90);
+        status.progress = u8::try_from(20 + ratio).unwrap_or(90).min(90);
     }
 }
 
@@ -377,40 +479,48 @@ fn log(path: &Path, message: &str) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn applies_non_executable_files_without_restarting() {
-        let root = std::env::temp_dir().join(format!("drpa-updater-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        let stage = root.join("session/stage");
-        let install = root.join("install");
-        fs::create_dir_all(stage.join("files/examples")).unwrap();
-        fs::create_dir_all(install.join("examples")).unwrap();
-        fs::write(stage.join("files/examples/new.txt"), b"new").unwrap();
-        fs::write(install.join("examples/new.txt"), b"old").unwrap();
-        fs::write(install.join("obsolete.txt"), b"obsolete").unwrap();
-        fs::write(
-            stage.join("update-manifest.json"),
-            r#"{"version":"test-1","files":[{"path":"examples/new.txt"}],"remove":["obsolete.txt"]}"#,
-        )
-        .unwrap();
-        let context = UpdateContext {
-            session_id: "test-session".to_owned(),
-            stage: stage.clone(),
-            install: install.clone(),
+    fn context(root: &Path) -> UpdateContext {
+        UpdateContext {
+            session_id: "0123456789abcdef0123456789abcdef".to_owned(),
+            stage: root.join("session/stage"),
+            install: root.join("install"),
             launch: PathBuf::from("DRPA Next.exe"),
             status_path: root.join("session/status.json"),
             restart_request: root.join("session/restart-requested"),
             log_path: root.join("session/update.log"),
             backup: root.join("session/backup"),
+            ready_path: root.join("session/worker-ready"),
+            startup_ack: root.join("session/startup-ack"),
+        }
+    }
+
+    #[test]
+    fn validates_staged_payload_size_without_hashing() {
+        let root = std::env::temp_dir().join(format!("drpa-updater-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let context = context(&root);
+        fs::create_dir_all(context.stage.join("files/examples")).unwrap();
+        fs::write(context.stage.join("files/examples/new.txt"), b"new").unwrap();
+        let manifest = UpdateManifest {
+            schema: 2,
+            worker_protocol: 2,
+            package_kind: "delta".to_owned(),
+            version: "test-1".to_owned(),
+            files: vec![UpdateFile {
+                path: "examples/new.txt".to_owned(),
+                bytes: 3,
+            }],
+            remove: vec![],
         };
 
-        apply_update(&context).unwrap();
+        validate_staged_payload(&context, &manifest).unwrap();
+        fs::write(context.stage.join("files/examples/new.txt"), b"wrong").unwrap();
+        assert!(
+            validate_staged_payload(&context, &manifest)
+                .unwrap_err()
+                .contains("大小不匹配")
+        );
 
-        assert_eq!(fs::read(install.join("examples/new.txt")).unwrap(), b"new");
-        assert!(!install.join("obsolete.txt").exists());
-        let status = read_status(&context.status_path).unwrap();
-        assert_eq!(status.phase, WindowsUpdatePhase::Completed);
-        assert_eq!(status.progress, 100);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -419,30 +529,89 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("drpa-updater-rollback-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        let stage = root.join("session/stage");
+        let context = context(&root);
+        fs::create_dir_all(context.stage.join("files")).unwrap();
+        fs::create_dir_all(&context.install).unwrap();
+        fs::write(context.stage.join("files/first.txt"), b"new").unwrap();
+        fs::write(context.install.join("first.txt"), b"old").unwrap();
+        let mut replaced = Vec::new();
+
+        replace_file(&context, Path::new("first.txt"), &mut replaced).unwrap();
+        assert!(replace_file(&context, Path::new("missing.txt"), &mut replaced).is_err());
+        rollback(&replaced, &context.log_path);
+
+        assert_eq!(fs::read(context.install.join("first.txt")).unwrap(), b"old");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn relaunch_command_uses_the_install_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "drpa-updater-launch-command-test-{}",
+            std::process::id()
+        ));
         let install = root.join("install");
-        fs::create_dir_all(stage.join("files")).unwrap();
-        fs::create_dir_all(&install).unwrap();
-        fs::write(stage.join("files/first.txt"), b"new").unwrap();
-        fs::write(install.join("first.txt"), b"old").unwrap();
+        let context = context(&root);
+
+        let command = installed_app_command(&context);
+
+        assert_eq!(command.get_current_dir(), Some(install.as_path()));
+    }
+
+    #[test]
+    fn updated_app_receives_the_startup_ack_session() {
+        let root = std::env::temp_dir().join(format!(
+            "drpa-updater-launch-environment-test-{}",
+            std::process::id()
+        ));
+        let context = context(&root);
+        let command = updated_app_command(&context);
+        let session = command
+            .get_envs()
+            .find(|(name, _)| *name == "DRPA_UPDATE_SESSION_ID")
+            .and_then(|(_, value)| value)
+            .unwrap();
+
+        assert_eq!(session, context.session_id.as_str());
+    }
+
+    #[test]
+    fn early_child_exit_without_startup_ack_is_reported() {
+        #[cfg(windows)]
+        let mut child = Command::new("cmd")
+            .args(["/C", "exit", "7"])
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let mut child = Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap();
+
+        let ack = std::env::temp_dir().join(format!(
+            "drpa-updater-missing-startup-ack-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&ack);
+        let error = wait_for_startup_ack(&mut child, &ack, Duration::from_millis(250)).unwrap_err();
+
+        assert!(error.contains('7'));
+    }
+
+    #[test]
+    fn old_update_schema_is_rejected_before_restart() {
+        let root = std::env::temp_dir().join(format!(
+            "drpa-updater-old-schema-test-{}",
+            std::process::id()
+        ));
+        let context = context(&root);
+        fs::create_dir_all(&context.stage).unwrap();
         fs::write(
-            stage.join("update-manifest.json"),
-            r#"{"version":"test-rollback","files":[{"path":"first.txt"},{"path":"missing.txt"}],"remove":[]}"#,
+            context.stage.join("update-manifest.json"),
+            r#"{"schema":1,"workerProtocol":1,"packageKind":"delta","version":"old","files":[],"remove":[]}"#,
         )
         .unwrap();
-        let context = UpdateContext {
-            session_id: "rollback-session".to_owned(),
-            stage: stage.clone(),
-            install: install.clone(),
-            launch: PathBuf::from("DRPA Next.exe"),
-            status_path: root.join("session/status.json"),
-            restart_request: root.join("session/restart-requested"),
-            log_path: root.join("session/update.log"),
-            backup: root.join("session/backup"),
-        };
 
-        assert!(apply_update(&context).is_err());
-        assert_eq!(fs::read(install.join("first.txt")).unwrap(), b"old");
+        assert!(apply_update(&context).unwrap_err().contains("协议不兼容"));
+        assert!(!context.restart_request.exists());
+        assert!(!context.ready_path.exists());
         let _ = fs::remove_dir_all(root);
     }
 }

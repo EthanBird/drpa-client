@@ -41,6 +41,7 @@ export interface DesktopGateway {
   repairRuntime(): Promise<RuntimeStatus>;
   applyWindowsUpdate(packagePath: string): Promise<WindowsUpdateSession>;
   getWindowsUpdateStatus(sessionId: string): Promise<WindowsUpdateStatus>;
+  getLatestWindowsUpdateStatus(): Promise<WindowsUpdateStatus | null>;
   restartForWindowsUpdate(sessionId: string): Promise<void>;
   getDataDirectory(): Promise<string>;
   getCurrentUser(): Promise<CurrentUser>;
@@ -166,6 +167,7 @@ const mockGateway: DesktopGateway = {
   async repairRuntime() { return this.getRuntimeStatus(); },
   async applyWindowsUpdate() { throw new Error("浏览器预览不能应用 Windows 更新包"); },
   async getWindowsUpdateStatus() { throw new Error("浏览器预览没有更新会话"); },
+  async getLatestWindowsUpdateStatus() { return null; },
   async restartForWindowsUpdate() {},
   async getDataDirectory() {
     return "浏览器预览数据（内存）";
@@ -202,6 +204,7 @@ const tauriGateway: DesktopGateway = {
   repairRuntime: () => invoke<RuntimeStatus>("repair_runtime"),
   applyWindowsUpdate: (packagePath) => invoke<WindowsUpdateSession>("apply_windows_update", { packagePath }),
   getWindowsUpdateStatus: (sessionId) => invoke<WindowsUpdateStatus>("get_windows_update_status", { sessionId }),
+  getLatestWindowsUpdateStatus: () => invoke<WindowsUpdateStatus | null>("get_latest_windows_update_status"),
   restartForWindowsUpdate: (sessionId) => invoke<void>("restart_for_windows_update", { sessionId }),
   getDataDirectory: () => invoke<string>("get_data_directory"),
   getCurrentUser: () => invoke<CurrentUser>("get_current_user"),

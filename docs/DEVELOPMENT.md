@@ -160,22 +160,29 @@ Rust 与 Python bridge 之间使用 JSONL；bridge 与 IPython Kernel 之间使�
 
 `tools/windows/build_update_package.py` 从最终 stage 生成完整 `install-manifest.json` 和 `.drpa-update`。
 
-清单记录安装目录中每个受管文件的路径、大小、SHA-256 与组件；传入 `--base-manifest` 时只打包新增/变化文件，并生成旧文件删除列表。
+安装库存记录每个受管文件的路径、大小、构建指纹与组件；构建指纹只用于 CI 比较版本差异，不在客户端更新时重复计算或校验。传入 `--base-manifest` 时只打包新增/变化文件，并生成旧文件删除列表。
+
+`0.3.0` 起使用更新 schema 2 / Host protocol 2 / Worker protocol 2。delta 包必须声明 `packageKind=delta`、`minimumHostVersion` 和精确 `baseVersion`；任一兼容条件不满足时 Host 保持运行并提示使用全量 Setup，不创建退出请求。
 
 默认策略：
 
 1. `data/` 和 Fixed Version WebView2 始终受保护；更新器从会话副本运行，因此安装目录中的更新器属于可更新受管文件。
 2. 没有基线清单时，sealed runtime 与 Chrome 不进入日常更新包；有基线时也只有摘要变化的文件才会进入差量包。
 3. 更新包内嵌当前版本的独立 Worker，因此 Worker 自身可以随包升级，而不覆盖正在使用的安装副本。
-4. Host 在应用保持打开时校验路径、大小与 SHA-256，停止 Studio Kernel，并在 `data/updates/sessions/<id>/` 创建可审计会话。
-5. Worker 直接替换普通文件并持续写入 JSON 进度；只有主 EXE 需要替换时，前端显示“准备重启”后才退出。
-6. 任一替换失败都会按逆序恢复备份并把失败原因写回进度窗口；主程序退出后发生失败时会重新启动旧版本。
+4. Host 在应用保持打开时检查 schema、Host/Worker protocol、最低 Host 版本、平台、精确基线、安全路径、文件数量和写入大小，停止 Studio Kernel，并在 `data/updates/sessions/<id>/` 创建可审计会话。
+5. 包内 Worker 优先脱离父进程 Job，先复核暂存文件并写入 `worker-ready`；Host 只有同时读到 `waitingForRestart` 和就绪标记才创建 `restart-requested` 并退出。
+6. Worker 确认主程序文件锁已释放后才替换所有受管文件，从安装目录启动新主程序，并通过 `DRPA_UPDATE_SESSION_ID` 要求新 Host 在主窗口构建成功后写入 `startup-ack`。
+7. 只有收到启动确认才删除备份；新进程早退、30 秒未确认或任一替换失败时，Worker 会结束新进程、按逆序恢复全部文件、持久化失败状态并从安装目录重新启动旧版本。
 
 CI 默认执行 `update` 发布：只 stage 主程序和更新器，使用 `--partial` 合并上一 Release 的完整库存，不删除 stage 未包含的 runtime、Chrome、WebView2 或文档。只有手工 `workflow_dispatch(release_kind=full)` 才构建 sealed runtime、WebView2、NSIS Setup 和示例资产。
 
+完整安装 stage 禁止符号链接、Windows Junction 和其他 reparse point。`build_update_package.py` 在生成库存前会逐目录检查并直接失败，保证 `runtime/`、`webview2/` 和应用文件全部来自当前安装 stage，而不是外部目录。
+
 ## 7.1 AI Agent
 
-Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker 调用 OpenAI-compatible Chat Completions，并执行最多 8 轮 RPAZ function tools。当前工具仅覆盖项目文件、manifest 校验、RPAZ 构建和 30 秒 sealed Python；API key 只保存在前端会话内。实现与约束见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
+Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker 调用 OpenAI-compatible Chat Completions，并执行最多 8 轮 RPAZ function tools。当前工具仅覆盖项目文件、manifest 校验、RPAZ 构建和 30 秒 sealed Python；API key 只保存在前端会话内。前端持久化最多 50 个本地对话及每个对话最近 120 条消息，支持逐会话项目绑定和配置面板折叠。实现与约束见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
+
+“开发文档”页面读取 `apps/desktop/public/docs/` 下的静态 HTML/CSS，并通过同源 iframe 在 Tauri 内离线展示。新增文档时同时更新 `DocsPage.tsx` 的导航清单，并确认 Vite 输出目录保留对应文件。
 
 当前仍从本地介质导入更新；在线 feed 与清单签名属于后续路线，见 [`ROADMAP.md`](ROADMAP.md)。
 
@@ -223,15 +230,15 @@ python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 
 - `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查。
 - `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
-- `.github/workflows/desktop-release.yml`：push 默认发布四个轻量 update 资产；手工选择 `full` 时才组合 runtime、WebView2、Host、更新器、示例和安装器。
+- `.github/workflows/desktop-release.yml`：push 默认发布两个轻量 update 资产；手工选择 `full` 时才组合 runtime、WebView2、Host、更新器、示例和安装器。
 
 发布前检查：
 
 1. 更新 `CHANGELOG.md`。
-2. 修改版本时同步 root/npm/Tauri/runtime spec/workflow 中的版本来源，避免只改文件名。
+2. 修改版本时同步 root/npm/Tauri/NSIS/runtime package/runtime spec/示例包/desktop workflow/offline workflow 中的版本来源，避免只改文件名。
 3. 确认 `offline/requirements/runtime.txt` 已通过精确依赖政策检查。
-4. 日常发布观察轻量 update 构建、基线库存合并与四个资产校验通过；完整发布还需观察 runtime bootstrap、Jupyter smoke、NSIS guard。
-5. update Release 包含 `.drpa-update`、`install-manifest.json` 及两个 SHA-256；full Release 额外包含 Setup、示例 RPAZ 及对应 SHA-256。
+4. 日常发布观察轻量 update 构建、基线库存合并与两个资产集合检查通过；完整发布还需观察 runtime bootstrap、Jupyter smoke、NSIS guard。
+5. update Release 只包含 `.drpa-update` 与 `install-manifest.json`；full 基线 Release 只包含 Setup、`install-manifest.json` 与示例 RPAZ，不附带无法跨协议使用的轻量包。
 6. 在独立 Windows 测试机安装到非系统盘，执行环境验证、Bing 示例、Notebook 两单元和一次更新回滚演练。
 7. 预览版未签名时必须在发行说明中显式提示。
 

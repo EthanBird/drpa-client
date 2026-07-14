@@ -7,8 +7,9 @@ DRPA Next 在“基础设施 → AI Agent”提供面向 RPAZ 开发的单 Agent
 - `OpenAI 兼容 URL`：支持标准 `/v1` 根地址，也支持已经包含 `/chat/completions` 的地址。
 - `Model`：由用户填写 provider 提供的模型名。
 - `API Key`：可选，只存放在当前 React/Tauri 会话内，不进入 localStorage、项目文件、日志或命令行。本地无鉴权 provider 可留空。
-- `开发项目`：可选。绑定后工具被限定在该 Studio 项目目录。
-- URL、model 和项目选择属于 UI 偏好并本地持久化；聊天记录当前只保留在页面会话中。
+- `开发项目`：可选。绑定后工具被限定在该 Studio 项目目录；绑定关系按对话分别保存。
+- URL、model、配置面板显示状态、对话列表和消息记录写入本地 UI 偏好。最多保留 50 个对话，每个对话保留最近 120 条消息；支持新建、切换、自动命名、重命名、清空和删除。
+- API key 与正在执行的请求状态不进入持久化数据。Agent 执行期间锁定会话切换，避免响应写入错误会话。
 
 离线机器可连接预先部署在内网或 loopback 的 OpenAI-compatible provider。桌面安装包不携带模型，也不执行在线模型或 Python 包下载。
 
@@ -49,7 +50,7 @@ React Agent UI
 ## 后续迭代
 
 1. 流式 token 和工具事件，不等待整轮返回后再展示。
-2. 写入前 diff/checkpoint、逐次撤销与会话导出。
+2. 写入前 diff/checkpoint、逐次撤销、会话导入导出与跨设备同步。
 3. 复用 Notebook 执行、运行日志和产物只读工具。
 4. provider profile、模型能力探测、代理与自定义 header。
 5. 固定夹具 Agent evaluation，覆盖 manifest 修复、参数生成和构建任务。

@@ -18,7 +18,7 @@ import type { WindowsUpdateSession, WindowsUpdateStatus } from "../domain/models
 import { desktopGateway } from "../infra/gateway";
 
 const phaseLabel: Record<WindowsUpdateStatus["phase"], string> = {
-  verifying: "校验更新包",
+  verifying: "读取更新包",
   applying: "替换应用文件",
   waitingForRestart: "准备重启",
   restarting: "正在重启",
@@ -45,6 +45,12 @@ export function SettingsPage() {
 
   useEffect(() => {
     void desktopGateway.getDataDirectory().then(setDataDirectory);
+    void desktopGateway.getLatestWindowsUpdateStatus().then((status) => {
+      if (status?.phase === "failed" && localStorage.getItem("drpa.dismissedUpdateSession") !== status.sessionId) {
+        setUpdateStatus(status);
+        setUpdateError(status.message);
+      }
+    });
     return () => window.clearTimeout(pollTimer.current);
   }, []);
 
@@ -97,7 +103,7 @@ export function SettingsPage() {
       progress: 0,
       completedFiles: 0,
       totalFiles: 0,
-      message: "正在读取更新包并校验 SHA-256",
+      message: "正在读取更新清单与文件结构",
     });
     try {
       const session = await desktopGateway.applyWindowsUpdate(selected);
@@ -111,6 +117,9 @@ export function SettingsPage() {
   };
 
   const closeUpdate = () => {
+    if (updateStatus?.sessionId) {
+      localStorage.setItem("drpa.dismissedUpdateSession", updateStatus.sessionId);
+    }
     setUpdateSession(null);
     setUpdateStatus(null);
     setUpdateError("");
@@ -139,13 +148,13 @@ export function SettingsPage() {
         </section>
 
         <section className="settings-card settings-card-wide">
-          <header><Download size={18} /><div><h2>Windows 轻量热更新</h2><p>基于安装文件清单执行校验、差量替换与删除；运行依赖仅在内容真正变化时进入差量包。</p></div></header>
-          <div className="setting-row"><div><strong>本地更新包</strong><span>WebView2 与用户 data 始终受保护；浏览器/runtime 仅在摘要变化时进入差量，主程序只在最后一步短暂重启。</span></div><button className="button secondary" type="button" onClick={() => void applyUpdate()} disabled={updating}><Download size={13} /> {updating ? "更新进行中" : "选择更新包"}</button></div>
+          <header><Download size={18} /><div><h2>Windows 轻量热更新</h2><p>基于安装文件清单执行结构检查、差量替换与删除；运行依赖仅在内容真正变化时进入差量包。</p></div></header>
+          <div className="setting-row"><div><strong>本地更新包</strong><span>WebView2 与用户 data 始终受保护；协议、版本和精确基线全部匹配后，独立 Worker 才会请求短暂重启。</span></div><button className="button secondary" type="button" onClick={() => void applyUpdate()} disabled={updating}><Download size={13} /> {updating ? "更新进行中" : "选择更新包"}</button></div>
         </section>
 
         <section className="settings-card">
           <header><ShieldCheck size={18} /><div><h2>离线运行策略</h2><p>完整安装包提供固定运行依赖，日常更新只传输实际变化的文件。</p></div></header>
-          <div className="setting-row"><div><strong>更新模式</strong><span>文件清单 + SHA-256 + 自动回滚</span></div><span className="status-badge success"><CheckCircle2 size={12} /> 已启用</span></div>
+          <div className="setting-row"><div><strong>更新模式</strong><span>Protocol 2 + 大小检查 + 启动确认 + 自动回滚</span></div><span className="status-badge success"><CheckCircle2 size={12} /> 已启用</span></div>
         </section>
 
         <section className="settings-card">
@@ -179,7 +188,7 @@ export function SettingsPage() {
             </div>
             <p className="update-progress-message">{updateError || updateStatus.message}</p>
             {updateStatus.currentFile && <code className="update-current-file">{updateStatus.currentFile}</code>}
-            {updateStatus.phase === "waitingForRestart" && <p className="update-restart-note">文件替换已完成。窗口即将短暂关闭，更新 Worker 会替换主程序并自动重新启动。</p>}
+            {updateStatus.phase === "waitingForRestart" && <p className="update-restart-note">更新 Worker 已独立就绪。窗口即将短暂关闭；备份会保留到新版本确认主窗口启动成功。</p>}
             {(updateStatus.phase === "failed" || updateStatus.phase === "completed") && <footer><button className="button secondary" type="button" onClick={closeUpdate}>关闭</button></footer>}
           </section>
         </div>

@@ -2,7 +2,7 @@
 
 DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管理器。用户只需安装一次桌面应用，即可在不配置系统 Python 的情况下安装、开发、运行、观察和更新 `.rpaz` 自动化脚本包。
 
-当前版本为 `0.2.0` Windows x64 离线预览版。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
+当前版本为 `0.3.0` Windows x64 离线预览版。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
 ## 当前能力
 
@@ -12,12 +12,13 @@ DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管�
 - 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
 - 工作室可新建项目、编辑源码和 Notebook、直接运行工作副本、导出 `.rpaz`，也可将已安装包复制为可编辑项目。
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路。
-- 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model 与会话级可选 key，通过六个项目受限工具完成读取、写入、校验、构建和 sealed Python 辅助。
-- 清单差量 `.drpa-update` 更新，包含可视化进度、散列校验、直接文件替换、失败回滚和末段自动重启；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。
+- 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model 与会话级可选 key，通过六个项目受限工具完成读取、写入、校验、构建和 sealed Python 辅助；支持本地会话列表、逐会话项目绑定、重命名/删除及配置面板折叠。
+- 内置多页离线开发文档，在应用内阅读开发概览、RPAZ、运行环境、Agent 与更新协议，无需浏览器或网络。
+- 协议化 `.drpa-update` 差量更新，包含可视化进度、结构/大小检查、精确基线匹配、独立 Worker、失败回滚和新 Host 启动确认；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。
 
 Windows 预览版下载：<https://github.com/EthanBird/drpa-client/releases>
 
-> 旧安装首次升级仍由旧更新器执行；新轻量包不再重复携带 runtime/浏览器文件。首次过渡成功后，后续更新使用包内独立 Worker 和可视化进度；若旧版过渡失败，运行最新 Setup 建立新基线。
+> `0.3.0` 是新的全量更新基线。`0.2.x` 及更早安装缺少 protocol-2 安装库存，升级时直接运行最新 Setup；完成一次全量安装后，后续版本使用轻量 `.drpa-update`，不会再次打包 WebView2、未变化的 Chrome/runtime 或用户数据。
 
 ## 架构边界
 
@@ -90,4 +91,4 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - 只发布 Windows x64；Linux/macOS 仍是未来适配目标，不属于当前交付承诺。
 - 当前更新入口使用本地 `.drpa-update`，已支持逐文件差量；尚未实现在线更新源、签名信任链和大文件块级差分。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
-- AI Agent 当前是单 Agent MVP，尚未提供流式输出、diff/checkpoint、长期会话或运行日志工具；自动调度、浏览器录制器、包签名和私有仓库仍处于路线阶段。
+- AI Agent 当前是单 Agent MVP，尚未提供流式输出、diff/checkpoint、会话导出或运行日志工具；自动调度、浏览器录制器、包签名和私有仓库仍处于路线阶段。

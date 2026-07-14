@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleAlert,
+  Clock3,
   Code2,
   Cpu,
   FileCode2,
@@ -11,6 +12,10 @@ import {
   Link2,
   LoaderCircle,
   MessageSquarePlus,
+  PanelRightClose,
+  PanelRightOpen,
+  Pencil,
+  Plus,
   Send,
   Sparkles,
   Trash2,
@@ -20,15 +25,8 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../app/store";
-import type { AgentMessage, AgentToolEvent, StudioProject } from "../domain/models";
+import type { AgentConversationMessage, AgentMessage, AgentToolEvent, StudioProject } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
-
-interface ConversationMessage extends AgentMessage {
-  id: string;
-  tools?: AgentToolEvent[];
-  durationMs?: number;
-  tokens?: number;
-}
 
 const toolLabels: Record<string, string> = {
   rpaz_list_files: "列出项目文件",
@@ -49,30 +47,58 @@ function messageId(role: AgentMessage["role"]): string {
   return `${role}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function formatSessionTime(value: number): string {
+  const date = new Date(value);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+}
+
 export function AgentPage() {
   const agentBaseUrl = useAppStore((state) => state.agentBaseUrl);
   const agentModel = useAppStore((state) => state.agentModel);
-  const agentProjectId = useAppStore((state) => state.agentProjectId);
+  const agentInspectorOpen = useAppStore((state) => state.agentInspectorOpen);
+  const agentSessions = useAppStore((state) => state.agentSessions);
+  const activeAgentSessionId = useAppStore((state) => state.activeAgentSessionId);
   const setAgentBaseUrl = useAppStore((state) => state.setAgentBaseUrl);
   const setAgentModel = useAppStore((state) => state.setAgentModel);
-  const setAgentProjectId = useAppStore((state) => state.setAgentProjectId);
+  const toggleAgentInspector = useAppStore((state) => state.toggleAgentInspector);
+  const createAgentConversation = useAppStore((state) => state.createAgentConversation);
+  const selectAgentConversation = useAppStore((state) => state.selectAgentConversation);
+  const deleteAgentConversation = useAppStore((state) => state.deleteAgentConversation);
+  const renameAgentConversation = useAppStore((state) => state.renameAgentConversation);
+  const setAgentConversationProject = useAppStore((state) => state.setAgentConversationProject);
+  const setAgentConversationMessages = useAppStore((state) => state.setAgentConversationMessages);
+  const clearAgentConversation = useAppStore((state) => state.clearAgentConversation);
   const [projects, setProjects] = useState<StudioProject[]>([]);
   const [apiKey, setApiKey] = useState("");
   const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [renamingId, setRenamingId] = useState("");
+  const [renameDraft, setRenameDraft] = useState("");
   const transcriptRef = useRef<HTMLDivElement>(null);
+
+  const activeSession = useMemo(
+    () => agentSessions.find((session) => session.id === activeAgentSessionId) ?? agentSessions[0],
+    [activeAgentSessionId, agentSessions],
+  );
+  const messages = activeSession?.messages ?? [];
+  const agentProjectId = activeSession?.projectId ?? "";
 
   useEffect(() => {
     let active = true;
     void desktopGateway.listStudioProjects().then((items) => {
       if (!active) return;
       setProjects(items);
-      if (agentProjectId && !items.some((item) => item.id === agentProjectId)) setAgentProjectId("");
+      if (activeSession && agentProjectId && !items.some((item) => item.id === agentProjectId)) {
+        setAgentConversationProject(activeSession.id, "");
+      }
     }).catch((reason: unknown) => setError(`读取开发项目失败：${String(reason)}`));
     return () => { active = false; };
-  }, [agentProjectId, setAgentProjectId]);
+  }, [activeSession?.id, agentProjectId, setAgentConversationProject]);
 
   useEffect(() => {
     const target = transcriptRef.current;
@@ -86,14 +112,18 @@ export function AgentPage() {
 
   const send = async (preset?: string) => {
     const content = (preset ?? draft).trim();
-    if (!content || busy) return;
+    if (!content || busy || !activeSession) return;
     if (!agentBaseUrl.trim() || !agentModel.trim()) {
       setError("请先填写 OpenAI 兼容 URL 和模型名称");
       return;
     }
-    const userMessage: ConversationMessage = { id: messageId("user"), role: "user", content };
+    const sessionId = activeSession.id;
+    const userMessage: AgentConversationMessage = { id: messageId("user"), role: "user", content };
     const history = [...messages, userMessage];
-    setMessages(history);
+    setAgentConversationMessages(sessionId, history);
+    if (activeSession.title === "新对话") {
+      renameAgentConversation(sessionId, content.replace(/\s+/g, " ").slice(0, 30));
+    }
     setDraft("");
     setError("");
     setBusy(true);
@@ -106,7 +136,7 @@ export function AgentPage() {
         projectId: agentProjectId,
         messages: history.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
       });
-      setMessages((current) => [...current, {
+      setAgentConversationMessages(sessionId, [...history, {
         id: messageId("assistant"),
         role: "assistant",
         content: result.message,
@@ -131,10 +161,43 @@ export function AgentPage() {
           <p>面向 RPAZ 开发的轻量对话、文件操作、校验、构建与 Python 辅助。</p>
         </div>
         <div className="agent-connection-state"><span /> OpenAI Compatible</div>
-        <button className="button ghost small" type="button" onClick={() => setMessages([])} disabled={messages.length === 0 || busy}><Trash2 size={13} /> 清空对话</button>
+        <button className="button ghost small" type="button" aria-label={agentInspectorOpen ? "隐藏 Agent 配置" : "显示 Agent 配置"} onClick={toggleAgentInspector}>{agentInspectorOpen ? <PanelRightClose size={13} /> : <PanelRightOpen size={13} />} {agentInspectorOpen ? "隐藏配置" : "显示配置"}</button>
+        <button className="button ghost small" type="button" onClick={() => activeSession && clearAgentConversation(activeSession.id)} disabled={messages.length === 0 || busy}><Trash2 size={13} /> 清空对话</button>
       </header>
 
-      <div className="agent-layout">
+      <div className={`agent-layout ${agentInspectorOpen ? "" : "config-hidden"}`}>
+        <aside className="agent-sessions" aria-label="Agent 对话列表">
+          <header><div><MessageSquarePlus size={14} /><strong>对话</strong></div><button type="button" aria-label="新建 Agent 对话" onClick={() => createAgentConversation()} disabled={busy}><Plus size={14} /></button></header>
+          <div className="agent-session-list">
+            {agentSessions.map((session) => (
+              <div className={`agent-session-row ${session.id === activeSession?.id ? "active" : ""}`} key={session.id}>
+                {renamingId === session.id ? (
+                  <input
+                    autoFocus
+                    aria-label="对话名称"
+                    value={renameDraft}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onBlur={() => { renameAgentConversation(session.id, renameDraft); setRenamingId(""); }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") { renameAgentConversation(session.id, renameDraft); setRenamingId(""); }
+                      if (event.key === "Escape") setRenamingId("");
+                    }}
+                  />
+                ) : (
+                  <button className="agent-session-select" type="button" aria-label={`打开对话 ${session.title}`} onClick={() => selectAgentConversation(session.id)} disabled={busy}>
+                    <strong>{session.title}</strong><span><Clock3 size={10} /> {formatSessionTime(session.updatedAt)} · {session.messages.length} 条</span>
+                  </button>
+                )}
+                <div className="agent-session-actions">
+                  <button type="button" aria-label={`重命名对话 ${session.title}`} onClick={() => { setRenamingId(session.id); setRenameDraft(session.title); }} disabled={busy}><Pencil size={11} /></button>
+                  <button type="button" aria-label={`删除对话 ${session.title}`} onClick={() => deleteAgentConversation(session.id)} disabled={busy}><Trash2 size={11} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <footer>{agentSessions.length} 个本地会话 · 最多保留 50 个</footer>
+        </aside>
+
         <section className="agent-conversation" aria-label="AI Agent 对话">
           <div className="agent-transcript" ref={transcriptRef} aria-live="polite">
             {messages.length === 0 && !busy && (
@@ -185,8 +248,8 @@ export function AgentPage() {
           </div>
         </section>
 
-        <aside className="agent-inspector">
-          <header><div><Wrench size={15} /><strong>Agent 配置</strong></div><span>SESSION</span></header>
+        {agentInspectorOpen && <aside className="agent-inspector">
+          <header><div><Wrench size={15} /><strong>Agent 配置</strong></div><button type="button" aria-label="收起右侧 Agent 配置" onClick={toggleAgentInspector}><PanelRightClose size={13} /></button></header>
           <div className="agent-inspector-scroll">
             <section className="agent-config-section">
               <h2><Link2 size={13} /> 模型连接</h2>
@@ -197,7 +260,7 @@ export function AgentPage() {
 
             <section className="agent-config-section">
               <h2><FolderCode size={13} /> 工作上下文</h2>
-              <label><span>开发项目</span><div className="agent-select"><FileCode2 size={13} /><select aria-label="Agent 开发项目" value={agentProjectId} onChange={(event) => setAgentProjectId(event.target.value)}><option value="">不绑定项目</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select><ChevronDown size={13} /></div></label>
+              <label><span>开发项目</span><div className="agent-select"><FileCode2 size={13} /><select aria-label="Agent 开发项目" value={agentProjectId} onChange={(event) => activeSession && setAgentConversationProject(activeSession.id, event.target.value)}><option value="">不绑定项目</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select><ChevronDown size={13} /></div></label>
               {selectedProject && <div className="agent-project-summary"><strong>{selectedProject.name}</strong><span>{selectedProject.files.length} 个文件</span><code>{selectedProject.id}</code></div>}
             </section>
 
@@ -207,7 +270,7 @@ export function AgentPage() {
             </section>
           </div>
           <footer><span className="agent-limit-dot" /> 单 Agent · 最多 8 轮工具调用 · Python 30 秒</footer>
-        </aside>
+        </aside>}
       </div>
     </div>
   );

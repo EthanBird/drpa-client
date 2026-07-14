@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import stat
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +12,10 @@ from typing import Any
 
 
 CATALOG_NAME = "install-manifest.json"
+UPDATE_SCHEMA = 2
+HOST_PROTOCOL = 2
+WORKER_PROTOCOL = 2
+MINIMUM_HOST_VERSION = "0.3.0"
 PROTECTED_PREFIXES = ("data/", "webview2/")
 PROTECTED_FILES: set[str] = set()
 
@@ -38,10 +44,6 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def sha256_bytes(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
-
-
 def component_for(relative: str) -> str:
     folded = relative.casefold()
     if folded == "drpa-updater.exe":
@@ -64,23 +66,45 @@ def is_protected(relative: str) -> bool:
     return folded in PROTECTED_FILES or any(folded.startswith(prefix) for prefix in PROTECTED_PREFIXES)
 
 
+def is_link_or_reparse_point(path: Path) -> bool:
+    metadata = path.lstat()
+    file_attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(metadata.st_mode) or bool(file_attributes & reparse_flag)
+
+
 def collect_catalog(stage: Path) -> list[CatalogEntry]:
     entries: list[CatalogEntry] = []
-    for path in sorted(stage.rglob("*")):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(stage).as_posix()
-        if relative == CATALOG_NAME or relative.casefold().startswith("data/"):
-            continue
-        entries.append(
-            CatalogEntry(
-                path=relative,
-                bytes=path.stat().st_size,
-                sha256=sha256(path),
-                component=component_for(relative),
+    for root, directories, filenames in os.walk(stage, followlinks=False):
+        root_path = Path(root)
+        directories.sort()
+        filenames.sort()
+
+        for directory in list(directories):
+            path = root_path / directory
+            relative = path.relative_to(stage).as_posix()
+            if relative.casefold() == "data" or relative.casefold().startswith("data/"):
+                directories.remove(directory)
+                continue
+            if is_link_or_reparse_point(path):
+                raise ValueError(f"install stage contains a link or reparse point: {relative}")
+
+        for filename in filenames:
+            path = root_path / filename
+            relative = path.relative_to(stage).as_posix()
+            if relative == CATALOG_NAME or relative.casefold().startswith("data/"):
+                continue
+            if is_link_or_reparse_point(path):
+                raise ValueError(f"install stage contains a link or reparse point: {relative}")
+            entries.append(
+                CatalogEntry(
+                    path=relative,
+                    bytes=path.stat().st_size,
+                    sha256=sha256(path),
+                    component=component_for(relative),
+                )
             )
-        )
-    return entries
+    return sorted(entries, key=lambda entry: entry.path)
 
 
 def make_catalog(
@@ -100,9 +124,10 @@ def make_catalog(
     else:
         catalog_files = [entry.as_dict() for entry in entries]
     catalog = {
-        "schema": 1,
+        "schema": UPDATE_SCHEMA,
         "version": version,
         "target": "windows-x86_64",
+        "updateProtocol": HOST_PROTOCOL,
         "files": catalog_files,
     }
     source = (json.dumps(catalog, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -113,7 +138,7 @@ def read_catalog(path: Path | None) -> dict[str, Any] | None:
     if path is None:
         return None
     source = json.loads(path.read_text(encoding="utf-8"))
-    if source.get("schema") != 1 or source.get("target") != "windows-x86_64":
+    if source.get("schema") not in {1, UPDATE_SCHEMA} or source.get("target") != "windows-x86_64":
         raise ValueError("base install manifest is invalid")
     return source
 
@@ -144,12 +169,17 @@ def build(
             continue
         if old is not None and old.get("sha256") == item["sha256"]:
             continue
-        files.append(item)
+        files.append(
+            {
+                "path": item["path"],
+                "bytes": item["bytes"],
+                "component": item["component"],
+            }
+        )
 
     catalog_item = {
         "path": CATALOG_NAME,
         "bytes": len(catalog_source),
-        "sha256": sha256_bytes(catalog_source),
         "component": "catalog",
     }
     files.append(catalog_item)
@@ -163,11 +193,14 @@ def build(
         raise FileNotFoundError(f"update worker is missing: {worker_path}")
     worker_info = {
         "bytes": worker_path.stat().st_size,
-        "sha256": sha256(worker_path),
     }
 
     manifest = {
-        "schema": 1,
+        "schema": UPDATE_SCHEMA,
+        "hostProtocol": HOST_PROTOCOL,
+        "workerProtocol": WORKER_PROTOCOL,
+        "packageKind": "delta" if base else "bootstrap",
+        "minimumHostVersion": MINIMUM_HOST_VERSION,
         "version": version,
         "baseVersion": base.get("version") if base else None,
         "target": "windows-x86_64",
@@ -176,7 +209,6 @@ def build(
         "worker": worker_info,
         "totalBytes": sum(item["bytes"] for item in files),
         "components": sorted({item["component"] for item in files}),
-        "catalogSha256": catalog_item["sha256"],
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
@@ -193,12 +225,20 @@ def build(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--base-manifest", type=Path)
     parser.add_argument("--worker", type=Path)
     parser.add_argument("--partial", action="store_true", help="merge the staged overlay into the base catalog without deleting omitted files")
+    parser.add_argument("--catalog-only", action="store_true", help="write install-manifest.json without creating an update package")
     args = parser.parse_args()
+    if args.catalog_only:
+        base = read_catalog(args.base_manifest)
+        _, source = make_catalog(args.stage.resolve(), args.version, base=base, partial=args.partial)
+        (args.stage / CATALOG_NAME).write_bytes(source)
+        return 0
+    if args.output is None:
+        parser.error("--output is required unless --catalog-only is used")
     build(
         args.stage,
         args.output,

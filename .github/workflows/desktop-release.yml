@@ -51,7 +51,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 0.2.0
+      DRPA_VERSION: 0.3.0
       RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || 'update' }}
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +59,8 @@ jobs:
         with:
           python-version: "3.11.9"
           cache: pip
+      - name: Verify synchronized product version
+        run: python tools/release/check_version_consistency.py --expected "${{ env.DRPA_VERSION }}"
       - name: Install pinned offline bundle tooling
         if: env.RELEASE_KIND == 'full'
         run: python -m pip install "uv==0.11.28"
@@ -106,16 +108,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Failed to download the base install catalog" }
           $baseManifest = Get-ChildItem $previous -File -Filter "*-install-manifest.json" | Select-Object -First 1
           if (-not $baseManifest) { throw "Downloaded base install catalog is missing" }
+          $baseCatalog = Get-Content $baseManifest.FullName -Raw | ConvertFrom-Json
+          if ($baseCatalog.schema -ne 2 -or $baseCatalog.updateProtocol -ne 2) {
+            throw "Latest release is not a 0.3 update-protocol baseline; publish a full release first"
+          }
 
           $update = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64.drpa-update"
           python tools/windows/build_update_package.py --stage $overlay --output $update --version "$env:DRPA_VERSION-preview-$env:GITHUB_RUN_NUMBER" --base-manifest $baseManifest.FullName --worker "$overlay/drpa-updater.exe" --partial
           if ($LASTEXITCODE -ne 0) { throw "Failed to build lightweight Windows update" }
-          $updateHash = (Get-FileHash -Algorithm SHA256 $update).Hash.ToLowerInvariant()
-          "$updateHash  $([IO.Path]::GetFileName($update))" | Set-Content -Encoding ascii "$update.sha256"
           $catalog = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-install-manifest.json"
           Copy-Item "$overlay/install-manifest.json" $catalog
-          $catalogHash = (Get-FileHash -Algorithm SHA256 $catalog).Hash.ToLowerInvariant()
-          "$catalogHash  $([IO.Path]::GetFileName($catalog))" | Set-Content -Encoding ascii "$catalog.sha256"
 
       - name: Assemble registry-free Windows installer
         if: runner.os == 'Windows' && env.RELEASE_KIND == 'full'
@@ -158,28 +160,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Installed-layout Python/Jupyter import smoke failed" }
           Remove-Item (Join-Path $portable "data") -Recurse -Force
 
-          $update = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64.drpa-update"
-          $previous = Join-Path $env:RUNNER_TEMP "previous-release"
-          New-Item -ItemType Directory -Force -Path $previous | Out-Null
-          $latestTag = gh release list --repo $env:GITHUB_REPOSITORY --limit 1 --json tagName --jq '.[0].tagName'
-          $baseManifest = $null
-          if ($LASTEXITCODE -eq 0 -and $latestTag) {
-            $catalogAsset = gh release view $latestTag --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name | select(endswith("install-manifest.json"))' | Select-Object -First 1
-            if ($LASTEXITCODE -eq 0 -and $catalogAsset) {
-              gh release download $latestTag --repo $env:GITHUB_REPOSITORY --pattern $catalogAsset --dir $previous
-              if ($LASTEXITCODE -eq 0) { $baseManifest = Get-ChildItem $previous -File -Filter "*-install-manifest.json" | Select-Object -First 1 }
-            }
-          }
-          $updateArgs = @("tools/windows/build_update_package.py", "--stage", $portable, "--output", $update, "--version", "$env:DRPA_VERSION-preview-$env:GITHUB_RUN_NUMBER", "--worker", "$portable/drpa-updater.exe")
-          if ($baseManifest) { $updateArgs += @("--base-manifest", $baseManifest.FullName) }
-          python @updateArgs
-          if ($LASTEXITCODE -ne 0) { throw "Failed to build Windows file-level update" }
-          $updateHash = (Get-FileHash -Algorithm SHA256 $update).Hash.ToLowerInvariant()
-          "$updateHash  $([IO.Path]::GetFileName($update))" | Set-Content -Encoding ascii "$update.sha256"
+          python tools/windows/build_update_package.py --stage $portable --version "$env:DRPA_VERSION-preview-$env:GITHUB_RUN_NUMBER" --catalog-only
+          if ($LASTEXITCODE -ne 0) { throw "Failed to build the full install catalog" }
           $catalog = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-install-manifest.json"
           Copy-Item "$portable/install-manifest.json" $catalog
-          $catalogHash = (Get-FileHash -Algorithm SHA256 $catalog).Hash.ToLowerInvariant()
-          "$catalogHash  $([IO.Path]::GetFileName($catalog))" | Set-Content -Encoding ascii "$catalog.sha256"
 
           choco install nsis --version=3.12.0 --no-progress --yes
           $makensis = "C:/Program Files (x86)/NSIS/makensis.exe"
@@ -189,8 +173,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Failed to compile registry-free Windows installer" }
           $registryCalls = Select-String -Path "installer/windows/drpa-next.nsi" -Pattern "WriteReg|DeleteReg|ReadReg|InstallDirRegKey" -CaseSensitive:$false
           if ($registryCalls) { throw "Installer contains a forbidden registry instruction" }
-          $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
-          "$hash  $([IO.Path]::GetFileName($installer))" | Set-Content -Encoding ascii "$installer.sha256"
 
       - name: Upload offline desktop package
         uses: actions/upload-artifact@v4
@@ -207,6 +189,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || 'update' }}
+      DRPA_VERSION: 0.3.0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -216,14 +199,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=4
+          expected=2
           if [[ "$RELEASE_KIND" == "full" ]]; then
             mkdir -p artifacts/example
-            cp examples/bing_daily_image.rpaz artifacts/example/drpa-example-bing-daily-image-0.2.0.rpaz
-            cd artifacts/example
-            sha256sum drpa-example-bing-daily-image-0.2.0.rpaz > drpa-example-bing-daily-image-0.2.0.rpaz.sha256
-            cd ../..
-            expected=8
+            cp examples/bing_daily_image.rpaz "artifacts/example/drpa-example-bing-daily-image-${DRPA_VERSION}.rpaz"
+            expected=3
           fi
           mapfile -t assets < <(find artifacts -type f | sort)
           test "${#assets[@]}" -eq "$expected"
@@ -233,14 +213,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="desktop-v0.2.0-preview-${GITHUB_RUN_NUMBER}"
+          tag="desktop-v${DRPA_VERSION}-preview-${GITHUB_RUN_NUMBER}"
           mapfile -t assets < <(find artifacts -type f | sort)
           if [[ "$RELEASE_KIND" == "full" ]]; then
-            title="DRPA Next 0.2.0 离线预览 · ${GITHUB_RUN_NUMBER}"
-            notes=$'Windows-focused DRPA Next offline preview.\n\nIncludes a registry-free Windows x64 guided installer, a verified inventory/delta .drpa-update package, its complete install-manifest.json, sealed Python 3.11 with real Jupyter Kernel dependencies, Fixed Version WebView2 and the Bing daily image RPAZ example. WebView2 is an installer-only baseline component; Chrome/runtime files enter an update only when their catalog digest changes. The updater shows file-level progress and automatically rolls back on failure.\n\nThis preview is unsigned. Verify the matching SHA-256 file before moving a package to an offline machine.'
+            title="DRPA Next ${DRPA_VERSION} 全量离线基线 · ${GITHUB_RUN_NUMBER}"
+            notes=$'DRPA Next 0.3.0 Windows x64 full offline baseline.\n\nIncludes the registry-free Setup, sealed Python 3.11/Chrome runtime, Fixed Version WebView2, schema-2 install inventory, and Bing daily image RPAZ. This full installer is the required migration baseline for pre-0.3 installations. Future lightweight releases use a package-owned detached Worker, explicit base/protocol compatibility, size and path validation, durable progress, startup acknowledgement, and automatic rollback.'
           else
-            title="DRPA Next 0.2.0 轻量更新 · ${GITHUB_RUN_NUMBER}"
-            notes=$'Windows x64 lightweight update.\n\nContains only changed application/updater files, a merged complete install inventory, and matching SHA-256 files. Existing sealed Python, Chrome runtime, Fixed Version WebView2 and user data remain in place. Apply the .drpa-update file from Settings; the visual progress window reports verification, replacement, restart and rollback state.'
+            title="DRPA Next ${DRPA_VERSION} 轻量更新 · ${GITHUB_RUN_NUMBER}"
+            notes=$'DRPA Next 0.3.0 Windows x64 lightweight update.\n\nContains changed application/updater files plus the merged install inventory. Existing sealed Python, Chrome runtime, Fixed Version WebView2 and user data remain in place. Protocol and exact base-version compatibility are checked before exit; the detached package Worker keeps backups until the relaunched Host acknowledges successful window startup.'
           fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber

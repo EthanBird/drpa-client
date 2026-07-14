@@ -14,7 +14,7 @@ Unicode true
 !endif
 
 !define APP_NAME "DRPA Next"
-!define APP_VERSION "0.2.0"
+!define APP_VERSION "0.3.0"
 
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUTPUT_FILE}"
@@ -68,6 +68,7 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\DRPA Next"
   Delete "$INSTDIR\DRPA Next.exe"
   Delete "$INSTDIR\drpa-updater.exe"
+  Delete "$INSTDIR\install-manifest.json"
   Delete "$INSTDIR\README.md"
   RMDir /r "$INSTDIR\runtime"
   RMDir /r "$INSTDIR\webview2"

@@ -186,7 +186,7 @@ Budgets are CI-visible measurements, not marketing claims.
 ## 10. Delivery model
 
 - Current release workflow: Windows x64 only, built and smoke-tested on a native Windows runner.
-- Current preview assets are unsigned and always include SHA-256 files; signed installers, update manifests and key rotation are stable-release requirements.
-- Runtime and desktop are separately versioned GitHub assets. The current desktop update may still contain large changed files; content-addressed delta delivery is future work.
+- Current preview assets are unsigned. Runtime build fingerprints remain in the install inventory for delta selection, while desktop update application validates protocol, paths and sizes without publishing separate SHA-256 assets; signed update manifests and key rotation remain stable-release requirements.
+- Full desktop releases carry the sealed runtime and WebView2 baseline. Daily releases carry only changed managed files plus the merged inventory; content-addressed block delta delivery is future work.
 - A software bill of materials and dependency-license inventory are required before the stable release.
 - macOS and Linux remain future targets and must not be advertised until native offline runtime, installer, data-path and process-lifecycle tests pass.

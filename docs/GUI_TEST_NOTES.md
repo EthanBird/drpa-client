@@ -1,5 +1,15 @@
 # GUI 测试记录
 
+## 2026-07-14 全量运行时实体文件回归
+
+- 复现：本地 `target/update-debug/v2-gui/install` 曾使用指向旧安装目录的 Junction 复用 `runtime/python`、`runtime/browser`、`runtime/tools` 与 `webview2`。删除旧安装后，运行环境页报告缺少 `runtime/browser/chrome-win64/chrome.exe`。
+- 根因：测试夹具不是自包含安装，库存生成器又会跟随 Windows Junction，因而没有在装配阶段暴露外部依赖。
+- 修复：本地夹具重新放入实体 CPython 3.11.9、Chrome for Testing 150.0.7871.115、uv 0.11.28、59 个离线 wheels 与 Fixed Version WebView2 150.0.4078.65；删除并重建生成环境。
+- 防回归：`build_update_package.py` 改用不跟随链接的目录遍历，并拒绝 symlink、Junction 与其他 reparse point。新增 Windows Junction 回归测试，修复前失败、修复后通过。
+- 实际安装布局冒烟测试通过：59 个包纯离线安装、`drpa_runner/DrissionPage/ipykernel/jupyter_client/zmq/nbformat/pandas/openpyxl` 导入、Chrome 本地 HTML 无头访问以及连续两次 Jupyter Kernel 执行均成功。
+- 新库存包含 4,626 个实体文件：4,056 个 runtime 文件、308 个 Chrome 文件与 260 个 WebView2 文件；新程序进程路径确认为 `G:\workspace\drpa\target\update-debug\v2-gui\install\DRPA Next.exe`。
+- 新构建的可访问性树确认运行环境页显示“运行环境健康”“Python、Jupyter Kernel 与浏览器自动化依赖已就绪”、Python 3.11.9、Bundle 0.3.0-dev 及安装目录内的 Chrome for Testing 路径，不再出现缺失文件提示。
+
 日期：2026-07-14
 环境：Windows，本地 `npm run tauri:dev`，真实 Tauri/WebView 窗口。
 
@@ -83,3 +93,12 @@
    - 修复：Kernel 预热与 execute command 改为 Tauri async + blocking worker；React 在 invoke 前先绘制运行态。
    - 修复：补齐 Studio/Notebook 的 grid containment、`min-height: 0`、内部滚动和 toolbar 横向滚动；单个 Monaco 代码单元最高 420 px。
    - 回归：Vitest 使用 30 单元 Notebook 和延迟执行 Promise，验证滚动容器存在且“正在运行”在执行完成前已渲染。
+
+## 2026-07-14 热更新闪退诊断
+
+- 检查用户现有安装目录后确认其没有 `install-manifest.json` 和受管更新器，属于 protocol-2 之前的安装基线；Release 14 轻量包却依赖 Release 13 库存，旧版与新版之间没有可靠的协议迁移边界，这是“退出后未更新”的主要兼容性缺陷。
+- 直接 Worker harness 曾出现“completed 后子进程消失”，但同一新主程序从安装目录和会话目录直接启动都能稳定存活；该现象受测试执行器的 Windows Job 生命周期影响，因此错误工作目录只作为加固项，不再记录为唯一根因。
+- 修复：`0.3.0` 建立 schema-2 全量基线；轻量包明确声明 Host/Worker protocol、最低 Host 版本和精确 baseVersion，不兼容时保持旧应用打开并要求全量安装。
+- 修复：包内 Worker 优先脱离父 Job，写入 ready 后才允许 Host 退出；新版本从安装目录启动并在主窗口创建后写入 startup ack，Worker 在收到确认前保留备份，早退/超时则结束新进程、回滚并恢复旧版本。
+- 回归：Rust 测试覆盖协议拒绝、暂存大小检查、安装目录、启动确认环境、子进程早退与回滚；另执行 schema-2 真实双版本更新演练。
+- 更新读取取消逐文件 SHA-256 校验，保留 schema、平台、基线版本、安全路径、文件数量、压缩率和写入大小检查；日常 Release 资产缩减为 `.drpa-update` 与 `install-manifest.json`。

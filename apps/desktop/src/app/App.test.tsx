@@ -32,6 +32,7 @@ describe("DRPA Next desktop shell", () => {
 
   beforeEach(() => {
     localStorage.clear();
+    const agentSession = { id: "agent-test-session", title: "新对话", projectId: "", createdAt: 1, updatedAt: 1, messages: [] };
     useAppStore.setState({
       activeNavigation: "workbench",
       commandOpen: false,
@@ -43,6 +44,9 @@ describe("DRPA Next desktop shell", () => {
       agentBaseUrl: "https://api.openai.com/v1",
       agentModel: "gpt-5.4-mini",
       agentProjectId: "",
+      agentInspectorOpen: true,
+      agentSessions: [agentSession],
+      activeAgentSessionId: agentSession.id,
     });
   });
 
@@ -128,6 +132,27 @@ describe("DRPA Next desktop shell", () => {
     })));
     expect(await screen.findByText("项目校验通过。")).toBeVisible();
     expect(screen.getByText("manifest.yaml 校验通过")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "隐藏 Agent 配置" }));
+    expect(screen.queryByLabelText("OpenAI 兼容 URL")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "显示 Agent 配置" }));
+    expect(screen.getByLabelText("OpenAI 兼容 URL")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "新建 Agent 对话" }));
+    expect(screen.getByText("从一个 RPAZ 开发任务开始")).toBeVisible();
+    const previousSession = screen.getByRole("button", { name: "打开对话 校验当前项目" });
+    fireEvent.click(previousSession);
+    expect(screen.getByText("项目校验通过。")).toBeVisible();
+  });
+
+  it("opens bundled multi-page HTML development documentation", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开发文档" }));
+
+    expect(await screen.findByRole("heading", { name: "开发文档" })).toBeVisible();
+    expect(screen.getByTitle("DRPA 开发概览")).toHaveAttribute("src", expect.stringContaining("docs/index.html"));
+    fireEvent.click(screen.getByRole("button", { name: /RPAZ 规范/ }));
+    expect(screen.getByTitle("DRPA RPAZ 规范")).toHaveAttribute("src", expect.stringContaining("docs/rpaz.html"));
   });
 
   it("shows automation schedules from the workspace snapshot", async () => {
