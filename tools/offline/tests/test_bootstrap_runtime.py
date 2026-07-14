@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,7 +25,8 @@ class RuntimeBootstrapTests(unittest.TestCase):
             requirements = root / "locks" / "runtime.txt"
             requirements.write_text("requests==2.34.2\n", encoding="utf-8")
             (root / "wheelhouse" / "drpa_runtime_python-0.3.0-py3-none-any.whl").write_bytes(b"new-adapter")
-            (root / "tools" / "uv.exe").write_bytes(b"uv")
+            uv_name = "uv.exe" if os.name == "nt" else "uv"
+            (root / "tools" / uv_name).write_bytes(b"uv")
             python = environment / "Scripts" / "python.exe"
             python.parent.mkdir(parents=True)
             python.write_bytes(b"python")
