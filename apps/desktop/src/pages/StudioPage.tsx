@@ -27,6 +27,8 @@ import {
 } from "lucide-react";
 import type { DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { useAppStore } from "../app/store";
 import type { StudioProject, StudioVariable } from "../domain/models";
@@ -296,7 +298,7 @@ export function StudioPage() {
       if (selectedFile && !selectedFile.endsWith("/")) await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
       const runId = await desktopGateway.runStudioProject(selectedId, parameters);
       setSnapshot(await desktopGateway.getWorkspaceSnapshot());
-      setNotice(`开发态运行完成：${runId}（没有构建或安装）`);
+      setNotice(`开发态运行已启动：${runId}（没有构建或安装，可在运行工作台查看实时日志）`);
     } catch (error) { setNotice(`失败：${String(error)}`); }
     finally { setBusy(false); }
   };
@@ -307,7 +309,12 @@ export function StudioPage() {
     try {
       if (selectedFile && !selectedFile.endsWith("/")) await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
       const archivePath = await desktopGateway.buildStudioProject(selectedId);
-      setNotice(`RPAZ 已导出：${archivePath}`);
+      try {
+        await desktopGateway.openBuildOutputDirectory();
+        setNotice(`RPAZ 已导出并打开所在目录：${archivePath}`);
+      } catch (openError) {
+        setNotice(`RPAZ 已导出：${archivePath}；打开目录失败：${String(openError)}`);
+      }
     } catch (error) { setNotice(`失败：${String(error)}`); }
     finally { setBusy(false); }
   };
@@ -455,6 +462,7 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
   const [executing, setExecuting] = useState<number | null>(null);
   const [variables, setVariables] = useState<StudioVariable[]>([]);
   const [kernelStatus, setKernelStatus] = useState<"preparing" | "ready" | "error">("preparing");
+  const [editingMarkdownCells, setEditingMarkdownCells] = useState<Set<number>>(() => new Set());
 
   useEffect(() => { setDocument(parseNotebook(content)); }, [content]);
 
@@ -505,6 +513,16 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
 
   const runCell = async (index: number) => {
     if (!projectId || executing !== null) return;
+    if (document.cells[index]?.cell_type === "markdown") {
+      setEditingMarkdownCells((current) => {
+        const next = new Set(current);
+        next.delete(index);
+        return next;
+      });
+      commit(document, true);
+      onNotice(`Markdown 单元格 ${index + 1} 已渲染并保存`);
+      return;
+    }
     setExecuting(index);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     try { commit(await execute(document, index), true); setKernelStatus("ready"); }
@@ -520,8 +538,9 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
       let next = document;
       for (let index = 0; index < next.cells.length; index += 1) next = await execute(next, index);
       commit(next, true);
+      setEditingMarkdownCells(new Set());
       setKernelStatus("ready");
-      onNotice("全部代码单元格执行完成");
+      onNotice("全部单元格执行完成，Markdown 已渲染");
     } catch (error) { onNotice(`Kernel 执行失败：${String(error)}`); }
     finally { setExecuting(null); }
   };
@@ -530,6 +549,7 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
     const next = structuredClone(document);
     next.cells.push({ cell_type: kind, execution_count: null, metadata: {}, outputs: [], source: "" });
     commit(next);
+    if (kind === "markdown") setEditingMarkdownCells((current) => new Set(current).add(next.cells.length - 1));
   };
 
   const deleteCell = (index: number) => {
@@ -560,11 +580,18 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
       <div className="notebook-scroll">
         {document.cells.map((cell, index) => (
           <article className="notebook-cell" key={index}>
-            <div className="cell-gutter"><button type="button" aria-label={`运行单元格 ${index + 1}`} onClick={() => runCell(index)} disabled={cell.cell_type !== "code" || executing !== null}><Play size={13} fill="currentColor" /></button><span>[{cell.execution_count ?? " "}]</span></div>
+            <div className="cell-gutter"><button type="button" aria-label={`运行单元格 ${index + 1}`} onClick={() => runCell(index)} disabled={executing !== null}><Play size={13} fill="currentColor" /></button><span>{cell.cell_type === "markdown" ? "MD" : `[${cell.execution_count ?? " "}]`}</span></div>
             <div className="cell-body">
               {cell.cell_type === "code" ? (
                 <Editor height={`${Math.min(420, Math.max(92, sourceText(cell.source).split("\n").length * 20 + 30))}px`} language="python" value={sourceText(cell.source)} onChange={(value) => updateSource(index, value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 13, minimap: { enabled: false }, automaticLayout: true, lineNumbers: "on", scrollBeyondLastLine: false, folding: false, scrollbar: { vertical: "auto", horizontal: "auto" } }} />
-              ) : <textarea className="markdown-cell" value={sourceText(cell.source)} onChange={(event) => updateSource(index, event.target.value)} placeholder="Markdown 说明…" />}
+              ) : editingMarkdownCells.has(index) ? (
+                <textarea autoFocus className="markdown-cell" aria-label={`编辑 Markdown 单元格 ${index + 1}`} value={sourceText(cell.source)} onChange={(event) => updateSource(index, event.target.value)} placeholder="Markdown 说明…" />
+              ) : (
+                <div className="markdown-cell-preview" onDoubleClick={() => setEditingMarkdownCells((current) => new Set(current).add(index))}>
+                  <button type="button" className="markdown-cell-edit" aria-label={`编辑 Markdown 单元格 ${index + 1}`} onClick={() => setEditingMarkdownCells((current) => new Set(current).add(index))}><Pencil size={12} /> 编辑</button>
+                  <Markdown remarkPlugins={[remarkGfm]}>{sourceText(cell.source) || "*双击或点击编辑开始编写 Markdown*"}</Markdown>
+                </div>
+              )}
               {cell.outputs.length > 0 && <div className="cell-output">{cell.outputs.map((output, outputIndex) => <NotebookOutput output={output} key={outputIndex} />)}</div>}
             </div>
             <button className="cell-delete" type="button" aria-label={`删除单元格 ${index + 1}`} onClick={() => deleteCell(index)}><Trash2 size={13} /></button>

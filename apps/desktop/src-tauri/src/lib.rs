@@ -13,11 +13,12 @@ use drpa_protocol::{
     WindowsUpdateSession, WindowsUpdateStatus, WorkspaceSnapshot,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
 mod agent;
+mod agent_config;
 mod knowledge;
 
 const WINDOWS_UPDATE_SCHEMA: u32 = 2;
@@ -158,10 +159,16 @@ async fn start_run(
         .prepare_run(&package_id, &profile_id, &parameters)
         .map_err(|error| error.to_string())?;
     let run_id = launch.run_id.clone();
-    if let Err(error) = execute_python_run(&state, &paths, &launch, &parameters) {
-        state.fail_run(&run_id, error.clone());
-        return Err(error);
-    }
+    let background_state = state.inner().clone();
+    let background_paths = paths.inner().clone();
+    let background_run_id = run_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) =
+            execute_python_run(&background_state, &background_paths, &launch, &parameters)
+        {
+            background_state.fail_run(&background_run_id, error);
+        }
+    });
     Ok(run_id)
 }
 
@@ -464,10 +471,16 @@ async fn run_studio_project(
         .prepare_development_run(&root, &manifest, &parameters)
         .map_err(|error| error.to_string())?;
     let run_id = launch.run_id.clone();
-    if let Err(error) = execute_python_run(&state, &paths, &launch, &parameters) {
-        state.fail_run(&run_id, error.clone());
-        return Err(error);
-    }
+    let background_state = state.inner().clone();
+    let background_paths = paths.inner().clone();
+    let background_run_id = run_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) =
+            execute_python_run(&background_state, &background_paths, &launch, &parameters)
+        {
+            background_state.fail_run(&background_run_id, error);
+        }
+    });
     Ok(run_id)
 }
 
@@ -621,12 +634,21 @@ fn execute_studio_cell_blocking(
 #[tauri::command]
 async fn run_agent_turn(
     request: agent::AgentTurnRequest,
+    app: tauri::AppHandle,
     paths: State<'_, AppPaths>,
 ) -> Result<agent::AgentTurnResult, String> {
+    let event_name = agent::agent_stream_event_name(&request.request_id)?;
     let paths = paths.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let runtime = locate_runtime(&paths)?;
-        agent::run_agent_turn(request, paths.workspace_root.clone(), runtime.python)
+        agent::run_agent_turn(
+            request,
+            paths.workspace_root.clone(),
+            runtime.python,
+            |event| {
+                let _ = app.emit(&event_name, event);
+            },
+        )
     })
     .await
     .map_err(|error| format!("Agent 后台任务失败：{error}"))?
@@ -649,6 +671,55 @@ fn restart_studio_kernel(
 #[tauri::command]
 fn get_data_directory(paths: State<'_, AppPaths>) -> String {
     paths.workspace_root.to_string_lossy().into_owned()
+}
+
+#[tauri::command]
+fn open_workspace_data_directory(paths: State<'_, AppPaths>) -> Result<(), String> {
+    fs::create_dir_all(&paths.workspace_root).map_err(|error| error.to_string())?;
+    open_directory_in_file_explorer(&paths.workspace_root)
+}
+
+#[tauri::command]
+fn open_build_output_directory(paths: State<'_, AppPaths>) -> Result<(), String> {
+    let build_root = paths.workspace_root.join("build");
+    fs::create_dir_all(&build_root).map_err(|error| error.to_string())?;
+    open_directory_in_file_explorer(&build_root)
+}
+
+fn open_runtime_output_directory(launch: &RunLaunch, requested: &str) -> Result<(), String> {
+    let output = launch
+        .output_dir
+        .canonicalize()
+        .map_err(|error| format!("定位运行输出目录失败：{error}"))?;
+    let requested = Path::new(requested)
+        .canonicalize()
+        .map_err(|error| format!("定位请求目录失败：{error}"))?;
+    if requested != output {
+        return Err("运行时只允许打开当前任务的输出目录".to_owned());
+    }
+    open_directory_in_file_explorer(&output)
+}
+
+fn open_directory_in_file_explorer(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("目录不存在：{}", path.display()));
+    }
+    #[cfg(windows)]
+    let mut command = Command::new("explorer.exe");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+    command
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    hide_child_window(&mut command);
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("打开目录失败：{error}"))
 }
 
 fn generated_project_ids(name: &str) -> (String, String) {
@@ -1322,7 +1393,20 @@ fn execute_python_run(
             continue;
         }
         match serde_json::from_str::<RuntimeEvent>(&line) {
-            Ok(event) => state.record_runtime_event(&launch.run_id, event),
+            Ok(event) => {
+                state.record_runtime_event(&launch.run_id, event.clone());
+                if let RuntimeEvent::OpenDirectory { path, sequence } = event
+                    && let Err(error) = open_runtime_output_directory(launch, &path)
+                {
+                    state.record_runtime_event(
+                        &launch.run_id,
+                        RuntimeEvent::Warning {
+                            sequence,
+                            message: error,
+                        },
+                    );
+                }
+            }
             Err(error) => state.fail_run(
                 &launch.run_id,
                 format!("运行时返回了无效事件：{error} · {line}"),
@@ -1502,7 +1586,7 @@ fn verify_runtime_imports(runtime: &RuntimeEnvironment) -> Result<(), String> {
         .args([
             "-I",
             "-c",
-            "import drpa_runner, DrissionPage, ipykernel, jupyter_client; print('DRPA_RUNTIME_OK')",
+            "import drpa_runner, DrissionPage, ipykernel, jupyter_client; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); print('DRPA_RUNTIME_OK')",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1773,6 +1857,11 @@ pub fn run() {
             execute_studio_cell,
             restart_studio_kernel,
             run_agent_turn,
+            agent_config::get_agent_workspace_config,
+            agent_config::write_agent_workspace_document,
+            agent_config::read_agent_skill,
+            agent_config::write_agent_skill,
+            agent_config::delete_agent_skill,
             get_runtime_status,
             initialize_runtime,
             repair_runtime,
@@ -1781,6 +1870,8 @@ pub fn run() {
             get_latest_windows_update_status,
             restart_for_windows_update,
             get_data_directory,
+            open_workspace_data_directory,
+            open_build_output_directory,
             get_current_user,
             knowledge::list_knowledge_entries,
             knowledge::read_knowledge_file,

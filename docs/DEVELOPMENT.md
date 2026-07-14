@@ -92,7 +92,7 @@ Python adapter 负责执行用户代码和生成结构化事件。不能把安�
 关键约束：
 
 - 不把业务数据默认放到 `%APPDATA%`、`%LOCALAPPDATA%` 或用户系统盘。
-- 不把预先创建的 venv 打入安装包。它包含不可移植的绝对路径，必须在最终安装位置用 `bootstrap_runtime.py` 离线创建。
+- 不把预先创建的 venv 打入安装包。它包含不可移植的绝对路径，必须在最终安装位置用 `bootstrap_runtime.py` 离线创建。生成环境的 marker 分别记录 Python/requirements 与轻量 adapter wheel；仅 adapter 变化时原位重装 adapter，不重建完整依赖环境。
 - `data/` 永远不进入更新清单；修复运行时只重建 `data/runtime-environment/`。
 - 已安装包不可原地编辑。“在工作室打开”会复制到 `data/projects/`。
 - 用户移动整个安装目录后，应从新位置启动并执行运行环境验证；不要只移动 `runtime/`。
@@ -174,7 +174,7 @@ Rust 与 Python bridge 之间使用 JSONL；bridge 与 IPython Kernel 之间使�
 6. Worker 确认主程序文件锁已释放后才替换所有受管文件，从安装目录启动新主程序，并通过 `DRPA_UPDATE_SESSION_ID` 要求新 Host 在主窗口构建成功后写入 `startup-ack`。
 7. 只有收到启动确认才删除备份；新进程早退、30 秒未确认或任一替换失败时，Worker 会结束新进程、按逆序恢复全部文件、持久化失败状态并从安装目录重新启动旧版本。
 
-CI 默认执行 `update` 发布：只 stage 主程序和更新器，使用 `--partial` 合并上一 Release 的完整库存，不删除 stage 未包含的 runtime、Chrome、WebView2 或文档。只有手工 `workflow_dispatch(release_kind=full)` 才构建 sealed runtime、WebView2、NSIS Setup 和示例资产。
+CI 默认执行 `update` 发布：stage 主程序、更新器、`bootstrap_runtime.py` 和当前 `drpa-runtime-python` wheel，使用 `--partial` 合并上一 Release 的完整库存，不删除 stage 未包含的 CPython、Chrome、WebView2 或文档。adapter 更新在下次运行时定位时增量安装，通常不超过数秒。只有手工 `workflow_dispatch(release_kind=full)` 才构建完整 sealed runtime、WebView2、NSIS Setup 和示例资产。
 
 完整安装 stage 禁止符号链接、Windows Junction 和其他 reparse point。`build_update_package.py` 在生成库存前会逐目录检查并直接失败，保证 `runtime/`、`webview2/` 和应用文件全部来自当前安装 stage，而不是外部目录。
 

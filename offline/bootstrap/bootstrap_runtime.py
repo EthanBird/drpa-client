@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -42,6 +43,89 @@ def digest_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def find_runtime_adapter_wheel(wheelhouse: Path) -> Path:
+    candidates = list(wheelhouse.glob("drpa_runtime_python-*.whl"))
+    if not candidates:
+        raise BootstrapError("drpa runtime adapter wheel is missing")
+
+    def version_key(path: Path) -> tuple[tuple[int, ...], str]:
+        version = path.name.removeprefix("drpa_runtime_python-").split("-", 1)[0]
+        return tuple(int(part) for part in re.findall(r"\d+", version)), version
+
+    return max(candidates, key=version_key)
+
+
+def environment_python_version(python: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            [str(python), "-I", "-c", "import platform; print(platform.python_version())"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def runtime_adapter_is_healthy(python: Path) -> bool:
+    try:
+        result = subprocess.run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                "from drpa_runner.context import RuntimeContext; "
+                "assert hasattr(RuntimeContext, 'open_output_directory')",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def install_runtime_adapter(
+    uv: Path,
+    python: Path,
+    wheel: Path,
+    root: Path,
+    offline_env: dict[str, str],
+) -> None:
+    subprocess.run(
+        [
+            str(uv),
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "--offline",
+            "--no-index",
+            "--no-deps",
+            "--reinstall",
+            str(wheel),
+        ],
+        cwd=root,
+        env=offline_env,
+        check=True,
+    )
+
+
+def verify_environment(uv: Path, python: Path, root: Path, offline_env: dict[str, str]) -> None:
+    subprocess.run(
+        [str(uv), "pip", "check", "--python", str(python)],
+        cwd=root,
+        env=offline_env,
+        check=True,
+    )
+    if not runtime_adapter_is_healthy(python):
+        raise BootstrapError("drpa runtime adapter API verification failed")
+
+
 def prepare(root: Path | None = None, environment_override: Path | None = None) -> Path:
     root = (root or bundle_root()).resolve()
     manifest = root / "manifest.json"
@@ -52,24 +136,34 @@ def prepare(root: Path | None = None, environment_override: Path | None = None) 
         if not required.exists():
             raise BootstrapError(f"offline bundle is incomplete: {required.relative_to(root)}")
 
+    try:
+        manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise BootstrapError(f"offline runtime manifest is invalid: {error}") from error
+    adapter_wheel = find_runtime_adapter_wheel(wheelhouse)
+
     environment = (environment_override or (root / "environment")).resolve()
     environment.parent.mkdir(parents=True, exist_ok=True)
     marker = environment / ".drpa-runtime.json"
     expected = {
-        "manifestSha256": digest_file(manifest),
+        "schema": 2,
+        "bundleVersion": manifest_data.get("bundleVersion", "unknown"),
+        "pythonVersion": manifest_data.get("pythonVersion", ""),
         "requirementsSha256": digest_file(requirements),
+        "runtimeAdapter": {
+            "file": adapter_wheel.name,
+            "sha256": digest_file(adapter_wheel),
+        },
     }
-    if marker.exists() and environment_python(environment).exists():
+    current: dict[str, object] = {}
+    if marker.exists():
         try:
-            if json.loads(marker.read_text(encoding="utf-8")) == expected:
-                return environment_python(environment)
+            loaded = json.loads(marker.read_text(encoding="utf-8"))
+            current = loaded if isinstance(loaded, dict) else {}
         except (OSError, json.JSONDecodeError):
-            pass
+            current = {}
 
-    if environment.exists():
-        shutil.rmtree(environment)
-
-    python = find_bundled_python(root)
+    generated_python = environment_python(environment)
     offline_env = os.environ.copy()
     offline_env.update(
         {
@@ -81,6 +175,32 @@ def prepare(root: Path | None = None, environment_override: Path | None = None) 
             "UV_CACHE_DIR": str(environment.parent / ".drpa-uv-cache"),
         }
     )
+
+    marker_has_python_version = (
+        current.get("schema") == 2
+        and current.get("pythonVersion") == expected["pythonVersion"]
+    )
+    environment_compatible = (
+        generated_python.is_file()
+        and current.get("requirementsSha256") == expected["requirementsSha256"]
+        and (
+            marker_has_python_version
+            or environment_python_version(generated_python) == expected["pythonVersion"]
+        )
+    )
+    if environment_compatible:
+        adapter_current = current.get("runtimeAdapter") == expected["runtimeAdapter"]
+        if adapter_current:
+            return generated_python
+        install_runtime_adapter(uv, generated_python, adapter_wheel, root, offline_env)
+        verify_environment(uv, generated_python, root, offline_env)
+        marker.write_text(json.dumps(expected, indent=2) + "\n", encoding="utf-8")
+        return generated_python
+
+    if environment.exists():
+        shutil.rmtree(environment)
+
+    python = find_bundled_python(root)
     subprocess.run(
         [str(uv), "venv", str(environment), "--python", str(python), "--no-project"],
         cwd=root,
@@ -100,20 +220,15 @@ def prepare(root: Path | None = None, environment_override: Path | None = None) 
             str(wheelhouse),
             "--requirement",
             str(requirements),
-            "drpa-runtime-python==0.3.0",
+            str(adapter_wheel),
         ],
         cwd=root,
         env=offline_env,
         check=True,
     )
-    subprocess.run(
-        [str(uv), "pip", "check", "--python", str(environment_python(environment))],
-        cwd=root,
-        env=offline_env,
-        check=True,
-    )
+    verify_environment(uv, generated_python, root, offline_env)
     marker.write_text(json.dumps(expected, indent=2) + "\n", encoding="utf-8")
-    return environment_python(environment)
+    return generated_python
 
 
 def main() -> int:

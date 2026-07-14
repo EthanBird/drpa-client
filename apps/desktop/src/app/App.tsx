@@ -21,6 +21,7 @@ export function App() {
   const activeNavigation = useAppStore((state) => state.activeNavigation);
   const commandOpen = useAppStore((state) => state.commandOpen);
   const theme = useAppStore((state) => state.theme);
+  const fontScale = useAppStore((state) => state.fontScale);
   const dragActive = useAppStore((state) => state.dragActive);
   const operationNotice = useAppStore((state) => state.operationNotice);
   const setCommandOpen = useAppStore((state) => state.setCommandOpen);
@@ -38,6 +39,10 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.fontScale = fontScale;
+  }, [fontScale]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

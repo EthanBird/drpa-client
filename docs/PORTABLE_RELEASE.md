@@ -38,7 +38,7 @@
 
 Host 会检查平台、schema、Host/Worker protocol、最低 Host 版本、精确基线版本、安全路径、文件数量与写入大小，不执行逐文件哈希验证。更新器只替换清单列出的应用文件，并明确保护 `data/` 和 WebView2；因此包、项目、运行历史和环境不会被日常应用更新波及。
 
-完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。push 默认只发布轻量 update：主程序、更新器和合并后的完整库存。只有手工选择 full 发布时才重新生成 Setup、runtime、WebView2 和示例资产。
+完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些大组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。push 默认只发布轻量 update：主程序、更新器、Python adapter wheel、运行时 bootstrap 和合并后的完整库存。adapter wheel 变化时客户端只原位刷新该小包，不重建 pandas、Jupyter、DrissionPage 等完整依赖。只有手工选择 full 发布时才重新生成 Setup、完整 runtime、WebView2 和示例资产。
 
 发布 stage 内的文件必须是实体文件。库存生成器拒绝 symlink、Junction 和 reparse point，防止安装包在构建机器上通过、复制到离线机器后才暴露缺失依赖。
 
@@ -48,7 +48,7 @@ Host 会检查平台、schema、Host/Worker protocol、最低 Host 版本、精�
 
 由于不写注册表，系统“应用和功能”中不会出现注册卸载项。退出 DRPA 后，备份需要保留的 `data/`，再删除整个安装目录和快捷方式即可。
 
-升级或迁移前建议备份整个 `data/`。恢复到不同目录后先运行环境验证；如果 Python 环境损坏，使用“修复运行环境”重建 `data/runtime-environment/`，不要删除 `packages/`、`projects/` 或 `runs/`。
+升级或迁移前建议备份整个 `data/`。恢复到不同目录后先运行环境验证；如果 Python 环境损坏，使用“强制重建生成环境”，在确认窗口核对影响后重建 `data/runtime-environment/`，不要删除 `packages/`、`projects/` 或 `runs/`。
 
 ## 发布资产
 

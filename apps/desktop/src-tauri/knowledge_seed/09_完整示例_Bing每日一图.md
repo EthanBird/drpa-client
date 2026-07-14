@@ -44,6 +44,10 @@ parameters:
     type: number
     required: false
     default: 1
+  - id: open_output_directory
+    type: boolean
+    required: false
+    default: false
 ```
 
 为什么必须显式默认：
@@ -70,6 +74,7 @@ BING_BASE = "https://www.bing.com"
 def main(ctx):
     market = str(ctx.params.get("market") or "zh-CN")
     image_count = int(ctx.params.get("image_count") or 1)
+    open_output_directory = bool(ctx.params.get("open_output_directory", False))
     image_count = max(1, min(image_count, 8))
 
     ctx.log.info(
@@ -116,6 +121,8 @@ def main(ctx):
         )
 
     ctx.log.info("Bing 每日一图下载完成")
+    if open_output_directory:
+        ctx.open_output_directory()
 
 
 def _read_json(url: str) -> dict:
@@ -195,7 +202,8 @@ https://www.bing.com/HPImageArchive.aspx
 ```json
 {
   "market": "zh-CN",
-  "image_count": 1
+  "image_count": 1,
+  "open_output_directory": false
 }
 ```
 
@@ -204,7 +212,8 @@ https://www.bing.com/HPImageArchive.aspx
 ```json
 {
   "market": "en-US",
-  "image_count": 3
+  "image_count": 3,
+  "open_output_directory": true
 }
 ```
 
@@ -288,4 +297,3 @@ def _download(url: str, target: Path) -> None:
 - 运行日志、进度、成功状态可展示。
 
 浏览器 runtime 验收应再运行一个使用 `ctx.browser()` 的包，两者结合覆盖 Python 与 Chrome 主路径。
-

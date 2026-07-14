@@ -78,11 +78,31 @@ YAML 使用当前 schema 2，不混入尚未实现的字段。
 
 AI Agent 配置 OpenAI-compatible URL、model 和可选 key。绑定开发项目后，可使用面向 RPAZ 的窄工具：
 
+### 模型与生成参数
+
+设置页和 Agent 右侧配置面板共用同一组本地偏好：
+
+| 参数 | 默认值 | 说明 |
+|---|---:|---|
+| 流式输出 | 开启 | 使用 OpenAI-compatible SSE，文本分片到达后立即渲染 Markdown |
+| 上下文窗口 | 128000 tokens | 模型可接收的总 token 预算；较早对话会在请求前从前向后裁剪 |
+| 最大输出 | 4096 tokens | 发送为 Chat Completions 的 `max_tokens`，必须小于上下文窗口 |
+| Temperature | 0.2 | 控制采样随机度，范围 0–2 |
+
+上下文裁剪会为系统提示、AGENTS.md、MEMORY.md、工具定义和输出预算预留空间，再尽量保留最近消息。Token 数量使用本地保守估算；模型接口返回 usage 时，界面显示服务端统计。
+
+流式输出期间，普通文本、标题、列表、表格、引用和代码块会增量渲染。模型调用工具时，每一轮开始会切换到新的回答草稿，工具结果卡片会在工具完成后实时加入，最终消息仍以接口完整响应为准。关闭流式输出后，界面等待完整 JSON 响应再一次性渲染，适合不支持 SSE 的兼容服务。
+
 | 工具 | 用途 |
 |---|---|
 | `knowledge_list_documents` | 列出本地知识目录和文档 |
 | `knowledge_read_document` | 读取 UTF-8 Markdown 文档 |
 | `knowledge_write_document` | 创建或更新 Markdown 文档及安全父目录 |
+| `agent_list_skills` | 只列出 Skill 名称和描述 |
+| `agent_read_skill` | 任务匹配时按需读取一个 `SKILL.md` |
+| `agent_write_skill` | 在用户要求沉淀流程时创建或更新 Skill |
+| `agent_read_memory` | 读取本地 `MEMORY.md` |
+| `agent_write_memory` | 在用户明确要求记忆时更新稳定事实 |
 | 项目文件列表 | 查看项目结构 |
 | 文件读取 | 读取项目内文本 |
 | 文件写入 | 创建或更新项目文件 |
@@ -92,7 +112,34 @@ AI Agent 配置 OpenAI-compatible URL、model 和可选 key。绑定开发项目
 
 工具限制在项目根目录和规定执行时间内。Agent 不应通过 prompt 假设自己已经执行了未返回工具结果的操作。
 
-知识库 Host API 与项目 API 分离，但 Agent 已通过三个 knowledge 工具复用同一套安全相对路径、UTF-8、大小限制和原子写入规则。即使会话没有绑定开发项目，知识工具仍可使用；六个 RPAZ 项目工具需要先绑定项目。
+知识库 Host API 与项目 API 分离，但 Agent 已通过三个 knowledge 工具复用同一套安全相对路径、UTF-8、大小限制和原子写入规则。即使会话没有绑定开发项目，五个 Agent/Skills/Memory 工具和三个知识工具仍可使用；六个 RPAZ 项目工具需要先绑定项目。
+
+### AGENTS.md、MEMORY.md 与 Skill 的分工
+
+| 载体 | 适合内容 | 加载方式 |
+|---|---|---|
+| `AGENTS.md` | 每次会话都应遵循的短规则、项目约定、验证命令 | 会话开始时加载 |
+| `MEMORY.md` | 稳定事实、用户偏好、已验证经验 | 会话开始时限量加载 |
+| `skills/<name>/SKILL.md` | 多步骤流程、参考资料、可复用方法 | 名称与描述常驻，正文按需加载 |
+
+DRPA 的工作区级文件位于 `data/agent/`。如果开发项目根目录也有 `AGENTS.md`，项目规则会在工作区规则之后加入上下文。设置页可直接编辑工作区 AGENTS.md、MEMORY.md 和 Skills 库。
+
+Skill 使用标准 frontmatter：
+
+```markdown
+---
+name: rpaz-debugging
+description: RPAZ 运行失败、日志异常或产物缺失时使用。
+---
+
+# RPAZ Debugging
+
+1. 读取 manifest 与入口。
+2. 复现并检查结构化日志。
+3. 修复后运行 rpaz_validate。
+```
+
+`name` 与目录名一致，只使用小写字母、数字和中划线。`description` 要写清触发条件，以便 Agent 在不加载正文的情况下完成匹配。
 
 ## 5. 高质量任务提示
 
@@ -147,6 +194,8 @@ Bilibili 搜索：修复结果选择器
 ```
 
 目标改变时新建会话，避免长对话把旧约束带入新任务。会话中不要粘贴 key；Agent 配置面板中的 key 是会话级可选配置。
+
+每个会话保留独立的项目绑定和消息历史。只有最近一条用户消息提供“编辑”入口：提交编辑后，系统会移除该消息之后的旧回答，并以修改后的历史重新生成。最近一条回答提供“重新生成”入口；如果上一次请求失败、会话最后只有用户消息，也可直接重新生成。删除会话和清空会话都需要二次确认。
 
 ## 9. 文档变更记录
 

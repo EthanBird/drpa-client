@@ -35,7 +35,8 @@ def test_execute_request_emits_versioned_events(tmp_path: Path) -> None:
         "    ctx.log.info('started safely')\n"
         "    result = ctx.output_file('nested/result.txt')\n"
         "    result.write_text('ok', encoding='utf-8')\n"
-        "    ctx.progress(100, 'done')\n",
+        "    ctx.progress(100, 'done')\n"
+        "    ctx.open_output_directory()\n",
         encoding="utf-8",
     )
     stream = io.StringIO()
@@ -54,7 +55,8 @@ def test_execute_request_emits_versioned_events(tmp_path: Path) -> None:
     events = [json.loads(line) for line in stream.getvalue().splitlines()]
 
     assert exit_code == 0
-    assert [event["type"] for event in events] == ["ready", "log", "artifact", "progress", "completed"]
+    assert [event["type"] for event in events] == ["ready", "log", "artifact", "progress", "open_directory", "completed"]
+    assert events[-2]["path"] == str(output_dir.resolve())
     assert (output_dir / "nested" / "result.txt").read_text(encoding="utf-8") == "ok"
     assert [event["sequence"] for event in events] == sorted(event["sequence"] for event in events)
 

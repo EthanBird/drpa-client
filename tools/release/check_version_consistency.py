@@ -42,9 +42,6 @@ def collect_versions() -> dict[str, str]:
             r'(?ms)^\[\[package\]\]\s+name = "drpa-runtime-python"\s+version = "([^"]+)"',
         ),
         "runtime bundle": match_value("offline/runtime-spec.json", r'"bundleVersion": "([^-]+)-dev"'),
-        "runtime bootstrap": match_value(
-            "offline/bootstrap/bootstrap_runtime.py", r'"drpa-runtime-python==([^"]+)"'
-        ),
         "Bing example": match_value("examples/bing_daily_image/manifest.yaml", r'^version:\s*(\S+)'),
         "desktop release": match_value(
             ".github/workflows/desktop-release.yml", r'^\s+DRPA_VERSION:\s*([^\s]+)'

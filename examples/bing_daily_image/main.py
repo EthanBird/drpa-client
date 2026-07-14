@@ -13,6 +13,7 @@ BING_BASE = "https://www.bing.com"
 def main(ctx):
     market = str(ctx.params.get("market") or "zh-CN")
     image_count = int(ctx.params.get("image_count") or 1)
+    open_output_directory = bool(ctx.params.get("open_output_directory", False))
     image_count = max(1, min(image_count, 8))
 
     ctx.log.info("正在访问 Bing 每日一图接口，地区：%s，数量：%s", market, image_count)
@@ -38,6 +39,9 @@ def main(ctx):
         ctx.progress(index / len(images) * 100, f"已下载 {index}/{len(images)}")
 
     ctx.log.info("Bing 每日一图下载完成")
+    if open_output_directory:
+        ctx.log.info("正在 Windows 资源管理器中打开输出目录")
+        ctx.open_output_directory()
 
 
 def _read_json(url: str) -> dict:

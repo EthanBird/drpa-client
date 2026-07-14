@@ -218,6 +218,10 @@ pub enum RuntimeEvent {
         label: String,
         media_type: Option<String>,
     },
+    OpenDirectory {
+        sequence: u64,
+        path: String,
+    },
     Warning {
         sequence: u64,
         message: String,

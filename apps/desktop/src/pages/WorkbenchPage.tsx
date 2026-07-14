@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { Activity, Box, CheckCircle2, FolderOpen, KeyRound, LoaderCircle, Play, Plus, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Activity, Box, CheckCircle2, CircleAlert, FolderOpen, KeyRound, LoaderCircle, Pencil, Play, Plus, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../app/store";
 import type { ParameterSummary, TaskProfile } from "../domain/models";
@@ -23,6 +23,13 @@ export function WorkbenchPage() {
   const [localProfiles, setLocalProfiles] = useState<TaskProfile[]>([]);
   const [logQuery, setLogQuery] = useState("");
   const [logFilter, setLogFilter] = useState<"all" | "warning" | "error">("all");
+  const [followLogs, setFollowLogs] = useState(true);
+  const logViewRef = useRef<HTMLDivElement>(null);
+  const [profileMenu, setProfileMenu] = useState<{ profileId: string; x: number; y: number } | null>(null);
+  const [editingProfileId, setEditingProfileId] = useState("");
+  const [profileNameDraft, setProfileNameDraft] = useState("");
+  const [creatingProfile, setCreatingProfile] = useState(false);
+  const [pendingDeleteProfile, setPendingDeleteProfile] = useState<TaskProfile | null>(null);
 
   const selectedPackage = useMemo(() => snapshot?.packages.find((item) => item.id === selectedPackageId) ?? snapshot?.packages[0], [selectedPackageId, snapshot]);
   const localProfileKey = selectedPackage ? `drpa-local-profiles:${selectedPackage.id}` : "";
@@ -53,6 +60,28 @@ export function WorkbenchPage() {
     catch { setValues(defaults); }
   }, [selectedPackage, storageKey]);
 
+  useEffect(() => {
+    const closeMenu = () => setProfileMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setProfileMenu(null);
+        setEditingProfileId("");
+        setCreatingProfile(false);
+      }
+    };
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!followLogs || !logViewRef.current) return;
+    logViewRef.current.scrollTop = logViewRef.current.scrollHeight;
+  }, [followLogs, visibleLogs]);
+
   if (!snapshot) return <div className="page"><div className="empty-state"><LoaderCircle className="spin" size={26} /><h2>正在加载工作区</h2></div></div>;
   if (!selectedPackage || !selectedProfile) return <div className="page"><div className="empty-state"><Box size={30} /><h2>还没有可运行的脚本包</h2><p>安装 `.rpaz` 或在开发工作室创建一个项目。</p><div className="header-actions"><button className="button secondary" type="button" onClick={() => setActiveNavigation("library")}>安装脚本包</button><button className="button primary" type="button" onClick={() => setActiveNavigation("studio")}><Plus size={15} /> 新建项目</button></div></div></div>;
 
@@ -74,7 +103,9 @@ export function WorkbenchPage() {
     return true;
   };
   const dryRun = () => {
-    if (validate()) setNotice(`预检通过：${selectedPackage.parameters.length} 个参数有效`);
+    if (!validate()) return;
+    localStorage.setItem(storageKey, JSON.stringify(values));
+    setNotice(`预检通过并已保存：${selectedPackage.parameters.length} 个参数有效`);
   };
   const startRun = async () => {
     if (!validate()) return;
@@ -82,8 +113,24 @@ export function WorkbenchPage() {
     setIsStarting(true);
     try {
       const runId = await desktopGateway.startRun(selectedPackage.id, selectedProfile.runtimeProfileId ?? selectedProfile.id, values);
-      setSnapshot(await desktopGateway.getWorkspaceSnapshot());
-      setNotice(`运行已结束：${runId}`);
+      setNotice(`任务已启动：${runId}，正在接收运行时事件`);
+      let snapshotFailures = 0;
+      for (;;) {
+        try {
+          const next = await desktopGateway.getWorkspaceSnapshot();
+          setSnapshot(next);
+          snapshotFailures = 0;
+          const run = next.runs.find((item) => item.id === runId);
+          if (run && !["running", "queued"].includes(run.status)) {
+            setNotice(run.status === "success" ? `运行完成：${runId}` : `运行${run.status === "cancelled" ? "已取消" : "失败"}：${runId}`);
+            break;
+          }
+        } catch (error) {
+          snapshotFailures += 1;
+          if (snapshotFailures >= 3) throw new Error(`连续读取运行状态失败：${String(error)}`);
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      }
     } catch (error) {
       setNotice(`运行失败：${String(error)}`);
       try { setSnapshot(await desktopGateway.getWorkspaceSnapshot()); } catch { /* keep the original runtime error */ }
@@ -92,9 +139,14 @@ export function WorkbenchPage() {
   };
 
 
-  const createTaskProfile = () => {
+  const persistLocalProfiles = (nextProfiles: TaskProfile[]) => {
+    setLocalProfiles(nextProfiles);
+    localStorage.setItem(localProfileKey, JSON.stringify(nextProfiles));
+  };
+
+  const createTaskProfile = (requestedName: string) => {
     if (!selectedPackage) return;
-    const name = window.prompt("任务配置名称", `${selectedPackage.name} 配置 ${profiles.length + 1}`)?.trim();
+    const name = requestedName.trim();
     if (!name) return;
     const profile: TaskProfile = {
       id: `local-${Date.now().toString(36)}`,
@@ -103,23 +155,57 @@ export function WorkbenchPage() {
       runtimeProfileId: selectedPackage.profiles[0]?.id ?? selectedProfile.id,
     };
     const nextProfiles = [...localProfiles, profile];
-    setLocalProfiles(nextProfiles);
-    localStorage.setItem(localProfileKey, JSON.stringify(nextProfiles));
+    persistLocalProfiles(nextProfiles);
     const defaults = defaultValues(selectedPackage.parameters);
     localStorage.setItem(`drpa-profile:${selectedPackage.id}:${profile.id}`, JSON.stringify(defaults));
     selectProfile(profile.id);
     setValues(defaults);
+    setCreatingProfile(false);
     setNotice(`已创建任务配置：${name}`);
+  };
+
+  const startProfileRename = (profile: TaskProfile) => {
+    if (!localProfiles.some((item) => item.id === profile.id)) return;
+    setEditingProfileId(profile.id);
+    setProfileNameDraft(profile.name);
+    setProfileMenu(null);
+  };
+
+  const commitProfileRename = (profileId: string) => {
+    const name = profileNameDraft.trim();
+    if (!name) {
+      setEditingProfileId("");
+      return;
+    }
+    persistLocalProfiles(localProfiles.map((profile) => profile.id === profileId ? { ...profile, name } : profile));
+    setEditingProfileId("");
+    setNotice(`任务配置已重命名为：${name}`);
+  };
+
+  const deleteTaskProfile = () => {
+    if (!pendingDeleteProfile || !selectedPackage) return;
+    const nextProfiles = localProfiles.filter((profile) => profile.id !== pendingDeleteProfile.id);
+    persistLocalProfiles(nextProfiles);
+    localStorage.removeItem(`drpa-profile:${selectedPackage.id}:${pendingDeleteProfile.id}`);
+    if (selectedProfile.id === pendingDeleteProfile.id) {
+      const nextSelected = [...selectedPackage.profiles, ...nextProfiles][0];
+      if (nextSelected) selectProfile(nextSelected.id);
+    }
+    setNotice(`已删除任务配置：${pendingDeleteProfile.name}`);
+    setPendingDeleteProfile(null);
   };
 
   const visiblePackages = snapshot.packages.filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(query.toLowerCase()));
 
   return (
     <div className="page workbench-page">
-      <header className="page-header workbench-header"><div><div className="breadcrumb"><span>运行工作台</span><span>/</span><strong>{selectedPackage.name}</strong></div><div className="page-title-row"><h1>{selectedProfile.name}</h1><span className="status-badge neutral"><CheckCircle2 size={11} /> 可编辑</span></div></div><div className="header-actions"><button className="button ghost" type="button" onClick={reset}><RotateCcw size={15} /> 重置</button><button className="button secondary" type="button" onClick={save}><Save size={15} /> 保存配置</button></div></header>
+      <header className="page-header workbench-header"><div><div className="breadcrumb"><span>运行工作台</span><span>/</span><strong>{selectedPackage.name}</strong></div><div className="page-title-row"><h1>{selectedProfile.name}</h1><span className="status-badge neutral"><CheckCircle2 size={11} /> 可编辑</span></div></div><div className="header-actions"><button className="button ghost" type="button" onClick={reset}><RotateCcw size={15} /> 重置</button><button className="button secondary" type="button" onClick={save}><Save size={15} /> 保存参数</button></div></header>
       <div className="workbench-grid">
-        <aside className="package-rail"><div className="rail-toolbar"><div className="rail-search"><Search size={14} /><input aria-label="筛选脚本包" placeholder="筛选脚本包" value={query} onChange={(event) => setQuery(event.target.value)} /></div></div><div className="rail-section-label"><span>脚本包</span><span>{visiblePackages.length}</span></div><div className="package-list">{visiblePackages.map((item) => <button key={item.id} className={item.id === selectedPackage.id ? "package-row selected" : "package-row"} type="button" onClick={() => selectPackage(item.id, item.profiles[0]?.id)}><span className="package-avatar" style={{ "--package-accent": item.accent } as React.CSSProperties}>{item.initials}</span><span><strong>{item.name}</strong><small>{item.runtime} · v{item.version}</small></span></button>)}</div><div className="rail-divider" /><div className="rail-section-label"><span>任务配置</span><button className="icon-button subtle" type="button" title="创建任务配置" aria-label="创建任务配置" onClick={createTaskProfile}><Plus size={13} /></button></div><div className="profile-list">{profiles.map((profile) => <button key={profile.id} className={profile.id === selectedProfile.id ? "profile-row selected" : "profile-row"} type="button" onClick={() => selectProfile(profile.id)}><span className="profile-file"><span /></span><span><strong>{profile.name}</strong><small>{profile.lastRun ?? "尚未运行"}</small></span></button>)}</div></aside>
-        <section className="configuration-pane"><div className="pane-scroll"><div className="configuration-heading"><div><div className="eyebrow">任务参数</div><h2>{selectedPackage.name}</h2><p>参数来自 `manifest.yaml`，保存后用于当前任务配置。</p></div></div><div className="trust-banner verified"><ShieldCheck size={18} /><div><strong>本地脚本包</strong><span>安装时已完成路径、压缩规模和 manifest 校验。</span></div></div><section className="form-section"><header><span className="section-icon"><SlidersHorizontal size={15} /></span><div><h3>运行参数</h3><p>必填参数会在预检和运行前再次验证。</p></div></header><div className="form-section-body">{selectedPackage.parameters.length === 0 ? <div className="empty-inline">这个脚本包没有声明参数，可以直接运行。</div> : <div className="field-grid two-columns">{selectedPackage.parameters.map((parameter) => <ParameterField key={parameter.id} parameter={parameter} value={values[parameter.id]} onChange={(value) => setValues((current) => ({ ...current, [parameter.id]: value }))} />)}</div>}</div></section>{selectedPackage.parameters.some((item) => item.kind === "secret") && <section className="form-section"><header><span className="section-icon"><KeyRound size={15} /></span><div><h3>敏感参数</h3><p>密码输入不会显示明文；正式版将改为凭据句柄，不写入配置文件。</p></div></header></section>}</div><footer className="run-bar"><div className="preflight-state"><CheckCircle2 size={16} /><div><strong>等待运行</strong><span>{selectedPackage.parameters.length} 个参数 · 使用应用内封装 Python，运行日志会写入右侧</span></div></div>{notice && <div className="run-notice">{notice}</div>}<button className="button secondary" type="button" onClick={dryRun}>预检</button><button className="button primary run-button" type="button" onClick={startRun} disabled={isStarting}>{isStarting ? <LoaderCircle className="spin" size={16} /> : <Play size={15} fill="currentColor" />}{isStarting ? "正在运行…" : "运行任务"}</button></footer></section>
+        <aside className="package-rail"><div className="rail-toolbar"><div className="rail-search"><Search size={14} /><input aria-label="筛选脚本包" placeholder="筛选脚本包" value={query} onChange={(event) => setQuery(event.target.value)} /></div></div><div className="rail-section-label"><span>脚本包</span><span>{visiblePackages.length}</span></div><div className="package-list">{visiblePackages.map((item) => <button key={item.id} className={item.id === selectedPackage.id ? "package-row selected" : "package-row"} type="button" onClick={() => selectPackage(item.id, item.profiles[0]?.id)}><span className="package-avatar" style={{ "--package-accent": item.accent } as React.CSSProperties}>{item.initials}</span><span><strong>{item.name}</strong><small>{item.runtime} · v{item.version}</small></span></button>)}</div><div className="rail-divider" /><div className="rail-section-label"><span>任务配置</span><button className="icon-button subtle" type="button" title="创建任务配置" aria-label="创建任务配置" onClick={() => { setCreatingProfile(true); setProfileNameDraft(`${selectedPackage.name} 配置 ${profiles.length + 1}`); }}><Plus size={13} /></button></div><div className="profile-list">
+          {creatingProfile && <div className="profile-row profile-inline-edit"><span className="profile-file"><span /></span><input autoFocus aria-label="新任务配置名称" value={profileNameDraft} onChange={(event) => setProfileNameDraft(event.target.value)} onBlur={() => { if (profileNameDraft.trim()) createTaskProfile(profileNameDraft); else setCreatingProfile(false); }} onKeyDown={(event) => { if (event.key === "Enter") createTaskProfile(profileNameDraft); if (event.key === "Escape") setCreatingProfile(false); }} /></div>}
+          {profiles.map((profile) => editingProfileId === profile.id ? <div key={profile.id} className="profile-row selected profile-inline-edit"><span className="profile-file"><span /></span><input autoFocus aria-label="任务配置名称" value={profileNameDraft} onChange={(event) => setProfileNameDraft(event.target.value)} onBlur={() => commitProfileRename(profile.id)} onKeyDown={(event) => { if (event.key === "Enter") commitProfileRename(profile.id); if (event.key === "Escape") setEditingProfileId(""); }} /></div> : <button key={profile.id} className={profile.id === selectedProfile.id ? "profile-row selected" : "profile-row"} type="button" onClick={() => selectProfile(profile.id)} onContextMenu={(event) => { event.preventDefault(); selectProfile(profile.id); setProfileMenu({ profileId: profile.id, x: event.clientX, y: event.clientY }); }}><span className="profile-file"><span /></span><span><strong>{profile.name}</strong><small>{profile.lastRun ?? "尚未运行"}</small></span></button>)}
+        </div></aside>
+        <section className="configuration-pane"><div className="pane-scroll"><div className="configuration-heading"><div><div className="eyebrow">任务参数</div><h2>{selectedPackage.name}</h2><p>参数来自 `manifest.yaml`，保存后用于当前任务配置。</p></div></div><div className="trust-banner verified"><ShieldCheck size={18} /><div><strong>本地脚本包</strong><span>安装时已完成路径、压缩规模和 manifest 校验。</span></div></div><section className="form-section"><header><span className="section-icon"><SlidersHorizontal size={15} /></span><div><h3>运行参数</h3><p>必填参数会在预检和运行前再次验证。</p></div></header><div className="form-section-body">{selectedPackage.parameters.length === 0 ? <div className="empty-inline">这个脚本包没有声明参数，可以直接运行。</div> : <div className="field-grid two-columns">{selectedPackage.parameters.map((parameter) => <ParameterField key={parameter.id} parameter={parameter} value={values[parameter.id]} onChange={(value) => setValues((current) => ({ ...current, [parameter.id]: value }))} />)}</div>}</div></section>{selectedPackage.parameters.some((item) => item.kind === "secret") && <section className="form-section"><header><span className="section-icon"><KeyRound size={15} /></span><div><h3>敏感参数</h3><p>密码输入不会显示明文；正式版将改为凭据句柄，不写入配置文件。</p></div></header></section>}</div><footer className="run-bar"><div className="preflight-state"><CheckCircle2 size={16} /><div><strong>等待运行</strong><span>{selectedPackage.parameters.length} 个参数 · 使用应用内封装 Python，运行日志会写入右侧</span></div></div>{notice && <div className="run-notice">{notice}</div>}<button className="button secondary" type="button" onClick={dryRun}><Save size={14} /> 预检并保存</button><button className="button primary run-button" type="button" onClick={startRun} disabled={isStarting}>{isStarting ? <LoaderCircle className="spin" size={16} /> : <Play size={15} fill="currentColor" />}{isStarting ? "正在运行…" : "运行任务"}</button></footer></section>
         <aside className="activity-inspector">
           <header className="inspector-header">
             <div><Activity size={16} /><strong>运行日志</strong></div>
@@ -139,8 +225,8 @@ export function WorkbenchPage() {
             <button type="button" className={logFilter === "warning" ? "active" : ""} onClick={() => setLogFilter("warning")}>警告 <span>{snapshot.logs.filter((entry) => entry.level === "warning").length}</span></button>
             <button type="button" className={logFilter === "error" ? "active" : ""} onClick={() => setLogFilter("error")}>错误 <span>{snapshot.logs.filter((entry) => entry.level === "error").length}</span></button>
           </nav>
-          <div className="log-toolbar"><Search size={13} /><input aria-label="搜索运行日志" placeholder="搜索消息或作用域" value={logQuery} onChange={(event) => setLogQuery(event.target.value)} /><button className="follow-button active" type="button"><span /> 跟随最新</button></div>
-          <div className="log-view" role="log" aria-live="polite">
+          <div className="log-toolbar"><Search size={13} /><input aria-label="搜索运行日志" placeholder="搜索消息或作用域" value={logQuery} onChange={(event) => setLogQuery(event.target.value)} /><button className={`follow-button ${followLogs ? "active" : ""}`} type="button" aria-pressed={followLogs} onClick={() => setFollowLogs((current) => !current)}><span /> 跟随最新</button></div>
+          <div className="log-view" role="log" aria-live="polite" ref={logViewRef}>
             {visibleLogs.map((entry) => <div className={`log-row level-${entry.level}`} key={entry.id}><span className="log-time">{entry.time}</span><span className="log-level">{logLevelLabel(entry.level)}</span><span className="log-scope">{entry.scope}</span><span className="log-message">{entry.message}</span></div>)}
             {visibleLogs.length === 0 && <div className="log-empty">没有匹配的日志记录</div>}
             <div className="log-cursor"><span /> 等待运行时事件</div>
@@ -148,6 +234,12 @@ export function WorkbenchPage() {
           <footer className="inspector-footer"><span className="status-badge neutral">保留最近 200 条</span><span className="footer-spacer" /><span className="status-badge success">UTF-8 容错解码</span></footer>
         </aside>
       </div>
+      {profileMenu && (() => {
+        const profile = profiles.find((item) => item.id === profileMenu.profileId);
+        const editable = Boolean(profile && localProfiles.some((item) => item.id === profile.id));
+        return <div className="studio-context-menu workbench-profile-menu" style={{ left: profileMenu.x, top: profileMenu.y }} role="menu" onContextMenu={(event) => event.preventDefault()}>{profile && <><button type="button" role="menuitem" disabled={!editable} onClick={() => startProfileRename(profile)}><Pencil size={13} /> 重命名</button><button className="danger" type="button" role="menuitem" disabled={!editable} onClick={() => { setPendingDeleteProfile(profile); setProfileMenu(null); }}><Trash2 size={13} /> 删除任务配置</button></>}</div>;
+      })()}
+      {pendingDeleteProfile && <div className="knowledge-confirm-overlay" role="dialog" aria-modal="true" aria-label="确认删除任务配置"><section className="knowledge-confirm"><div className="knowledge-confirm-icon"><CircleAlert size={18} /></div><div><h2>删除任务配置？</h2><p>“{pendingDeleteProfile.name}”及其保存的运行参数将从本机删除。</p></div><footer><button className="button secondary" type="button" onClick={() => setPendingDeleteProfile(null)}>取消</button><button className="button danger" type="button" onClick={deleteTaskProfile}>确认删除</button></footer></section></div>}
     </div>
   );
 }

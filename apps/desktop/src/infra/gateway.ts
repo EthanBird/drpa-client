@@ -1,9 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import { mockSnapshot } from "../data/mockSnapshot";
 import type {
   AgentTurnRequest,
   AgentTurnResult,
+  AgentStreamEvent,
+  AgentWorkspaceConfig,
   CurrentUser,
   KnowledgeEntry,
   PackageSummary,
@@ -32,11 +35,13 @@ export interface DesktopGateway {
   deleteStudioProject(projectId: string): Promise<void>;
   importProjectFile(projectId: string, sourcePath: string, targetDirectory: string): Promise<string>;
   buildStudioProject(projectId: string): Promise<string>;
+  openBuildOutputDirectory(): Promise<void>;
   runStudioProject(projectId: string, parameters: Record<string, unknown>): Promise<string>;
   executeStudioCell(projectId: string, code: string): Promise<StudioCellResult>;
   prepareStudioKernel(projectId: string): Promise<void>;
   restartStudioKernel(projectId: string): Promise<void>;
   runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResult>;
+  listenAgentStream(requestId: string, onEvent: (event: AgentStreamEvent) => void): Promise<() => void>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
   initializeRuntime(): Promise<RuntimeStatus>;
   repairRuntime(): Promise<RuntimeStatus>;
@@ -45,7 +50,13 @@ export interface DesktopGateway {
   getLatestWindowsUpdateStatus(): Promise<WindowsUpdateStatus | null>;
   restartForWindowsUpdate(sessionId: string): Promise<void>;
   getDataDirectory(): Promise<string>;
+  openWorkspaceDataDirectory(): Promise<void>;
   getCurrentUser(): Promise<CurrentUser>;
+  getAgentWorkspaceConfig(): Promise<AgentWorkspaceConfig>;
+  writeAgentWorkspaceDocument(document: "agents" | "memory", content: string): Promise<void>;
+  readAgentSkill(name: string): Promise<string>;
+  writeAgentSkill(name: string, content: string): Promise<void>;
+  deleteAgentSkill(name: string): Promise<void>;
   listKnowledgeEntries(): Promise<KnowledgeEntry[]>;
   readKnowledgeFile(relativePath: string): Promise<string>;
   writeKnowledgeFile(relativePath: string, content: string): Promise<void>;
@@ -68,6 +79,26 @@ const mockKnowledgeContents = new Map<string, string>([
   ["RPAZ 开发指南/01_快速开始.md", "# 快速开始\n\n在开发工作室新建项目，编辑 `manifest.yaml` 和 `main.py`，直接运行后再导出 `.rpaz`。\n"],
   ["RPAZ 开发指南/03_ctx上下文与默认配置.md", "# ctx 上下文\n\n入口函数使用 `def main(ctx)`。通过 `ctx.params`、`ctx.log`、`ctx.progress()`、`ctx.output_file()` 和 `ctx.browser()` 访问 Host 能力。\n"],
 ]);
+let mockAgentAgentsMarkdown = "# DRPA Agent 工作约定\n\n- 修改项目后运行 `rpaz_validate`。\n";
+let mockAgentMemoryMarkdown = "# Agent Memory\n\n记录稳定事实与偏好。\n";
+const mockAgentSkills = new Map<string, string>([[
+  "rpaz-development",
+  "---\nname: rpaz-development\ndescription: 创建、修改、校验或构建 RPAZ 脚本包时使用。\n---\n\n# RPAZ Development\n",
+]]);
+const mockAgentStreamListeners = new Map<string, (event: AgentStreamEvent) => void>();
+
+function mockAgentWorkspaceConfig(): AgentWorkspaceConfig {
+  return {
+    agentsMarkdown: mockAgentAgentsMarkdown,
+    memoryMarkdown: mockAgentMemoryMarkdown,
+    skills: Array.from(mockAgentSkills, ([name, content]) => ({
+      name,
+      description: content.match(/^description:\s*(.+)$/m)?.[1] ?? "未填写描述",
+      modifiedAt: Date.now(),
+    })),
+    rootDirectory: "浏览器预览数据/agent",
+  };
+}
 
 function mockKnowledgeEntries(): KnowledgeEntry[] {
   const now = Date.now();
@@ -163,6 +194,7 @@ const mockGateway: DesktopGateway = {
   async buildStudioProject(projectId) {
     return `${projectId}.rpaz`;
   },
+  async openBuildOutputDirectory() {},
   async runStudioProject() {
     return `run-${Date.now()}`;
   },
@@ -172,16 +204,30 @@ const mockGateway: DesktopGateway = {
   async prepareStudioKernel() {},
   async restartStudioKernel() {},
   async runAgentTurn(request) {
-    await new Promise((resolve) => window.setTimeout(resolve, 220));
     const prompt = request.messages.at(-1)?.content ?? "";
+    const message = request.projectId
+      ? `已连接浏览器预览 Agent。当前问题：${prompt}`
+      : `已收到问题：${prompt}\n选择一个开发项目后可启用 RPAZ 工具。`;
+    const listener = mockAgentStreamListeners.get(request.requestId);
+    if (request.stream && listener) {
+      listener({ type: "roundStarted", round: 1 });
+      for (const chunk of message.match(/.{1,12}/gs) ?? [message]) {
+        await new Promise((resolve) => window.setTimeout(resolve, 18));
+        listener({ type: "delta", content: chunk });
+      }
+    } else {
+      await new Promise((resolve) => window.setTimeout(resolve, 220));
+    }
     return {
-      message: request.projectId
-        ? `已连接浏览器预览 Agent。当前问题：${prompt}`
-        : `已收到问题：${prompt}\n选择一个开发项目后可启用 RPAZ 工具。`,
+      message,
       tools: [],
       usage: { promptTokens: 18, completionTokens: 24 },
       durationMs: 220,
     };
+  },
+  async listenAgentStream(requestId, onEvent) {
+    mockAgentStreamListeners.set(requestId, onEvent);
+    return () => { mockAgentStreamListeners.delete(requestId); };
   },
   async getRuntimeStatus() {
     return { state: "ready", bundleVersion: "浏览器预览", pythonVersion: "3.11.9", runtimeRoot: "内存预览", environmentRoot: "内存预览", browserExecutable: "内存预览", message: "浏览器预览使用模拟运行环境" };
@@ -195,6 +241,7 @@ const mockGateway: DesktopGateway = {
   async getDataDirectory() {
     return "浏览器预览数据（内存）";
   },
+  async openWorkspaceDataDirectory() {},
   async getCurrentUser() {
     return { displayName: "本地用户", accountName: "browser-preview", initials: "本地" };
   },
@@ -236,6 +283,24 @@ const mockGateway: DesktopGateway = {
   async exportKnowledgeFile(_relativePath, targetPath) {
     return targetPath;
   },
+  async getAgentWorkspaceConfig() {
+    return mockAgentWorkspaceConfig();
+  },
+  async writeAgentWorkspaceDocument(document, content) {
+    if (document === "agents") mockAgentAgentsMarkdown = content;
+    else mockAgentMemoryMarkdown = content;
+  },
+  async readAgentSkill(name) {
+    const content = mockAgentSkills.get(name);
+    if (!content) throw new Error("Skill 不存在");
+    return content;
+  },
+  async writeAgentSkill(name, content) {
+    mockAgentSkills.set(name, content);
+  },
+  async deleteAgentSkill(name) {
+    mockAgentSkills.delete(name);
+  },
 };
 
 const tauriGateway: DesktopGateway = {
@@ -255,11 +320,13 @@ const tauriGateway: DesktopGateway = {
   deleteStudioProject: (projectId) => invoke<void>("delete_studio_project", { projectId }),
   importProjectFile: (projectId, sourcePath, targetDirectory) => invoke<string>("import_project_file", { projectId, sourcePath, targetDirectory }),
   buildStudioProject: (projectId) => invoke<string>("build_studio_project", { projectId }),
+  openBuildOutputDirectory: () => invoke<void>("open_build_output_directory"),
   runStudioProject: (projectId, parameters) => invoke<string>("run_studio_project", { projectId, parameters }),
   executeStudioCell: (projectId, code) => invoke<StudioCellResult>("execute_studio_cell", { projectId, code }),
   prepareStudioKernel: (projectId) => invoke<void>("prepare_studio_kernel", { projectId }),
   restartStudioKernel: (projectId) => invoke<void>("restart_studio_kernel", { projectId }),
   runAgentTurn: (request) => invoke<AgentTurnResult>("run_agent_turn", { request }),
+  listenAgentStream: async (requestId, onEvent) => listen<AgentStreamEvent>(`agent-stream-${requestId}`, (event) => onEvent(event.payload)),
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),
   initializeRuntime: () => invoke<RuntimeStatus>("initialize_runtime"),
   repairRuntime: () => invoke<RuntimeStatus>("repair_runtime"),
@@ -268,7 +335,13 @@ const tauriGateway: DesktopGateway = {
   getLatestWindowsUpdateStatus: () => invoke<WindowsUpdateStatus | null>("get_latest_windows_update_status"),
   restartForWindowsUpdate: (sessionId) => invoke<void>("restart_for_windows_update", { sessionId }),
   getDataDirectory: () => invoke<string>("get_data_directory"),
+  openWorkspaceDataDirectory: () => invoke<void>("open_workspace_data_directory"),
   getCurrentUser: () => invoke<CurrentUser>("get_current_user"),
+  getAgentWorkspaceConfig: () => invoke<AgentWorkspaceConfig>("get_agent_workspace_config"),
+  writeAgentWorkspaceDocument: (document, content) => invoke<void>("write_agent_workspace_document", { document, content }),
+  readAgentSkill: (name) => invoke<string>("read_agent_skill", { name }),
+  writeAgentSkill: (name, content) => invoke<void>("write_agent_skill", { name, content }),
+  deleteAgentSkill: (name) => invoke<void>("delete_agent_skill", { name }),
   listKnowledgeEntries: () => invoke<KnowledgeEntry[]>("list_knowledge_entries"),
   readKnowledgeFile: (relativePath) => invoke<string>("read_knowledge_file", { relativePath }),
   writeKnowledgeFile: (relativePath, content) => invoke<void>("write_knowledge_file", { relativePath, content }),

@@ -41,6 +41,11 @@ class RuntimeContext:
         self._events.emit("artifact", path=str(path), label=label or path.name, media_type=None)
         return path
 
+    def open_output_directory(self) -> None:
+        """Ask the desktop Host to reveal this run's output directory."""
+
+        self._events.emit("open_directory", path=str(self.output_dir))
+
     def browser(self, *, headless: bool | None = None):
         """Create a DrissionPage browser only when the package requests it."""
 

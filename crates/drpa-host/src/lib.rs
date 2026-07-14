@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use drpa_package::{ArchiveBudget, ArchiveLimits, Entrypoint, PackageManifest, ParameterKind};
@@ -46,10 +47,11 @@ pub struct RunLaunch {
     pub callable: String,
 }
 
+#[derive(Clone)]
 pub struct HostState {
     workspace_root: PathBuf,
-    snapshot: RwLock<WorkspaceSnapshot>,
-    sequence: AtomicU64,
+    snapshot: Arc<RwLock<WorkspaceSnapshot>>,
+    sequence: Arc<AtomicU64>,
 }
 
 impl HostState {
@@ -61,7 +63,7 @@ impl HostState {
         let automations = derive_automations(&packages);
         Self {
             workspace_root,
-            snapshot: RwLock::new(WorkspaceSnapshot {
+            snapshot: Arc::new(RwLock::new(WorkspaceSnapshot {
                 stats: WorkspaceStats {
                     active_runs: 0,
                     success_rate: 0.0,
@@ -78,8 +80,8 @@ impl HostState {
                     scope: "host".to_owned(),
                     message: "Host 初始化完成；工作区状态与本地脚本包索引已载入".to_owned(),
                 }],
-            }),
-            sequence: AtomicU64::new(2),
+            })),
+            sequence: Arc::new(AtomicU64::new(2)),
         }
     }
 
@@ -329,6 +331,12 @@ impl HostState {
                 LogLevel::Success,
                 "artifact",
                 format!("产物已登记 · run={run_id} · label={label} · path={path}"),
+            ),
+            RuntimeEvent::OpenDirectory { path, .. } => self.push_log(
+                &mut snapshot,
+                LogLevel::Info,
+                "workspace",
+                format!("已请求打开输出目录 · run={run_id} · path={path}"),
             ),
             RuntimeEvent::Warning { message, .. } => {
                 self.push_log(&mut snapshot, LogLevel::Warning, "runtime", message);
@@ -593,6 +601,23 @@ mod tests {
         let root = std::env::temp_dir().join(format!("drpa-host-test-{}", Uuid::new_v4()));
         let state = HostState::new(root.clone());
         assert!(state.snapshot().packages.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cloned_host_state_shares_live_run_snapshots() {
+        let root = std::env::temp_dir().join(format!("drpa-host-clone-test-{}", Uuid::new_v4()));
+        let state = HostState::new(root.clone());
+        let background = state.clone();
+        background.fail_run("missing-run", "background marker".to_owned());
+
+        assert!(
+            state
+                .snapshot()
+                .logs
+                .iter()
+                .any(|entry| entry.message == "background marker")
+        );
         let _ = fs::remove_dir_all(root);
     }
 

@@ -1,5 +1,6 @@
+use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -11,10 +12,10 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
-use crate::knowledge;
+use crate::{agent_config, knowledge};
 
 const MAX_AGENT_ROUNDS: usize = 8;
-const MAX_HISTORY_MESSAGES: usize = 40;
+const MAX_HISTORY_MESSAGES: usize = 120;
 const MAX_MESSAGE_BYTES: usize = 100_000;
 const MAX_TOOL_OUTPUT_BYTES: usize = 20_000;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -30,12 +31,21 @@ pub(crate) struct AgentMessage {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentTurnRequest {
+    pub request_id: String,
     pub base_url: String,
     pub model: String,
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
     pub project_id: String,
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(default = "default_context_window")]
+    pub context_window: u32,
+    #[serde(default = "default_max_output_tokens")]
+    pub max_output_tokens: u32,
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
     pub messages: Vec<AgentMessage>,
 }
 
@@ -47,6 +57,14 @@ pub(crate) struct AgentToolEvent {
     pub status: String,
     pub summary: String,
     pub output: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub(crate) enum AgentStreamEvent {
+    RoundStarted { round: usize },
+    Delta { content: String },
+    Tool { tool: AgentToolEvent },
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -76,11 +94,15 @@ struct ToolResult {
     summary: String,
 }
 
-pub(crate) fn run_agent_turn(
+pub(crate) fn run_agent_turn<F>(
     request: AgentTurnRequest,
     workspace_root: PathBuf,
     python: PathBuf,
-) -> Result<AgentTurnResult, String> {
+    mut emit: F,
+) -> Result<AgentTurnResult, String>
+where
+    F: FnMut(AgentStreamEvent),
+{
     validate_request(&request)?;
     let started = Instant::now();
     let endpoint = chat_completions_endpoint(&request.base_url)?;
@@ -100,30 +122,46 @@ pub(crate) fn run_agent_turn(
         python,
     };
 
-    let mut messages = Vec::new();
-    messages.push(json!({
+    let injected_context = agent_config::render_agent_context(
+        &context.workspace_root,
+        context.project_root.as_deref(),
+    )?;
+    let system = system_prompt(context.project_root.is_some(), &injected_context);
+    let tools = agent_tool_definitions(context.project_root.is_some());
+    let history_start = select_history_start(&request, &system, &tools)?;
+    let mut messages = vec![json!({
         "role": "system",
-        "content": system_prompt(context.project_root.is_some()),
-    }));
-    let history_start = request.messages.len().saturating_sub(MAX_HISTORY_MESSAGES);
+        "content": system,
+    })];
     for message in &request.messages[history_start..] {
         messages.push(json!({"role": message.role, "content": message.content}));
     }
 
-    let tools = agent_tool_definitions(context.project_root.is_some());
     let mut events = Vec::new();
     let mut usage = AgentUsage::default();
 
-    for _ in 0..MAX_AGENT_ROUNDS {
+    for round in 0..MAX_AGENT_ROUNDS {
+        if request.stream {
+            emit(AgentStreamEvent::RoundStarted { round: round + 1 });
+        }
         let mut payload = json!({
             "model": request.model.trim(),
             "messages": messages,
+            "temperature": request.temperature,
+            "max_tokens": request.max_output_tokens,
         });
         if !tools.is_empty() {
             payload["tools"] = Value::Array(tools.clone());
             payload["tool_choice"] = Value::String("auto".to_owned());
         }
-        let response = call_chat_completions(&endpoint, &request.api_key, &payload)?;
+        let response = if request.stream {
+            payload["stream"] = Value::Bool(true);
+            call_chat_completions_stream(&endpoint, &request.api_key, &payload, |content| {
+                emit(AgentStreamEvent::Delta { content });
+            })?
+        } else {
+            call_chat_completions(&endpoint, &request.api_key, &payload)?
+        };
         accumulate_usage(&mut usage, response.get("usage"));
         let assistant = response
             .pointer("/choices/0/message")
@@ -171,13 +209,17 @@ pub(crate) fn run_agent_turn(
                 ),
             };
             let output_text = truncate_text(&output.to_string(), MAX_TOOL_OUTPUT_BYTES);
-            events.push(AgentToolEvent {
+            let tool_event = AgentToolEvent {
                 call_id: call_id.clone(),
                 name: name.clone(),
                 status,
                 summary,
                 output: output_text.clone(),
-            });
+            };
+            events.push(tool_event.clone());
+            if request.stream {
+                emit(AgentStreamEvent::Tool { tool: tool_event });
+            }
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": call_id,
@@ -191,9 +233,45 @@ pub(crate) fn run_agent_turn(
     ))
 }
 
+const fn default_context_window() -> u32 {
+    128_000
+}
+
+const fn default_max_output_tokens() -> u32 {
+    4_096
+}
+
+const fn default_temperature() -> f32 {
+    0.2
+}
+
+pub(crate) fn agent_stream_event_name(request_id: &str) -> Result<String, String> {
+    if request_id.len() < 4
+        || request_id.len() > 96
+        || !request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("Agent 请求标识无效".to_owned());
+    }
+    Ok(format!("agent-stream-{request_id}"))
+}
+
 fn validate_request(request: &AgentTurnRequest) -> Result<(), String> {
+    agent_stream_event_name(&request.request_id)?;
     if request.model.trim().is_empty() || request.model.len() > 200 {
         return Err("请填写有效的模型名称".to_owned());
+    }
+    if !(1_024..=2_000_000).contains(&request.context_window) {
+        return Err("上下文窗口必须在 1024 到 2000000 tokens 之间".to_owned());
+    }
+    if !(64..=131_072).contains(&request.max_output_tokens)
+        || request.max_output_tokens >= request.context_window
+    {
+        return Err("最大输出 tokens 必须小于上下文窗口，且位于 64 到 131072 之间".to_owned());
+    }
+    if !request.temperature.is_finite() || !(0.0..=2.0).contains(&request.temperature) {
+        return Err("Temperature 必须在 0 到 2 之间".to_owned());
     }
     if request.messages.is_empty() {
         return Err("Agent 消息不能为空".to_owned());
@@ -207,6 +285,49 @@ fn validate_request(request: &AgentTurnRequest) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn select_history_start(
+    request: &AgentTurnRequest,
+    system: &str,
+    tools: &[Value],
+) -> Result<usize, String> {
+    let overhead = estimate_tokens(system)
+        .saturating_add(estimate_tokens(&Value::Array(tools.to_vec()).to_string()))
+        .saturating_add(512);
+    let available = (request.context_window as usize)
+        .saturating_sub(request.max_output_tokens as usize)
+        .saturating_sub(overhead);
+    let minimum_start = request.messages.len().saturating_sub(MAX_HISTORY_MESSAGES);
+    let mut used = 0usize;
+    let mut start = request.messages.len();
+    for index in (minimum_start..request.messages.len()).rev() {
+        let cost = estimate_tokens(&request.messages[index].content).saturating_add(8);
+        if used.saturating_add(cost) > available {
+            if start == request.messages.len() {
+                return Err(format!(
+                    "上下文窗口不足以容纳最新消息；请增大上下文窗口或减小最大输出 tokens（当前可用约 {available} tokens）"
+                ));
+            }
+            break;
+        }
+        used = used.saturating_add(cost);
+        start = index;
+    }
+    Ok(start)
+}
+
+fn estimate_tokens(value: &str) -> usize {
+    let mut ascii = 0usize;
+    let mut non_ascii = 0usize;
+    for character in value.chars() {
+        if character.is_ascii() {
+            ascii += 1;
+        } else {
+            non_ascii += 1;
+        }
+    }
+    ascii.div_ceil(4).saturating_add(non_ascii).max(1)
 }
 
 pub(crate) fn chat_completions_endpoint(base_url: &str) -> Result<String, String> {
@@ -246,6 +367,191 @@ fn call_chat_completions(endpoint: &str, api_key: &str, payload: &Value) -> Resu
         .body_mut()
         .read_json::<Value>()
         .map_err(|error| format!("模型接口返回的 JSON 无效：{error}"))
+}
+
+#[derive(Default)]
+struct StreamToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Default)]
+struct StreamAccumulator {
+    content: String,
+    tool_calls: BTreeMap<usize, StreamToolCall>,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+}
+
+fn call_chat_completions_stream<F>(
+    endpoint: &str,
+    api_key: &str,
+    payload: &Value,
+    on_delta: F,
+) -> Result<Value, String>
+where
+    F: FnMut(String),
+{
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(120)))
+        .build();
+    let http = ureq::Agent::new_with_config(config);
+    let mut request = http
+        .post(endpoint)
+        .header("Accept", "text/event-stream")
+        .header("User-Agent", "DRPA-Next-Agent/0.3");
+    if !api_key.trim().is_empty() {
+        let authorization = format!("Bearer {}", api_key.trim());
+        request = request.header("Authorization", &authorization);
+    }
+    let mut response = request
+        .send_json(payload)
+        .map_err(|error| format!("模型流式接口请求失败：{error}"))?;
+    let reader = BufReader::new(response.body_mut().as_reader());
+    parse_chat_completion_stream(reader, on_delta)
+}
+
+fn parse_chat_completion_stream<R, F>(reader: R, mut on_delta: F) -> Result<Value, String>
+where
+    R: BufRead,
+    F: FnMut(String),
+{
+    let mut accumulator = StreamAccumulator::default();
+    let mut event_data = Vec::<String>::new();
+    let mut raw_json = String::new();
+    let mut saw_sse = false;
+    let mut done = false;
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("读取模型流式响应失败：{error}"))?;
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            if !event_data.is_empty() {
+                done =
+                    consume_stream_event(&event_data.join("\n"), &mut accumulator, &mut on_delta)?;
+                event_data.clear();
+                if done {
+                    break;
+                }
+            }
+            continue;
+        }
+        if let Some(data) = line.strip_prefix("data:") {
+            saw_sse = true;
+            event_data.push(data.trim_start().to_owned());
+        } else if !line.starts_with(':') && !line.starts_with("event:") && !saw_sse {
+            raw_json.push_str(line);
+            raw_json.push('\n');
+        }
+    }
+    if !done && !event_data.is_empty() {
+        consume_stream_event(&event_data.join("\n"), &mut accumulator, &mut on_delta)?;
+    }
+
+    if !saw_sse {
+        let response: Value = serde_json::from_str(raw_json.trim())
+            .map_err(|error| format!("模型接口既未返回 SSE，也未返回有效 JSON：{error}"))?;
+        let content = message_content(response.pointer("/choices/0/message/content"));
+        if !content.is_empty() {
+            on_delta(content);
+        }
+        return Ok(response);
+    }
+
+    let tool_calls = accumulator
+        .tool_calls
+        .into_iter()
+        .map(|(index, call)| {
+            json!({
+                "id": if call.id.is_empty() { format!("tool-call-{index}") } else { call.id },
+                "type": "function",
+                "function": { "name": call.name, "arguments": call.arguments },
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut assistant = json!({"role": "assistant", "content": accumulator.content});
+    if !tool_calls.is_empty() {
+        assistant["tool_calls"] = Value::Array(tool_calls);
+    }
+    Ok(json!({
+        "choices": [{"message": assistant}],
+        "usage": {
+            "prompt_tokens": accumulator.prompt_tokens,
+            "completion_tokens": accumulator.completion_tokens,
+        }
+    }))
+}
+
+fn consume_stream_event<F>(
+    data: &str,
+    accumulator: &mut StreamAccumulator,
+    on_delta: &mut F,
+) -> Result<bool, String>
+where
+    F: FnMut(String),
+{
+    if data.trim() == "[DONE]" {
+        return Ok(true);
+    }
+    let chunk: Value =
+        serde_json::from_str(data).map_err(|error| format!("模型 SSE 数据无效：{error}"))?;
+    if let Some(error) = chunk.get("error") {
+        return Err(format!("模型流式接口返回错误：{error}"));
+    }
+    if let Some(usage) = chunk.get("usage") {
+        accumulator.prompt_tokens = usage
+            .get("prompt_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(accumulator.prompt_tokens);
+        accumulator.completion_tokens = usage
+            .get("completion_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(accumulator.completion_tokens);
+    }
+    let Some(delta) = chunk
+        .pointer("/choices/0/delta")
+        .or_else(|| chunk.pointer("/choices/0/message"))
+    else {
+        return Ok(false);
+    };
+    let content = message_content(delta.get("content"));
+    if !content.is_empty() {
+        accumulator.content.push_str(&content);
+        on_delta(content);
+    }
+    if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
+        for (position, call) in tool_calls.iter().enumerate() {
+            let index = call
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(position);
+            let target = accumulator.tool_calls.entry(index).or_default();
+            if let Some(id) = call.get("id").and_then(Value::as_str)
+                && !id.is_empty()
+            {
+                if target.id.is_empty() || id.starts_with(&target.id) {
+                    target.id = id.to_owned();
+                } else if !target.id.ends_with(id) {
+                    target.id.push_str(id);
+                }
+            }
+            if let Some(name) = call.pointer("/function/name").and_then(Value::as_str)
+                && !name.is_empty()
+            {
+                if target.name.is_empty() || name.starts_with(&target.name) {
+                    target.name = name.to_owned();
+                } else {
+                    target.name.push_str(name);
+                }
+            }
+            if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
+                target.arguments.push_str(arguments);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn message_content(value: Option<&Value>) -> String {
@@ -288,7 +594,7 @@ fn accumulate_usage(target: &mut AgentUsage, value: Option<&Value>) {
     );
 }
 
-fn system_prompt(has_project: bool) -> String {
+fn system_prompt(has_project: bool, injected_context: &str) -> String {
     let context = if has_project {
         "当前已绑定一个开发工作室项目，可以使用 RPAZ 工具读取、修改、校验、构建项目，也可以运行限时 Python 辅助分析。"
     } else {
@@ -301,12 +607,38 @@ fn system_prompt(has_project: bool) -> String {
          你可以使用 knowledge 工具读取和维护本地 Markdown 知识库。只处理 RPAZ 项目开发，\
          不假装使用未提供的终端、浏览器或网络工具。\n\
          修改文件后应调用 rpaz_validate；需要交付归档时调用 rpaz_build。\n\
-         回答使用简体中文，先给结论，再列出实际完成的文件与验证结果。"
+         回答使用简体中文，先给结论，再列出实际完成的文件与验证结果。\
+         {injected_context}"
     )
 }
 
 fn agent_tool_definitions(has_project: bool) -> Vec<Value> {
     let mut tools = vec![
+        tool_definition(
+            "agent_list_skills",
+            "列出本地 Skills 库的名称和描述。Skill 正文按需读取，不要一次读取全部。",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "agent_read_skill",
+            "任务与某个 Skill 的描述匹配时，读取该 Skill 的完整 SKILL.md。",
+            json!({"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "agent_write_skill",
+            "仅在用户要求保存可复用流程时创建或更新一个标准 SKILL.md。name 使用小写字母、数字和中划线。",
+            json!({"type":"object","properties":{"name":{"type":"string"},"content":{"type":"string"}},"required":["name","content"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "agent_read_memory",
+            "读取本地 Agent 长期记忆 MEMORY.md。",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "agent_write_memory",
+            "仅在用户明确要求记住稳定事实或偏好时更新完整 MEMORY.md；不要写入密钥。",
+            json!({"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}),
+        ),
         tool_definition(
             "knowledge_list_documents",
             "列出 DRPA 本地知识库中的 Markdown 文档和目录。",
@@ -378,6 +710,46 @@ fn execute_tool(
     arguments: &Value,
 ) -> Result<ToolResult, String> {
     match name {
+        "agent_list_skills" => {
+            let skills = agent_config::list_skills_for_agent(&context.workspace_root)?;
+            let count = skills.len();
+            return Ok(ToolResult {
+                output: json!({"ok": true, "skills": skills}),
+                summary: format!("已列出 {count} 个 Skill"),
+            });
+        }
+        "agent_read_skill" => {
+            let name = argument_string(arguments, "name")?;
+            let content = agent_config::read_skill_for_agent(&context.workspace_root, name)?;
+            return Ok(ToolResult {
+                output: json!({"ok": true, "name": name, "content": content}),
+                summary: format!("已按需读取 Skill {name}"),
+            });
+        }
+        "agent_write_skill" => {
+            let name = argument_string(arguments, "name")?;
+            let content = argument_string(arguments, "content")?;
+            agent_config::write_skill_for_agent(&context.workspace_root, name, content)?;
+            return Ok(ToolResult {
+                output: json!({"ok": true, "name": name, "bytes": content.len()}),
+                summary: format!("已写入 Skill {name}"),
+            });
+        }
+        "agent_read_memory" => {
+            let content = agent_config::read_memory_for_agent(&context.workspace_root)?;
+            return Ok(ToolResult {
+                output: json!({"ok": true, "content": content}),
+                summary: "已读取 Agent 长期记忆".to_owned(),
+            });
+        }
+        "agent_write_memory" => {
+            let content = argument_string(arguments, "content")?;
+            agent_config::write_memory_for_agent(&context.workspace_root, content)?;
+            return Ok(ToolResult {
+                output: json!({"ok": true, "bytes": content.len()}),
+                summary: "已更新 Agent 长期记忆".to_owned(),
+            });
+        }
         "knowledge_list_documents" => {
             let entries = knowledge::list_for_agent(&context.workspace_root)?;
             let count = entries.len();
@@ -741,6 +1113,84 @@ mod tests {
             "https://gateway.example/api/v1/chat/completions"
         );
         assert!(chat_completions_endpoint("file:///tmp/model").is_err());
+        assert_eq!(
+            agent_stream_event_name("req-1234").unwrap(),
+            "agent-stream-req-1234"
+        );
+        assert!(agent_stream_event_name("bad/request").is_err());
+    }
+
+    #[test]
+    fn assembles_openai_sse_text_usage_and_tool_call_fragments() {
+        let source = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"# 标题\\n\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"rpaz_read\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"_file\",\"arguments\":\"\\\"main.py\\\"}\"}}]}}],\"usage\":{\"prompt_tokens\":25,\"completion_tokens\":9}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut deltas = Vec::new();
+        let response =
+            parse_chat_completion_stream(std::io::Cursor::new(source.as_bytes()), |delta| {
+                deltas.push(delta)
+            })
+            .unwrap();
+
+        assert_eq!(deltas, vec!["# 标题\n", "完成"]);
+        assert_eq!(
+            response
+                .pointer("/choices/0/message/content")
+                .and_then(Value::as_str),
+            Some("# 标题\n完成")
+        );
+        assert_eq!(
+            response
+                .pointer("/choices/0/message/tool_calls/0/function/name")
+                .and_then(Value::as_str),
+            Some("rpaz_read_file")
+        );
+        assert_eq!(
+            response
+                .pointer("/choices/0/message/tool_calls/0/function/arguments")
+                .and_then(Value::as_str),
+            Some("{\"path\":\"main.py\"}")
+        );
+        assert_eq!(
+            response
+                .pointer("/usage/prompt_tokens")
+                .and_then(Value::as_u64),
+            Some(25)
+        );
+    }
+
+    #[test]
+    fn context_budget_keeps_the_latest_turn_and_drops_oversized_older_history() {
+        let request = AgentTurnRequest {
+            request_id: "req-context".to_owned(),
+            base_url: "http://localhost:11434/v1".to_owned(),
+            model: "local".to_owned(),
+            api_key: String::new(),
+            project_id: String::new(),
+            stream: true,
+            context_window: 2_000,
+            max_output_tokens: 512,
+            temperature: 0.2,
+            messages: vec![
+                AgentMessage {
+                    role: "user".to_owned(),
+                    content: "x".repeat(10_000),
+                },
+                AgentMessage {
+                    role: "user".to_owned(),
+                    content: "最新问题".to_owned(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            select_history_start(&request, "short system", &[]).unwrap(),
+            1
+        );
     }
 
     #[test]

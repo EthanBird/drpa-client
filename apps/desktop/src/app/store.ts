@@ -3,6 +3,8 @@ import { persist } from "zustand/middleware";
 
 import type { AgentConversationMessage, AgentConversationSession, NavigationId, WorkspaceSnapshot } from "../domain/models";
 
+export type FontScale = "small" | "standard" | "large" | "extraLarge";
+
 function createAgentSession(projectId = ""): AgentConversationSession {
   const now = Date.now();
   return {
@@ -21,11 +23,17 @@ interface AppStore {
   activeNavigation: NavigationId;
   commandOpen: boolean;
   theme: "light" | "dark";
+  fontScale: FontScale;
   inspectorOpen: boolean;
   dragActive: boolean;
   operationNotice: string;
   agentBaseUrl: string;
   agentModel: string;
+  agentApiKey: string;
+  agentStreamEnabled: boolean;
+  agentContextWindow: number;
+  agentMaxOutputTokens: number;
+  agentTemperature: number;
   agentProjectId: string;
   agentInspectorOpen: boolean;
   agentSessions: AgentConversationSession[];
@@ -36,6 +44,7 @@ interface AppStore {
   setActiveNavigation: (id: NavigationId) => void;
   setCommandOpen: (open: boolean) => void;
   setTheme: (theme: "light" | "dark") => void;
+  setFontScale: (fontScale: FontScale) => void;
   toggleInspector: () => void;
   selectPackage: (packageId: string, profileId?: string) => void;
   selectProfile: (profileId: string) => void;
@@ -44,6 +53,11 @@ interface AppStore {
   setOperationNotice: (notice: string) => void;
   setAgentBaseUrl: (url: string) => void;
   setAgentModel: (model: string) => void;
+  setAgentApiKey: (apiKey: string) => void;
+  setAgentStreamEnabled: (enabled: boolean) => void;
+  setAgentContextWindow: (tokens: number) => void;
+  setAgentMaxOutputTokens: (tokens: number) => void;
+  setAgentTemperature: (temperature: number) => void;
   setAgentProjectId: (projectId: string) => void;
   toggleAgentInspector: () => void;
   createAgentConversation: () => string;
@@ -59,11 +73,17 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   activeNavigation: "overview",
   commandOpen: false,
   theme: "light",
+  fontScale: "standard",
   inspectorOpen: true,
   dragActive: false,
   operationNotice: "",
   agentBaseUrl: "https://api.openai.com/v1",
   agentModel: "gpt-5.4-mini",
+  agentApiKey: "",
+  agentStreamEnabled: true,
+  agentContextWindow: 128000,
+  agentMaxOutputTokens: 4096,
+  agentTemperature: 0.2,
   agentProjectId: "",
   agentInspectorOpen: true,
   agentSessions: [initialAgentSession],
@@ -74,6 +94,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setActiveNavigation: (activeNavigation) => set({ activeNavigation }),
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   setTheme: (theme) => set({ theme }),
+  setFontScale: (fontScale) => set({ fontScale }),
   toggleInspector: () => set((state) => ({ inspectorOpen: !state.inspectorOpen })),
   selectPackage: (selectedPackageId, selectedProfileId) =>
     set((state) => ({
@@ -86,6 +107,11 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setOperationNotice: (operationNotice) => set({ operationNotice }),
   setAgentBaseUrl: (agentBaseUrl) => set({ agentBaseUrl }),
   setAgentModel: (agentModel) => set({ agentModel }),
+  setAgentApiKey: (agentApiKey) => set({ agentApiKey }),
+  setAgentStreamEnabled: (agentStreamEnabled) => set({ agentStreamEnabled }),
+  setAgentContextWindow: (agentContextWindow) => set({ agentContextWindow }),
+  setAgentMaxOutputTokens: (agentMaxOutputTokens) => set({ agentMaxOutputTokens }),
+  setAgentTemperature: (agentTemperature) => set({ agentTemperature }),
   setAgentProjectId: (agentProjectId) => set({ agentProjectId }),
   toggleAgentInspector: () => set((state) => ({ agentInspectorOpen: !state.agentInspectorOpen })),
   createAgentConversation: () => {
@@ -136,8 +162,13 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   version: 2,
   partialize: (state) => ({
     theme: state.theme,
+    fontScale: state.fontScale,
     agentBaseUrl: state.agentBaseUrl,
     agentModel: state.agentModel,
+    agentStreamEnabled: state.agentStreamEnabled,
+    agentContextWindow: state.agentContextWindow,
+    agentMaxOutputTokens: state.agentMaxOutputTokens,
+    agentTemperature: state.agentTemperature,
     agentProjectId: state.agentProjectId,
     agentInspectorOpen: state.agentInspectorOpen,
     agentSessions: state.agentSessions,

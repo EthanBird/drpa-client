@@ -16,6 +16,7 @@ import {
   PanelRightOpen,
   Pencil,
   Plus,
+  RotateCcw,
   Send,
   Sparkles,
   Trash2,
@@ -23,12 +24,19 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { useAppStore } from "../app/store";
 import type { AgentConversationMessage, AgentMessage, AgentToolEvent, StudioProject } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 
 const toolLabels: Record<string, string> = {
+  agent_list_skills: "列出 Skills",
+  agent_read_skill: "读取 Skill",
+  agent_write_skill: "写入 Skill",
+  agent_read_memory: "读取长期记忆",
+  agent_write_memory: "更新长期记忆",
   knowledge_list_documents: "列出知识文档",
   knowledge_read_document: "读取知识文档",
   knowledge_write_document: "写入知识文档",
@@ -59,14 +67,31 @@ function formatSessionTime(value: number): string {
   return date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
 }
 
+function latestUserIndex(messages: AgentConversationMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "user") return index;
+  }
+  return -1;
+}
+
 export function AgentPage() {
   const agentBaseUrl = useAppStore((state) => state.agentBaseUrl);
   const agentModel = useAppStore((state) => state.agentModel);
+  const apiKey = useAppStore((state) => state.agentApiKey);
+  const agentStreamEnabled = useAppStore((state) => state.agentStreamEnabled);
+  const agentContextWindow = useAppStore((state) => state.agentContextWindow);
+  const agentMaxOutputTokens = useAppStore((state) => state.agentMaxOutputTokens);
+  const agentTemperature = useAppStore((state) => state.agentTemperature);
   const agentInspectorOpen = useAppStore((state) => state.agentInspectorOpen);
   const agentSessions = useAppStore((state) => state.agentSessions);
   const activeAgentSessionId = useAppStore((state) => state.activeAgentSessionId);
   const setAgentBaseUrl = useAppStore((state) => state.setAgentBaseUrl);
   const setAgentModel = useAppStore((state) => state.setAgentModel);
+  const setApiKey = useAppStore((state) => state.setAgentApiKey);
+  const setAgentStreamEnabled = useAppStore((state) => state.setAgentStreamEnabled);
+  const setAgentContextWindow = useAppStore((state) => state.setAgentContextWindow);
+  const setAgentMaxOutputTokens = useAppStore((state) => state.setAgentMaxOutputTokens);
+  const setAgentTemperature = useAppStore((state) => state.setAgentTemperature);
   const toggleAgentInspector = useAppStore((state) => state.toggleAgentInspector);
   const createAgentConversation = useAppStore((state) => state.createAgentConversation);
   const selectAgentConversation = useAppStore((state) => state.selectAgentConversation);
@@ -76,12 +101,16 @@ export function AgentPage() {
   const setAgentConversationMessages = useAppStore((state) => state.setAgentConversationMessages);
   const clearAgentConversation = useAppStore((state) => state.clearAgentConversation);
   const [projects, setProjects] = useState<StudioProject[]>([]);
-  const [apiKey, setApiKey] = useState("");
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [renamingId, setRenamingId] = useState("");
   const [renameDraft, setRenameDraft] = useState("");
+  const [confirmation, setConfirmation] = useState<{ kind: "delete" | "clear"; sessionId: string; title: string } | null>(null);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [streamingTools, setStreamingTools] = useState<AgentToolEvent[]>([]);
+  const [editingMessageId, setEditingMessageId] = useState("");
+  const [editingDraft, setEditingDraft] = useState("");
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   const activeSession = useMemo(
@@ -106,37 +135,56 @@ export function AgentPage() {
   useEffect(() => {
     const target = transcriptRef.current;
     if (target) target.scrollTop = target.scrollHeight;
-  }, [messages, busy]);
+  }, [messages, busy, streamingContent, streamingTools]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === agentProjectId),
     [agentProjectId, projects],
   );
 
-  const send = async (preset?: string) => {
-    const content = (preset ?? draft).trim();
-    if (!content || busy || !activeSession) return;
+  const confirmConversationAction = () => {
+    if (!confirmation) return;
+    if (confirmation.kind === "delete") deleteAgentConversation(confirmation.sessionId);
+    else clearAgentConversation(confirmation.sessionId);
+    setConfirmation(null);
+  };
+
+  const runTurn = async (sessionId: string, history: AgentConversationMessage[]) => {
+    if (busy) return;
     if (!agentBaseUrl.trim() || !agentModel.trim()) {
       setError("请先填写 OpenAI 兼容 URL 和模型名称");
       return;
     }
-    const sessionId = activeSession.id;
-    const userMessage: AgentConversationMessage = { id: messageId("user"), role: "user", content };
-    const history = [...messages, userMessage];
     setAgentConversationMessages(sessionId, history);
-    if (activeSession.title === "新对话") {
-      renameAgentConversation(sessionId, content.replace(/\s+/g, " ").slice(0, 30));
-    }
-    setDraft("");
     setError("");
+    setStreamingContent("");
+    setStreamingTools([]);
     setBusy(true);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const requestId = `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    let unlisten: (() => void) | undefined;
     try {
+      if (agentStreamEnabled) {
+        unlisten = await desktopGateway.listenAgentStream(requestId, (event) => {
+          if (event.type === "roundStarted") {
+            setStreamingContent("");
+          } else if (event.type === "delta") {
+            setStreamingContent((current) => current + event.content);
+          } else {
+            setStreamingTools((current) => [...current.filter((tool) => tool.callId !== event.tool.callId), event.tool]);
+          }
+        });
+      }
       const result = await desktopGateway.runAgentTurn({
+        requestId,
         baseUrl: agentBaseUrl.trim(),
         model: agentModel.trim(),
         apiKey,
-        projectId: agentProjectId,
+        projectId: agentSessions.find((session) => session.id === sessionId)?.projectId ?? agentProjectId,
+        stream: agentStreamEnabled,
+        contextWindow: agentContextWindow,
+        maxOutputTokens: agentMaxOutputTokens,
+        temperature: agentTemperature,
         messages: history.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
       });
       setAgentConversationMessages(sessionId, [...history, {
@@ -150,9 +198,43 @@ export function AgentPage() {
     } catch (reason) {
       setError(`Agent 请求失败：${String(reason)}`);
     } finally {
+      unlisten?.();
+      setStreamingContent("");
+      setStreamingTools([]);
       setBusy(false);
     }
   };
+
+  const send = async (preset?: string) => {
+    const content = (preset ?? draft).trim();
+    if (!content || busy || !activeSession) return;
+    const userMessage: AgentConversationMessage = { id: messageId("user"), role: "user", content };
+    const history = [...messages, userMessage];
+    if (activeSession.title === "新对话") renameAgentConversation(activeSession.id, content.replace(/\s+/g, " ").slice(0, 30));
+    setDraft("");
+    await runTurn(activeSession.id, history);
+  };
+
+  const regenerate = async () => {
+    if (!activeSession || busy) return;
+    const userIndex = latestUserIndex(messages);
+    if (userIndex < 0) return;
+    await runTurn(activeSession.id, messages.slice(0, userIndex + 1));
+  };
+
+  const submitEditedMessage = async () => {
+    if (!activeSession || busy) return;
+    const content = editingDraft.trim();
+    const userIndex = messages.findIndex((message) => message.id === editingMessageId && message.role === "user");
+    if (!content || userIndex < 0) return;
+    const history = messages.slice(0, userIndex + 1).map((message, index) => index === userIndex ? { ...message, content } : message);
+    setEditingMessageId("");
+    setEditingDraft("");
+    await runTurn(activeSession.id, history);
+  };
+
+  const lastUserIndex = latestUserIndex(messages);
+  const latestUserMessageId = lastUserIndex >= 0 ? messages[lastUserIndex].id : undefined;
 
   return (
     <div className="page agent-page">
@@ -165,7 +247,7 @@ export function AgentPage() {
         </div>
         <div className="agent-connection-state"><span /> OpenAI Compatible</div>
         <button className="button ghost small" type="button" aria-label={agentInspectorOpen ? "隐藏 Agent 配置" : "显示 Agent 配置"} onClick={toggleAgentInspector}>{agentInspectorOpen ? <PanelRightClose size={13} /> : <PanelRightOpen size={13} />} {agentInspectorOpen ? "隐藏配置" : "显示配置"}</button>
-        <button className="button ghost small" type="button" onClick={() => activeSession && clearAgentConversation(activeSession.id)} disabled={messages.length === 0 || busy}><Trash2 size={13} /> 清空对话</button>
+        <button className="button ghost small" type="button" onClick={() => activeSession && setConfirmation({ kind: "clear", sessionId: activeSession.id, title: activeSession.title })} disabled={messages.length === 0 || busy}><Trash2 size={13} /> 清空对话</button>
       </header>
 
       <div className={`agent-layout ${agentInspectorOpen ? "" : "config-hidden"}`}>
@@ -193,7 +275,7 @@ export function AgentPage() {
                 )}
                 <div className="agent-session-actions">
                   <button type="button" aria-label={`重命名对话 ${session.title}`} onClick={() => { setRenamingId(session.id); setRenameDraft(session.title); }} disabled={busy}><Pencil size={11} /></button>
-                  <button type="button" aria-label={`删除对话 ${session.title}`} onClick={() => deleteAgentConversation(session.id)} disabled={busy}><Trash2 size={11} /></button>
+                  <button type="button" aria-label={`删除对话 ${session.title}`} onClick={() => setConfirmation({ kind: "delete", sessionId: session.id, title: session.title })} disabled={busy}><Trash2 size={11} /></button>
                 </div>
               </div>
             ))}
@@ -207,26 +289,43 @@ export function AgentPage() {
               <div className="agent-welcome">
                 <div className="agent-orbit"><Sparkles size={24} /></div>
                 <h2>从一个 RPAZ 开发任务开始</h2>
-                <p>{selectedProject ? `Agent 已绑定“${selectedProject.name}”，可以按需读取和修改项目文件与知识文档。` : "三个知识库工具已启用；选择右侧开发项目后再启用六个 RPAZ 工具。"}</p>
+                <p>{selectedProject ? `Agent 已绑定“${selectedProject.name}”，可以按需使用 Skills、记忆、知识库和项目工具。` : "八个 Agent、Skills、记忆与知识库工具已启用；选择右侧开发项目后再启用六个 RPAZ 工具。"}</p>
                 <div className="agent-suggestions">
                   {suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => void send(suggestion)}><MessageSquarePlus size={14} /><span>{suggestion}</span></button>)}
                 </div>
               </div>
             )}
-            {messages.map((message) => (
+            {messages.map((message, index) => (
               <article className={`agent-message ${message.role}`} key={message.id}>
                 <div className="agent-message-avatar">{message.role === "assistant" ? <Bot size={15} /> : "你"}</div>
                 <div className="agent-message-body">
-                  <header><strong>{message.role === "assistant" ? "DRPA Agent" : "你"}</strong>{message.role === "assistant" && <span>{message.durationMs} ms · {message.tokens ?? 0} tokens</span>}</header>
+                  <header>
+                    <strong>{message.role === "assistant" ? "DRPA Agent" : "你"}</strong>
+                    {message.role === "assistant" && <span>{message.durationMs} ms · {message.tokens ?? 0} tokens</span>}
+                    <span className="agent-message-actions">
+                      {message.role === "user" && message.id === latestUserMessageId && <button type="button" aria-label="编辑最新消息" title="编辑并重新生成" onClick={() => { setEditingMessageId(message.id); setEditingDraft(message.content); }} disabled={busy}><Pencil size={12} /></button>}
+                      {message.role === "user" && message.id === latestUserMessageId && index === messages.length - 1 && <button type="button" aria-label="重新生成回复" title="重新生成" onClick={() => void regenerate()} disabled={busy}><RotateCcw size={12} /></button>}
+                      {message.role === "assistant" && index === messages.length - 1 && <button type="button" aria-label="重新生成回复" title="重新生成" onClick={() => void regenerate()} disabled={busy}><RotateCcw size={12} /></button>}
+                    </span>
+                  </header>
                   {message.tools && message.tools.length > 0 && <div className="agent-tool-events">{message.tools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
-                  <div className="agent-message-content">{message.content}</div>
+                  {editingMessageId === message.id ? (
+                    <div className="agent-message-editor">
+                      <textarea aria-label="编辑最新用户消息" autoFocus value={editingDraft} onChange={(event) => setEditingDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void submitEditedMessage(); } }} />
+                      <footer><span>提交后会从这条消息重新生成</span><button className="button ghost small" type="button" onClick={() => setEditingMessageId("")}>取消</button><button className="button primary small" type="button" onClick={() => void submitEditedMessage()} disabled={!editingDraft.trim()}>保存并重新生成</button></footer>
+                    </div>
+                  ) : <AgentMarkdown content={message.content} />}
                 </div>
               </article>
             ))}
             {busy && (
               <article className="agent-message assistant pending">
                 <div className="agent-message-avatar"><Bot size={15} /></div>
-                <div className="agent-message-body"><header><strong>DRPA Agent</strong><span>模型与本地工具协同中</span></header><div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div></div>
+                <div className="agent-message-body">
+                  <header><strong>DRPA Agent</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
+                  {streamingTools.length > 0 && <div className="agent-tool-events">{streamingTools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
+                  {streamingContent ? <AgentMarkdown content={streamingContent} streaming /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
+                </div>
               </article>
             )}
           </div>
@@ -262,19 +361,36 @@ export function AgentPage() {
             </section>
 
             <section className="agent-config-section">
+              <h2><Cpu size={13} /> 生成参数 <span>{agentStreamEnabled ? "STREAM" : "BUFFERED"}</span></h2>
+              <label className="agent-switch-label"><span>流式输出</span><button className={`switch ${agentStreamEnabled ? "on" : ""}`} type="button" role="switch" aria-label="Agent 流式输出" aria-checked={agentStreamEnabled} onClick={() => setAgentStreamEnabled(!agentStreamEnabled)}><span /></button><small>开启后按增量实时渲染 Markdown。</small></label>
+              <label><span>上下文窗口</span><input aria-label="Agent 上下文窗口" type="number" min={1024} max={2000000} step={1024} value={agentContextWindow} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentContextWindow(event.currentTarget.valueAsNumber); }} /><small>按模型 token 上限裁剪较早对话，默认 128K。</small></label>
+              <label><span>最大输出 tokens</span><input aria-label="Agent 最大输出 tokens" type="number" min={64} max={131072} step={64} value={agentMaxOutputTokens} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentMaxOutputTokens(event.currentTarget.valueAsNumber); }} /></label>
+              <label><span>Temperature</span><input aria-label="Agent Temperature" type="number" min={0} max={2} step={0.1} value={agentTemperature} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentTemperature(event.currentTarget.valueAsNumber); }} /></label>
+            </section>
+
+            <section className="agent-config-section">
               <h2><FolderCode size={13} /> 工作上下文</h2>
               <label><span>开发项目</span><div className="agent-select"><FileCode2 size={13} /><select aria-label="Agent 开发项目" value={agentProjectId} onChange={(event) => activeSession && setAgentConversationProject(activeSession.id, event.target.value)}><option value="">不绑定项目</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select><ChevronDown size={13} /></div></label>
               {selectedProject && <div className="agent-project-summary"><strong>{selectedProject.name}</strong><span>{selectedProject.files.length} 个文件</span><code>{selectedProject.id}</code></div>}
             </section>
 
             <section className="agent-config-section agent-tools-section">
-              <h2><Wrench size={13} /> 内置工具 <span>{agentProjectId ? "9 ACTIVE" : "3 ACTIVE"}</span></h2>
-              <div className="agent-tool-list">{Object.entries(toolLabels).map(([name, label]) => { const active = name.startsWith("knowledge_") || Boolean(agentProjectId); return <div className={active ? "active" : ""} key={name}><CheckCircle2 size={12} /><span><strong>{label}</strong><code>{name}</code></span></div>; })}</div>
+              <h2><Wrench size={13} /> 内置工具 <span>{agentProjectId ? "14 ACTIVE" : "8 ACTIVE"}</span></h2>
+              <div className="agent-tool-list">{Object.entries(toolLabels).map(([name, label]) => { const active = name.startsWith("agent_") || name.startsWith("knowledge_") || Boolean(agentProjectId); return <div className={active ? "active" : ""} key={name}><CheckCircle2 size={12} /><span><strong>{label}</strong><code>{name}</code></span></div>; })}</div>
             </section>
           </div>
           <footer><span className="agent-limit-dot" /> 单 Agent · 最多 8 轮工具调用 · Python 30 秒</footer>
         </aside>}
       </div>
+      {confirmation && (
+        <div className="knowledge-confirm-overlay" role="dialog" aria-modal="true" aria-label={confirmation.kind === "delete" ? "确认删除对话" : "确认清空对话"}>
+          <section className="knowledge-confirm">
+            <div className="knowledge-confirm-icon"><CircleAlert size={18} /></div>
+            <div><h2>{confirmation.kind === "delete" ? "删除这条对话？" : "清空当前对话？"}</h2><p>{confirmation.kind === "delete" ? `“${confirmation.title}”及其全部消息将从本机会话列表删除。` : `“${confirmation.title}”的全部消息将被清空，会话本身会保留。`}</p></div>
+            <footer><button className="button secondary" type="button" onClick={() => setConfirmation(null)}>取消</button><button className="button danger" type="button" onClick={confirmConversationAction}>{confirmation.kind === "delete" ? "确认删除" : "确认清空"}</button></footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -286,4 +402,8 @@ function ToolEvent({ event }: { event: AgentToolEvent }) {
       <pre>{event.output}</pre>
     </details>
   );
+}
+
+function AgentMarkdown({ content, streaming = false }: { content: string; streaming?: boolean }) {
+  return <div className={`agent-message-content agent-markdown ${streaming ? "streaming" : ""}`}><Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>{streaming && <span className="agent-stream-caret" aria-hidden="true" />}</div>;
 }

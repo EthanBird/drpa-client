@@ -181,6 +181,8 @@ def smoke_test(stage: Path, chrome_platform: str) -> None:
         "assert p.title=='DRPA_OFFLINE_OK', p.title;"
         "p.quit();"
         "import drpa_runner,pandas,openpyxl,xlwt,requests;"
+        "from drpa_runner.context import RuntimeContext;"
+        "assert hasattr(RuntimeContext,'open_output_directory');"
         "print('DRPA offline smoke test passed')"
     )
     run([str(python), "-c", smoke_script], env={**offline_env, "DRPA_BROWSER_PATH": str(browser)})

@@ -89,10 +89,15 @@ export interface AgentMessage {
 }
 
 export interface AgentTurnRequest {
+  requestId: string;
   baseUrl: string;
   model: string;
   apiKey: string;
   projectId: string;
+  stream: boolean;
+  contextWindow: number;
+  maxOutputTokens: number;
+  temperature: number;
   messages: AgentMessage[];
 }
 
@@ -103,6 +108,11 @@ export interface AgentToolEvent {
   summary: string;
   output: string;
 }
+
+export type AgentStreamEvent =
+  | { type: "roundStarted"; round: number }
+  | { type: "delta"; content: string }
+  | { type: "tool"; tool: AgentToolEvent };
 
 export interface AgentConversationMessage extends AgentMessage {
   id: string;
@@ -128,6 +138,19 @@ export interface AgentTurnResult {
     completionTokens: number;
   };
   durationMs: number;
+}
+
+export interface AgentSkillSummary {
+  name: string;
+  description: string;
+  modifiedAt: number;
+}
+
+export interface AgentWorkspaceConfig {
+  agentsMarkdown: string;
+  memoryMarkdown: string;
+  skills: AgentSkillSummary[];
+  rootDirectory: string;
 }
 
 export type WindowsUpdatePhase =

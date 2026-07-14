@@ -5,6 +5,7 @@
   text-rendering: optimizeLegibility;
   --font-sans: Inter, "Segoe UI Variable", "SF Pro Text", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  --font-scale: 1;
   --canvas: #f4f6f8;
   --surface-1: #ffffff;
   --surface-2: #f7f9fb;
@@ -36,6 +37,11 @@
   --sidebar-width: 232px;
   --titlebar-height: 42px;
 }
+
+:root[data-font-scale="small"] { --font-scale: .9; }
+:root[data-font-scale="standard"] { --font-scale: 1; }
+:root[data-font-scale="large"] { --font-scale: 1.1; }
+:root[data-font-scale="extraLarge"] { --font-scale: 1.2; }
 
 :root[data-theme="dark"] {
   color-scheme: dark;

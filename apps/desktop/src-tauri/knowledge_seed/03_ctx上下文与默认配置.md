@@ -219,6 +219,21 @@ with target.open("wb") as stream:
     stream.write(image_bytes)
 ```
 
+### `ctx.open_output_directory()`：打开本次输出目录
+
+需要在任务完成后向用户展示下载文件时，可以请求桌面 Host 在 Windows 资源管理器中打开本次运行的 `output_dir`：
+
+```python
+def main(ctx):
+    report = ctx.output_file("report.json", "结果")
+    report.write_text("{}", encoding="utf-8")
+
+    if bool(ctx.params.get("open_output_directory", False)):
+        ctx.open_output_directory()
+```
+
+该方法只允许打开当前运行的输出目录，实际桌面操作由 Host 执行。建议把它放在所有文件写入完成之后，并通过 `boolean` 参数让任务配置决定是否自动打开。
+
 ## 7. `ctx.browser(headless=None)`
 
 创建 DrissionPage `ChromiumPage`：
@@ -334,4 +349,3 @@ def main(ctx):
 ```
 
 下一章：[参数、输出与产物](./04_参数输出与产物.md)。
-

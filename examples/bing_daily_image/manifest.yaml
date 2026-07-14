@@ -29,3 +29,7 @@ parameters:
     type: number
     required: false
     default: 1
+  - id: open_output_directory
+    type: boolean
+    required: false
+    default: false
