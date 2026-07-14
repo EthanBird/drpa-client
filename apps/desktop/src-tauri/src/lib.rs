@@ -143,7 +143,7 @@ fn list_studio_projects(paths: State<'_, AppPaths>) -> Result<Vec<StudioProject>
             .and_then(|source| PackageManifest::from_yaml(&source).ok())
             .map_or_else(|| id.clone(), |manifest| manifest.name);
         let mut files = Vec::new();
-        collect_files(&entry.path(), &entry.path(), &mut files)
+        collect_project_entries(&entry.path(), &entry.path(), &mut files)
             .map_err(|error| error.to_string())?;
         files.sort();
         projects.push(StudioProject { id, name, files });
@@ -245,6 +245,60 @@ fn write_project_file(
 }
 
 #[tauri::command]
+fn create_project_directory(
+    project_id: String,
+    relative_path: String,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    validate_project_id(&project_id)?;
+    let relative = safe_relative_path(&relative_path).map_err(|error| error.to_string())?;
+    fs::create_dir_all(
+        paths
+            .workspace_root
+            .join("projects")
+            .join(project_id)
+            .join(relative),
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_project_file(
+    project_id: String,
+    source_path: String,
+    target_directory: String,
+    paths: State<'_, AppPaths>,
+) -> Result<String, String> {
+    validate_project_id(&project_id)?;
+    let source = Path::new(&source_path);
+    if !source.is_file() {
+        return Err("只能导入单个文件".to_owned());
+    }
+    let target_relative = if target_directory.trim().is_empty() {
+        PathBuf::new()
+    } else {
+        safe_relative_path(&target_directory).map_err(|error| error.to_string())?
+    };
+    let file_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "无法读取导入文件名".to_owned())?;
+    let file_name = safe_relative_path(file_name).map_err(|error| error.to_string())?;
+    let target = paths
+        .workspace_root
+        .join("projects")
+        .join(project_id)
+        .join(&target_relative)
+        .join(&file_name);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::copy(source, &target).map_err(|error| error.to_string())?;
+    let relative_output = target_relative.join(file_name);
+    Ok(relative_output.to_string_lossy().replace('\\', "/"))
+}
+
+#[tauri::command]
 fn build_studio_project(project_id: String, paths: State<'_, AppPaths>) -> Result<String, String> {
     validate_project_id(&project_id)?;
     let root = paths.workspace_root.join("projects").join(&project_id);
@@ -335,7 +389,7 @@ fn open_installed_package(
         .map_err(|error| error.to_string())?;
     }
     let mut files = Vec::new();
-    collect_files(&target, &target, &mut files).map_err(|error| error.to_string())?;
+    collect_project_entries(&target, &target, &mut files).map_err(|error| error.to_string())?;
     files.sort();
     Ok(StudioProject {
         id: project_id,
@@ -478,8 +532,17 @@ fn collect_files(root: &Path, current: &Path, output: &mut Vec<String>) -> std::
     for entry in fs::read_dir(current)?.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            if path.file_name().is_some_and(|name| name == "__pycache__") {
+                continue;
+            }
             collect_files(root, &path, output)?;
         } else if path.is_file() {
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "pyc" || extension == "pyo")
+            {
+                continue;
+            }
             if let Ok(relative) = path.strip_prefix(root) {
                 output.push(relative.to_string_lossy().replace('\\', "/"));
             }
@@ -729,7 +792,9 @@ fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKerne
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .env("PYTHONNOUSERSITE", "1")
-        .env("PYTHONDONTWRITEBYTECODE", "1");
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
     if let Some(python_path) = python_path {
         command.env("PYTHONPATH", python_path);
     }
@@ -790,7 +855,9 @@ fn execute_python_run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("PYTHONNOUSERSITE", "1")
-        .env("PYTHONDONTWRITEBYTECODE", "1");
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
     if let Some(python_path) = runtime.python_path {
         command.env("PYTHONPATH", python_path);
     }
@@ -806,8 +873,17 @@ fn execute_python_run(
         .stdout
         .take()
         .ok_or_else(|| "无法读取 Python 标准输出".to_owned())?;
-    for line in BufReader::new(stdout).lines() {
-        let line = line.map_err(|error| format!("读取运行时事件失败：{error}"))?;
+    let mut reader = BufReader::new(stdout);
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        let read = reader
+            .read_until(b'\n', &mut buffer)
+            .map_err(|error| format!("读取运行时事件失败：{error}"))?;
+        if read == 0 {
+            break;
+        }
+        let line = decode_runtime_event_line(&buffer);
         if line.trim().is_empty() {
             continue;
         }
@@ -829,6 +905,46 @@ fn execute_python_run(
         }
     }
     Ok(())
+}
+
+fn collect_project_entries(
+    root: &Path,
+    current: &Path,
+    output: &mut Vec<String>,
+) -> std::io::Result<()> {
+    for entry in fs::read_dir(current)?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|name| name == "__pycache__") {
+                continue;
+            }
+            if let Ok(relative) = path.strip_prefix(root) {
+                output.push(format!(
+                    "{}/",
+                    relative.to_string_lossy().replace('\\', "/")
+                ));
+            }
+            collect_project_entries(root, &path, output)?;
+        } else if path.is_file() {
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "pyc" || extension == "pyo")
+            {
+                continue;
+            }
+            if let Ok(relative) = path.strip_prefix(root) {
+                output.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decode_runtime_event_line(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(line) => line.to_owned(),
+        Err(_) => String::from_utf8_lossy(bytes).into_owned(),
+    }
 }
 
 fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
@@ -861,8 +977,14 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
     {
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/python/src");
         if source.is_dir() {
+            let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+            let venv_python = environment_python_path(&workspace.join(".venv"));
             return Ok(RuntimeEnvironment {
-                python: PathBuf::from(if cfg!(windows) { "python" } else { "python3" }),
+                python: if venv_python.is_file() {
+                    venv_python
+                } else {
+                    PathBuf::from(if cfg!(windows) { "python" } else { "python3" })
+                },
                 python_path: Some(source),
                 browser: std::env::var_os("DRPA_BROWSER_PATH").map(PathBuf::from),
             });
@@ -1105,6 +1227,8 @@ pub fn run() {
             open_installed_package,
             read_project_file,
             write_project_file,
+            create_project_directory,
+            import_project_file,
             build_studio_project,
             run_studio_project,
             execute_studio_cell,
@@ -1149,5 +1273,38 @@ mod tests {
         let root = std::env::temp_dir().join(format!("drpa-runtime-test-{}", Uuid::new_v4()));
         let error = resolve_runtime_manifest_path(&root, "../python.exe").unwrap_err();
         assert!(error.contains("不安全路径"));
+    }
+
+    #[test]
+    fn studio_file_collection_ignores_python_bytecode_cache() {
+        let root = std::env::temp_dir().join(format!("drpa-project-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("__pycache__")).unwrap();
+        fs::write(root.join("main.py"), b"def main(ctx): pass\n").unwrap();
+        fs::write(root.join("__pycache__/main.cpython-311.pyc"), b"bytecode").unwrap();
+        fs::write(root.join("module.pyo"), b"optimized bytecode").unwrap();
+
+        let mut files = Vec::new();
+        collect_files(&root, &root, &mut files).unwrap();
+        files.sort();
+
+        assert_eq!(files, vec!["main.py"]);
+
+        let mut entries = Vec::new();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/helper.py"), b"VALUE = 1\n").unwrap();
+        collect_project_entries(&root, &root, &mut entries).unwrap();
+        entries.sort();
+        assert_eq!(entries, vec!["main.py", "src/", "src/helper.py"]);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_event_decoder_tolerates_non_utf8_log_lines() {
+        let line = decode_runtime_event_line(
+            b"{\"type\":\"log\",\"sequence\":1,\"level\":\"info\",\"scope\":\"package\",\"message\":\"bad: \xff\"}\n",
+        );
+        let event = serde_json::from_str::<RuntimeEvent>(&line).unwrap();
+        assert!(matches!(event, RuntimeEvent::Log { .. }));
     }
 }

@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { desktopGateway } from "../infra/gateway";
 import { AppShell } from "../components/AppShell";
 import { CommandPalette } from "../components/CommandPalette";
+import { AutomationsPage } from "../pages/AutomationsPage";
 import { LibraryPage } from "../pages/LibraryPage";
 import { OverviewPage } from "../pages/OverviewPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
@@ -60,6 +61,11 @@ export function App() {
           return;
         }
         setDragActive(false);
+        if (activeNavigation === "studio") {
+          window.dispatchEvent(new CustomEvent("drpa-studio-file-drop", { detail: { paths: event.payload.paths } }));
+          setOperationNotice(`已将 ${event.payload.paths.length} 个文件交给开发工作室`);
+          return;
+        }
         const archives = event.payload.paths.filter((path) => path.toLowerCase().endsWith(".rpaz"));
         if (archives.length === 0) {
           setOperationNotice("拖入的文件不是 .rpaz 脚本包");
@@ -79,7 +85,7 @@ export function App() {
       .then((stop) => { if (disposed) stop(); else unlisten = stop; })
       .catch((error: unknown) => setOperationNotice(`无法启用拖拽安装：${String(error)}`));
     return () => { disposed = true; unlisten?.(); };
-  }, [selectPackage, setActiveNavigation, setDragActive, setOperationNotice, setSnapshot]);
+  }, [activeNavigation, selectPackage, setActiveNavigation, setDragActive, setOperationNotice, setSnapshot]);
 
   return (
     <div className={compactMode ? "app density-compact" : "app"}>
@@ -89,13 +95,7 @@ export function App() {
         {activeNavigation === "studio" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载开发工作室…</h2></div></div>}><StudioPage /></Suspense>}
         {activeNavigation === "workbench" && <WorkbenchPage />}
         {activeNavigation === "runs" && <RunsPage />}
-        {activeNavigation === "automations" && (
-          <PlaceholderPage
-            eyebrow="任务编排"
-            title="自动化计划"
-            description="在本地配置定时、文件触发与 Webhook，同时保持离线可用。"
-          />
-        )}
+        {activeNavigation === "automations" && <AutomationsPage />}
         {activeNavigation === "runtimes" && <RuntimePage />}
         {activeNavigation === "secrets" && (
           <PlaceholderPage

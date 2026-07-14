@@ -17,6 +17,15 @@ def test_resolve_child_rejects_escape(tmp_path: Path) -> None:
         resolve_child(tmp_path, "../outside.txt")
 
 
+def test_event_writer_keeps_jsonl_ascii_safe() -> None:
+    stream = io.StringIO()
+    EventWriter(stream=stream).emit("log", message="中文日志")
+
+    line = stream.getvalue()
+    assert line.isascii()
+    assert json.loads(line)["message"] == "中文日志"
+
+
 def test_execute_request_emits_versioned_events(tmp_path: Path) -> None:
     package_dir = tmp_path / "package"
     output_dir = tmp_path / "output"

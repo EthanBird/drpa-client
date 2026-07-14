@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use drpa_package::{ArchiveBudget, ArchiveLimits, Entrypoint, PackageManifest, ParameterKind};
 use drpa_protocol::{
-    LogEntry, LogLevel, PackageSummary, ParameterSummary, RunStatus, RunSummary, RuntimeEvent,
-    TaskProfile, TrustLevel, WorkspaceSnapshot, WorkspaceStats,
+    AutomationStatus, AutomationSummary, ConcurrencyPolicy, LogEntry, LogLevel, PackageSummary,
+    ParameterSummary, RunStatus, RunSummary, RuntimeEvent, TaskProfile, TrustLevel,
+    WorkspaceSnapshot, WorkspaceStats,
 };
 use parking_lot::RwLock;
 use thiserror::Error;
@@ -57,6 +58,7 @@ impl HostState {
         let packages_root = workspace_root.join("packages");
         let _ = fs::create_dir_all(&packages_root);
         let packages = scan_installed_packages(&packages_root);
+        let automations = derive_automations(&packages);
         Self {
             workspace_root,
             snapshot: RwLock::new(WorkspaceSnapshot {
@@ -67,6 +69,7 @@ impl HostState {
                     saved_hours: 0.0,
                 },
                 packages,
+                automations,
                 runs: Vec::new(),
                 logs: vec![LogEntry {
                     id: 1,
@@ -127,6 +130,7 @@ impl HostState {
         let mut snapshot = self.snapshot.write();
         snapshot.packages.retain(|item| item.id != summary.id);
         snapshot.packages.insert(0, summary.clone());
+        snapshot.automations = derive_automations(&snapshot.packages);
         snapshot.stats.packages = snapshot.packages.len() as u32;
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
         snapshot.logs.push(LogEntry {
@@ -156,6 +160,7 @@ impl HostState {
 
         let mut snapshot = self.snapshot.write();
         snapshot.packages.retain(|item| item.id != package_id);
+        snapshot.automations = derive_automations(&snapshot.packages);
         snapshot.stats.packages = snapshot.packages.len() as u32;
         self.push_log(
             &mut snapshot,
@@ -475,6 +480,34 @@ fn scan_installed_packages(packages_root: &Path) -> Vec<PackageSummary> {
     packages
 }
 
+fn derive_automations(packages: &[PackageSummary]) -> Vec<AutomationSummary> {
+    packages
+        .iter()
+        .flat_map(|package| {
+            package
+                .profiles
+                .iter()
+                .filter_map(|profile| {
+                    let schedule = profile.schedule.as_ref()?;
+                    Some(AutomationSummary {
+                        id: format!("{}::{}", package.id, profile.id),
+                        name: format!("{} / {}", package.name, profile.name),
+                        package_name: package.name.clone(),
+                        profile_name: profile.name.clone(),
+                        trigger_label: schedule.clone(),
+                        next_run: "等待调度器计算".to_owned(),
+                        last_run: profile.last_run.clone(),
+                        health: "来自脚本包配置的计划；Host Scheduler 尚未接管".to_owned(),
+                        status: AutomationStatus::Paused,
+                        concurrency_policy: ConcurrencyPolicy::Forbid,
+                        retry_policy: "未配置重试策略".to_owned(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn manifest_summary(manifest: &PackageManifest) -> PackageSummary {
     let initials: String = manifest
         .name
@@ -513,6 +546,7 @@ fn manifest_summary(manifest: &PackageManifest) -> PackageSummary {
                 }
                 .to_owned(),
                 required: parameter.required,
+                default_value: parameter.default.clone(),
             })
             .collect(),
         profiles: vec![TaskProfile {
@@ -549,7 +583,7 @@ mod tests {
         archive.start_file("manifest.yaml", options).unwrap();
         archive
             .write_all(
-                b"schema: 2\nid: com.example.test\nname: Test\nversion: 0.1.0\nentrypoint:\n  runtime: python\n  module: main.py\n  callable: main\nruntime:\n  python: '3.11.*'\nparameters:\n  - id: market\n    type: string\n    required: false\n",
+                b"schema: 2\nid: com.example.test\nname: Test\nversion: 0.1.0\nentrypoint:\n  runtime: python\n  module: main.py\n  callable: main\nruntime:\n  python: '3.11.*'\nparameters:\n  - id: market\n    type: string\n    required: false\n    default: zh-CN\n",
             )
             .unwrap();
         archive.start_file("main.py", options).unwrap();
@@ -561,6 +595,10 @@ mod tests {
         let installed = state.install_package(&archive_path).unwrap();
         assert_eq!(installed.id, "com.example.test");
         assert_eq!(installed.parameters.len(), 1);
+        assert_eq!(
+            installed.parameters[0].default_value,
+            Some(serde_json::json!("zh-CN"))
+        );
         assert!(
             workspace
                 .join("packages/com.example.test/0.1.0/main.py")

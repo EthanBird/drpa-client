@@ -24,6 +24,8 @@ parameters:
   - id: market
     type: string
     required: false
+    default: zh-CN
   - id: image_count
     type: number
     required: false
+    default: 1

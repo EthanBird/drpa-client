@@ -96,6 +96,8 @@ pub struct Parameter {
     pub kind: ParameterKind,
     #[serde(default)]
     pub required: bool,
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

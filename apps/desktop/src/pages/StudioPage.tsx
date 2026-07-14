@@ -1,4 +1,5 @@
 import Editor, { loader } from "@monaco-editor/react";
+import { open } from "@tauri-apps/plugin-dialog";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker.js?worker";
 import "monaco-editor/esm/vs/basic-languages/python/python.contribution.js";
@@ -8,7 +9,10 @@ import {
   Box,
   Code2,
   FileCode2,
+  FilePlus2,
+  Folder,
   FolderInput,
+  FolderPlus,
   FolderTree,
   PackageCheck,
   Play,
@@ -17,8 +21,10 @@ import {
   Save,
   TerminalSquare,
   Trash2,
+  Upload,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import type { DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../app/store";
 import type { StudioProject, StudioVariable } from "../domain/models";
@@ -42,6 +48,11 @@ interface NotebookDocument {
   nbformat_minor: number;
 }
 
+interface FileContextMenu {
+  x: number;
+  y: number;
+}
+
 export function StudioPage() {
   const snapshot = useAppStore((state) => state.snapshot);
   const setSnapshot = useAppStore((state) => state.setSnapshot);
@@ -54,14 +65,28 @@ export function StudioPage() {
   const [runParameters, setRunParameters] = useState("{}");
   const [notice, setNotice] = useState("工作室已就绪");
   const [busy, setBusy] = useState(false);
+  const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
 
   const selected = useMemo(() => projects.find((item) => item.id === selectedId), [projects, selectedId]);
   const packages = snapshot?.packages ?? [];
+  const files = selected?.files ?? [];
+  const currentDirectory = selectedFile.includes("/") ? selectedFile.slice(0, selectedFile.lastIndexOf("/")) : "";
 
-  const refresh = async () => {
+  const pickInitialFile = (project: StudioProject | undefined) => {
+    if (!project) return "main.py";
+    if (project.files.includes("main.py")) return "main.py";
+    return project.files.find((file) => !file.endsWith("/")) ?? "main.py";
+  };
+
+  const refresh = async (preferredFile?: string, preferredProjectId = selectedId) => {
     const next = await desktopGateway.listStudioProjects();
     setProjects(next);
-    if (!selectedId && next[0]) setSelectedId(next[0].id);
+    const project = next.find((item) => item.id === preferredProjectId) ?? next[0];
+    if (project) {
+      setSelectedId(project.id);
+      const nextFile = preferredFile && project.files.includes(preferredFile) ? preferredFile : pickInitialFile(project);
+      setSelectedFile(nextFile);
+    }
   };
 
   useEffect(() => { void refresh(); }, []);
@@ -69,7 +94,7 @@ export function StudioPage() {
     if (!installedPackageId && packages[0]) setInstalledPackageId(packages[0].id);
   }, [installedPackageId, packages]);
   useEffect(() => {
-    if (!selectedId || !selectedFile) return;
+    if (!selectedId || !selectedFile || selectedFile.endsWith("/")) return;
     void desktopGateway.readProjectFile(selectedId, selectedFile).then(setContent).catch((error: unknown) => setNotice(String(error)));
   }, [selectedFile, selectedId]);
 
@@ -78,12 +103,10 @@ export function StudioPage() {
     setBusy(true);
     try {
       const project = await desktopGateway.createStudioProject(projectName.trim());
-      await refresh();
-      setSelectedId(project.id);
-      setSelectedFile("main.py");
+      await refresh("main.py", project.id);
       setNotice(`已创建项目：${project.name}，内部 ID 已自动生成`);
     } catch (error) {
-      setNotice(`创建失败：${String(error)}`);
+      setNotice(`失败：${String(error)}`);
     } finally { setBusy(false); }
   };
 
@@ -92,9 +115,7 @@ export function StudioPage() {
     setBusy(true);
     try {
       const project = await desktopGateway.openInstalledPackage(installedPackageId);
-      await refresh();
-      setSelectedId(project.id);
-      setSelectedFile("main.py");
+      await refresh("main.py", project.id);
       setNotice(`已从已安装脚本包创建可编辑工作副本：${project.name}`);
     } catch (error) {
       setNotice(`打开失败：${String(error)}`);
@@ -102,12 +123,93 @@ export function StudioPage() {
   };
 
   const save = async () => {
-    if (!selectedId) return;
+    if (!selectedId || !selectedFile || selectedFile.endsWith("/")) return;
     setBusy(true);
     try {
       await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
+      await refresh(selectedFile);
       setNotice(`已保存 ${selectedFile}`);
-    } catch (error) { setNotice(`保存失败：${String(error)}`); }
+    } catch (error) { setNotice(`失败：${String(error)}`); }
+    finally { setBusy(false); }
+  };
+
+  const createFile = async () => {
+    if (!selectedId) return;
+    setFileMenu(null);
+    const initial = currentDirectory ? `${currentDirectory}/new_file.py` : "new_file.py";
+    const relativePath = window.prompt("新建文件路径", initial)?.trim();
+    if (!relativePath) return;
+    setBusy(true);
+    try {
+      await desktopGateway.writeProjectFile(selectedId, relativePath, "");
+      await refresh(relativePath);
+      setNotice(`已新建文件 ${relativePath}`);
+    } catch (error) { setNotice(`新建文件失败：${String(error)}`); }
+    finally { setBusy(false); }
+  };
+
+  const createFolder = async () => {
+    if (!selectedId) return;
+    setFileMenu(null);
+    const initial = currentDirectory ? `${currentDirectory}/new_folder` : "new_folder";
+    const relativePath = window.prompt("新建文件夹路径", initial)?.trim();
+    if (!relativePath) return;
+    setBusy(true);
+    try {
+      await desktopGateway.createProjectDirectory(selectedId, relativePath);
+      await refresh(selectedFile);
+      setNotice(`已新建文件夹 ${relativePath}`);
+    } catch (error) { setNotice(`新建文件夹失败：${String(error)}`); }
+    finally { setBusy(false); }
+  };
+
+  const importPaths = useCallback(async (paths: string[]) => {
+    if (!selectedId || paths.length === 0) return;
+    setFileMenu(null);
+    setBusy(true);
+    try {
+      let lastImported = selectedFile;
+      for (const sourcePath of paths) {
+        lastImported = await desktopGateway.importProjectFile(selectedId, sourcePath, currentDirectory);
+      }
+      await refresh(lastImported);
+      setNotice(`已导入 ${paths.length} 个文件${currentDirectory ? ` 到 ${currentDirectory}` : ""}`);
+    } catch (error) { setNotice(`导入失败：${String(error)}`); }
+    finally { setBusy(false); }
+  }, [currentDirectory, selectedFile, selectedId]);
+
+  useEffect(() => {
+    const handleNativeDrop = (event: Event) => {
+      const paths = (event as CustomEvent<{ paths?: string[] }>).detail?.paths ?? [];
+      void importPaths(paths);
+    };
+    window.addEventListener("drpa-studio-file-drop", handleNativeDrop);
+    return () => window.removeEventListener("drpa-studio-file-drop", handleNativeDrop);
+  }, [importPaths]);
+
+  const pickAndImport = async () => {
+    if (!selectedId || !("__TAURI_INTERNALS__" in window)) return;
+    const selectedPaths = await open({ multiple: true });
+    if (!selectedPaths) return;
+    await importPaths(Array.isArray(selectedPaths) ? selectedPaths : [selectedPaths]);
+  };
+
+  const dropBrowserFiles = async (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (!selectedId) return;
+    const dropped = Array.from(event.dataTransfer.files);
+    if (dropped.length === 0) return;
+    setBusy(true);
+    try {
+      let lastFile = selectedFile;
+      for (const file of dropped) {
+        const relativePath = currentDirectory ? `${currentDirectory}/${file.name}` : file.name;
+        await desktopGateway.writeProjectFile(selectedId, relativePath, await file.text());
+        lastFile = relativePath;
+      }
+      await refresh(lastFile);
+      setNotice(`已拖拽添加 ${dropped.length} 个文件${currentDirectory ? ` 到 ${currentDirectory}` : ""}`);
+    } catch (error) { setNotice(`拖拽添加失败：${String(error)}`); }
     finally { setBusy(false); }
   };
 
@@ -116,11 +218,11 @@ export function StudioPage() {
     setBusy(true);
     try {
       const parameters = JSON.parse(runParameters) as Record<string, unknown>;
-      await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
+      if (selectedFile && !selectedFile.endsWith("/")) await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
       const runId = await desktopGateway.runStudioProject(selectedId, parameters);
       setSnapshot(await desktopGateway.getWorkspaceSnapshot());
       setNotice(`开发态运行完成：${runId}（没有构建或安装）`);
-    } catch (error) { setNotice(`运行失败：${String(error)}`); }
+    } catch (error) { setNotice(`失败：${String(error)}`); }
     finally { setBusy(false); }
   };
 
@@ -128,10 +230,10 @@ export function StudioPage() {
     if (!selectedId) return;
     setBusy(true);
     try {
-      await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
+      if (selectedFile && !selectedFile.endsWith("/")) await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
       const archivePath = await desktopGateway.buildStudioProject(selectedId);
       setNotice(`RPAZ 已导出：${archivePath}`);
-    } catch (error) { setNotice(`导出失败：${String(error)}`); }
+    } catch (error) { setNotice(`失败：${String(error)}`); }
     finally { setBusy(false); }
   };
 
@@ -139,11 +241,11 @@ export function StudioPage() {
   const notebook = selectedFile.endsWith(".ipynb");
 
   return (
-    <div className="page studio-page">
+    <div className="page studio-page" onClick={() => setFileMenu(null)}>
       <header className="page-header studio-header">
         <div><div className="eyebrow">RPaz + Notebook 集成开发环境</div><h1>开发工作室</h1><p>编辑源码、直接运行项目，并使用持久 Python Kernel 交互调试。</p></div>
         <div className="header-actions">
-          <button className="button secondary" type="button" onClick={save} disabled={!selectedId || busy}><Save size={15} /> 保存</button>
+          <button className="button secondary" type="button" onClick={save} disabled={!selectedId || busy || selectedFile.endsWith("/")}><Save size={15} /> 保存</button>
           <button className="button secondary" type="button" onClick={exportProject} disabled={!selectedId || busy}><PackageCheck size={15} /> 导出 RPAZ</button>
           <button className="button primary" type="button" onClick={runProject} disabled={!selectedId || busy}><Play size={15} fill="currentColor" /> {busy ? "处理中…" : "直接运行"}</button>
         </div>
@@ -164,14 +266,41 @@ export function StudioPage() {
           <div className="studio-pane-title"><FolderTree size={15} /> 项目</div>
           {projects.length === 0 && <p className="empty-hint">尚无项目，请在上方新建。</p>}
           {projects.map((project) => (
-            <button type="button" key={project.id} className={project.id === selectedId ? "selected" : ""} onClick={() => { setSelectedId(project.id); setSelectedFile(project.files.includes("main.py") ? "main.py" : project.files[0] ?? "main.py"); }}>
+            <button type="button" key={project.id} className={project.id === selectedId ? "selected" : ""} onClick={() => { setSelectedId(project.id); setSelectedFile(pickInitialFile(project)); }}>
               <Box size={14} /><span><strong>{project.name}</strong><small>内部 ID · {project.id.slice(-8)}</small></span>
             </button>
           ))}
         </aside>
-        <aside className="studio-files">
-          <div className="studio-pane-title"><Code2 size={15} /> 文件</div>
-          {selected?.files.map((file) => <button type="button" key={file} className={file === selectedFile ? "selected" : ""} onClick={() => setSelectedFile(file)}>{file.endsWith(".ipynb") ? <BookOpen size={14} /> : <FileCode2 size={14} />} {file}</button>)}
+        <aside
+          className="studio-files"
+          onContextMenu={(event) => { event.preventDefault(); setFileMenu({ x: event.clientX, y: event.clientY }); }}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={dropBrowserFiles}
+        >
+          <div className="studio-pane-title studio-pane-title-actions">
+            <span><Code2 size={15} /> 文件</span>
+            <span className="studio-file-actions">
+              <button type="button" title="新建文件" onClick={createFile} disabled={!selectedId || busy}><FilePlus2 size={13} /></button>
+              <button type="button" title="新建文件夹" onClick={createFolder} disabled={!selectedId || busy}><FolderPlus size={13} /></button>
+              <button type="button" title="导入文件" onClick={pickAndImport} disabled={!selectedId || busy || !("__TAURI_INTERNALS__" in window)}><Upload size={13} /></button>
+            </span>
+          </div>
+          {files.length === 0 && <p className="empty-hint">当前项目还没有文件，可右键新建或拖拽导入。</p>}
+          {files.map((file) => {
+            const directory = file.endsWith("/");
+            return (
+              <button type="button" key={file} className={file === selectedFile ? "selected" : ""} onClick={() => { if (!directory) setSelectedFile(file); }}>
+                {directory ? <Folder size={14} /> : file.endsWith(".ipynb") ? <BookOpen size={14} /> : <FileCode2 size={14} />} {file}
+              </button>
+            );
+          })}
+          {fileMenu && (
+            <div className="studio-context-menu" style={{ left: fileMenu.x, top: fileMenu.y }} onClick={(event) => event.stopPropagation()}>
+              <button type="button" onClick={createFile}><FilePlus2 size={14} /> 新建文件</button>
+              <button type="button" onClick={createFolder}><FolderPlus size={14} /> 新建文件夹</button>
+              <button type="button" onClick={pickAndImport} disabled={!("__TAURI_INTERNALS__" in window)}><Upload size={14} /> 导入文件</button>
+            </div>
+          )}
         </aside>
         <section className={notebook ? "studio-editor notebook-editor" : "studio-editor"}>
           {notebook ? (

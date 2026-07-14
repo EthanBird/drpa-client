@@ -14,6 +14,8 @@ export interface DesktopGateway {
   openInstalledPackage(packageId: string): Promise<StudioProject>;
   readProjectFile(projectId: string, relativePath: string): Promise<string>;
   writeProjectFile(projectId: string, relativePath: string, content: string): Promise<void>;
+  createProjectDirectory(projectId: string, relativePath: string): Promise<void>;
+  importProjectFile(projectId: string, sourcePath: string, targetDirectory: string): Promise<string>;
   buildStudioProject(projectId: string): Promise<string>;
   runStudioProject(projectId: string, parameters: Record<string, unknown>): Promise<string>;
   executeStudioCell(projectId: string, code: string): Promise<StudioCellResult>;
@@ -60,6 +62,11 @@ const mockGateway: DesktopGateway = {
     return "def main(ctx):\n    ctx.log.info('你好，DRPA')\n";
   },
   async writeProjectFile() {},
+  async createProjectDirectory() {},
+  async importProjectFile(_projectId, sourcePath, targetDirectory) {
+    const fileName = sourcePath.split(/[\\/]/).pop() ?? "imported.file";
+    return targetDirectory ? `${targetDirectory}/${fileName}` : fileName;
+  },
   async buildStudioProject(projectId) {
     return `${projectId}.rpaz`;
   },
@@ -92,6 +99,8 @@ const tauriGateway: DesktopGateway = {
   openInstalledPackage: (packageId) => invoke<StudioProject>("open_installed_package", { packageId }),
   readProjectFile: (projectId, relativePath) => invoke<string>("read_project_file", { projectId, relativePath }),
   writeProjectFile: (projectId, relativePath, content) => invoke<void>("write_project_file", { projectId, relativePath, content }),
+  createProjectDirectory: (projectId, relativePath) => invoke<void>("create_project_directory", { projectId, relativePath }),
+  importProjectFile: (projectId, sourcePath, targetDirectory) => invoke<string>("import_project_file", { projectId, sourcePath, targetDirectory }),
   buildStudioProject: (projectId) => invoke<string>("build_studio_project", { projectId }),
   runStudioProject: (projectId, parameters) => invoke<string>("run_studio_project", { projectId, parameters }),
   executeStudioCell: (projectId, code) => invoke<StudioCellResult>("execute_studio_cell", { projectId, code }),

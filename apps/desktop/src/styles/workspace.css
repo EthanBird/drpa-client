@@ -125,7 +125,7 @@
 .inspector-footer { display: flex; align-items: center; gap: 5px; min-height: 48px; padding: 7px 8px; border-top: 1px solid var(--border); }
 .footer-spacer { flex: 1; }
 
-.overview-page, .library-page, .runs-page { overflow: auto; }
+.overview-page, .library-page, .runs-page, .automations-page { overflow: auto; }
 .overview-header { min-height: 118px; padding-top: 25px; }
 .overview-header h1 { font-size: 25px; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 16px 22px 10px; }
@@ -242,6 +242,35 @@
 .table-progress i { height: 100%; border-radius: inherit; background: var(--accent); }
 .table-progress em { color: var(--text-3); font: 7px var(--font-mono); font-style: normal; }
 
+.automations-header { min-height: 118px; padding-top: 25px; }
+.automation-summary-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 16px 22px 10px; }
+.automation-metric { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 13px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface-1); }
+.automation-metric > span { display: grid; place-items: center; width: 31px; height: 31px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-strong); }
+.automation-metric div { display: grid; gap: 3px; }
+.automation-metric strong { font-size: 17px; line-height: 1; }
+.automation-metric small { color: var(--text-3); font-size: 8px; }
+.automation-metric.tone-green > span { background: var(--success-soft); color: var(--success); }
+.automation-metric.tone-amber > span { background: var(--warning-soft); color: var(--warning); }
+.automation-metric.tone-danger > span { background: var(--danger-soft); color: var(--danger); }
+.automation-board { margin: 4px 22px 24px; overflow: hidden; }
+.automation-table { display: grid; }
+.automation-table-header, .automation-row { display: grid; grid-template-columns: minmax(190px, 1.25fr) minmax(120px, .75fr) 120px minmax(140px, .8fr) minmax(150px, .9fr); align-items: center; gap: 12px; padding: 0 13px; }
+.automation-table-header { min-height: 34px; background: var(--surface-2); color: var(--text-3); font-size: 8px; font-weight: 650; }
+.automation-row { position: relative; min-height: 66px; padding-left: 50px; border-top: 1px solid var(--border-subtle); color: var(--text-3); font-size: 8px; }
+.automation-state { position: absolute; left: 13px; display: grid; place-items: center; width: 27px; height: 27px; border-radius: 7px; background: var(--surface-3); color: var(--text-3); }
+.automation-state.enabled { background: var(--success-soft); color: var(--success); }
+.automation-state.paused { background: var(--warning-soft); color: var(--warning); }
+.automation-state.needsAttention { background: var(--danger-soft); color: var(--danger); }
+.automation-title, .automation-policy, .automation-health { display: grid; min-width: 0; gap: 4px; }
+.automation-title strong { overflow: hidden; color: var(--text-1); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.automation-title small, .automation-policy small, .automation-health small { overflow: hidden; color: var(--text-3); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.automation-trigger, .automation-policy { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-2); }
+.automation-trigger svg, .automation-policy svg { flex: 0 0 auto; color: var(--accent-strong); }
+.automation-policy > span { display: grid; gap: 3px; min-width: 0; color: var(--text-2); }
+.status-badge.needsAttention { background: var(--danger-soft); color: var(--danger); }
+.status-badge.paused { background: var(--warning-soft); color: var(--warning); }
+.status-badge.enabled { background: var(--success-soft); color: var(--success); }
+
 .placeholder-page { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; text-align: center; }
 .placeholder-page h1 { margin: 7px 0 0; font-size: 25px; }
 .placeholder-page > p { max-width: 520px; margin: 10px 0 20px; color: var(--text-3); font-size: 11px; line-height: 1.65; }
@@ -256,6 +285,7 @@
   :root { --sidebar-width: 205px; }
   .workbench-grid { grid-template-columns: 195px minmax(390px, 1fr) minmax(300px, 36%); }
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
+  .automation-summary-strip { grid-template-columns: repeat(2, 1fr); }
   .overview-grid { grid-template-columns: 1fr; }
   .recent-runs-panel { grid-column: auto; }
   .field-grid.two-columns { grid-template-columns: 1fr; }
@@ -317,6 +347,13 @@
 .studio-projects strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .studio-projects small { overflow: hidden; color: var(--text-3); font: 7px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .studio-files button { font: 8px var(--font-mono); }
+.studio-pane-title-actions { justify-content: space-between; gap: 8px; }
+.studio-pane-title-actions > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.studio-file-actions { margin-left: auto; }
+.studio-files .studio-file-actions button { display: grid; place-items: center; width: 22px; min-height: 22px; padding: 0; color: var(--text-3); }
+.studio-files .studio-file-actions button:disabled, .studio-context-menu button:disabled { cursor: not-allowed; opacity: .45; }
+.studio-context-menu { position: fixed; z-index: 60; display: grid; width: 160px; gap: 2px; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); box-shadow: 0 14px 36px rgba(0,0,0,.35); }
+.studio-files .studio-context-menu button { justify-content: flex-start; min-height: 28px; font: 10px var(--font-sans); }
 .empty-hint { padding: 10px; color: var(--text-3); font-size: 9px; line-height: 1.5; }
 .studio-editor { display: grid; grid-template-rows: 34px minmax(0, 1fr); }
 .studio-editor.notebook-editor { display: block; overflow: hidden; }
@@ -354,5 +391,7 @@
 
 @media (max-width: 1180px) {
   .studio-layout { grid-template-columns: 170px 150px minmax(0, 1fr); }
+  .automation-table-header { display: none; }
+  .automation-row { grid-template-columns: 1fr; align-items: start; gap: 8px; padding-top: 12px; padding-bottom: 12px; }
   .settings-grid { grid-template-columns: 1fr; }
 }

@@ -9,6 +9,8 @@ pub const RUNTIME_PROTOCOL_VERSION: u16 = 1;
 pub struct WorkspaceSnapshot {
     pub packages: Vec<PackageSummary>,
     pub runs: Vec<RunSummary>,
+    #[serde(default)]
+    pub automations: Vec<AutomationSummary>,
     pub logs: Vec<LogEntry>,
     pub stats: WorkspaceStats,
 }
@@ -44,6 +46,8 @@ pub struct ParameterSummary {
     pub id: String,
     pub kind: String,
     pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +73,22 @@ pub struct RunSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AutomationSummary {
+    pub id: String,
+    pub name: String,
+    pub package_name: String,
+    pub profile_name: String,
+    pub trigger_label: String,
+    pub next_run: String,
+    pub last_run: Option<String>,
+    pub health: String,
+    pub status: AutomationStatus,
+    pub concurrency_policy: ConcurrencyPolicy,
+    pub retry_policy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LogEntry {
     pub id: u64,
     pub time: String,
@@ -85,6 +105,23 @@ pub enum RunStatus {
     Success,
     Failed,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AutomationStatus {
+    Enabled,
+    Paused,
+    NeedsAttention,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConcurrencyPolicy {
+    Allow,
+    Forbid,
+    Replace,
+    QueueOne,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

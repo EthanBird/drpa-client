@@ -19,5 +19,5 @@ class EventWriter:
         with self._lock:
             self._sequence += 1
             event = {"type": event_type, "sequence": self._sequence, **payload}
-            self.stream.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+            self.stream.write(json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n")
             self.stream.flush()

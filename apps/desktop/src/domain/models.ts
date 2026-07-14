@@ -11,6 +11,7 @@ export type NavigationId =
 
 export type RunStatus = "running" | "queued" | "success" | "failed" | "cancelled";
 export type TrustLevel = "verified" | "local" | "untrusted";
+export type AutomationStatus = "enabled" | "paused" | "needsAttention";
 
 export interface PackageSummary {
   id: string;
@@ -29,6 +30,7 @@ export interface ParameterSummary {
   id: string;
   kind: "string" | "number" | "boolean" | "secret" | "file" | "directory";
   required: boolean;
+  defaultValue?: string | number | boolean;
 }
 
 export interface StudioProject {
@@ -70,6 +72,7 @@ export interface TaskProfile {
   name: string;
   schedule?: string;
   lastRun?: string;
+  runtimeProfileId?: string;
 }
 
 export interface RunSummary {
@@ -80,6 +83,20 @@ export interface RunSummary {
   startedAt: string;
   duration: string;
   progress?: number;
+}
+
+export interface AutomationSummary {
+  id: string;
+  name: string;
+  packageName: string;
+  profileName: string;
+  triggerLabel: string;
+  nextRun: string;
+  lastRun?: string;
+  health: string;
+  status: AutomationStatus;
+  concurrencyPolicy: "allow" | "forbid" | "replace" | "queueOne";
+  retryPolicy: string;
 }
 
 export interface LogEntry {
@@ -93,6 +110,7 @@ export interface LogEntry {
 export interface WorkspaceSnapshot {
   packages: PackageSummary[];
   runs: RunSummary[];
+  automations: AutomationSummary[];
   logs: LogEntry[];
   stats: {
     activeRuns: number;
