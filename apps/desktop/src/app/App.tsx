@@ -4,6 +4,7 @@ import { desktopGateway } from "../infra/gateway";
 import { AppShell } from "../components/AppShell";
 import { CommandPalette } from "../components/CommandPalette";
 import { AutomationsPage } from "../pages/AutomationsPage";
+import { AgentPage } from "../pages/AgentPage";
 import { LibraryPage } from "../pages/LibraryPage";
 import { OverviewPage } from "../pages/OverviewPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
@@ -101,6 +102,7 @@ export function App() {
         {activeNavigation === "workbench" && <WorkbenchPage />}
         {activeNavigation === "runs" && <RunsPage />}
         {activeNavigation === "automations" && <AutomationsPage />}
+        {activeNavigation === "agent" && <AgentPage />}
         {activeNavigation === "runtimes" && <RuntimePage />}
         {activeNavigation === "secrets" && (
           <PlaceholderPage

@@ -59,3 +59,27 @@
 
 1. Windows.Graphics.Capture 对该无边框 Tauri 窗口仍返回 `SetIsBorderRequired failed: 不支持此接口 (0x80004002)`；可访问性文本读取正常。
 2. 该窗口的 UIA 点击/赋值接口分别返回“先调用 get_window_state”和 `read UIA value read-only state ... 0x80070057`，所以未通过坐标猜测继续操作；对应交互使用真实 Tauri 页面可访问性检查与 11 项 Vitest 回归交叉验证。
+
+## 2026-07-14 Notebook、当前用户与 AI Agent 回归
+
+### 真实桌面与 GUI
+
+- 构建并启动最新 `target/debug/drpa-desktop.exe`，确认真实 Tauri 主窗口出现；Windows.Graphics.Capture 仍在该无边框窗口返回 `SetIsBorderRequired failed: 不支持此接口 (0x80004002)`，因此没有继续对该窗口注入输入。
+- 使用同一 React 构建的 Chrome 本地 GUI 进行可见交互回归：基础设施导航出现 AI Agent，URL/model/key/项目配置、空态建议、消息提交和工具列表均正常，控制台无 error/warning。
+- 账户卡片显示 gateway 返回的“本地用户 / 本机用户”；总览问候也已移除固定示例名并复用当前用户来源。
+- GUI 创建“Notebook GUI 回归”项目，进入 `notebook.ipynb`，连续添加 11 个代码单元。实测 `.notebook-scroll` 为 `clientHeight=426`、`scrollHeight=1220`，垂直滚动已生效；工作区底部、滚动区底部和任务输出顶部均为 662/663 px，没有挤出主 UI。
+- Agent 绑定该项目后，界面明确显示 `6 ACTIVE`，六个 `rpaz_*` 工具均可见。
+
+### 本轮发现并修复
+
+1. **浏览器预览创建 Studio 项目后立即从列表消失**
+   - 根因：mock gateway 的 `createStudioProject` 返回项目，但 `listStudioProjects` 永远返回空数组，创建后的 refresh 覆盖前端状态。
+   - 修复：mock gateway 增加内存项目与文件存储，覆盖创建、读取、写入、目录、重命名和删除，浏览器 GUI 现在可以完整演练 Studio → Notebook → Agent 项目绑定。
+
+2. **总览仍显示固定示例问候名**
+   - 修复：总览和左下角账户卡片都读取 `get_current_user`；浏览器预览使用“本地用户”，真实桌面使用 Windows `USERNAME`。
+
+3. **Notebook 首次执行阻塞与多单元溢出**
+   - 修复：Kernel 预热与 execute command 改为 Tauri async + blocking worker；React 在 invoke 前先绘制运行态。
+   - 修复：补齐 Studio/Notebook 的 grid containment、`min-height: 0`、内部滚动和 toolbar 横向滚动；单个 Monaco 代码单元最高 420 px。
+   - 回归：Vitest 使用 30 单元 Notebook 和延迟执行 Promise，验证滚动容器存在且“正在运行”在执行完成前已渲染。

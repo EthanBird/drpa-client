@@ -295,8 +295,11 @@ fn wait_for_restart_request(path: &Path) -> Result<(), String> {
 
 fn advance_status(status: &mut WindowsUpdateStatus) {
     status.completed_files = status.completed_files.saturating_add(1);
-    if status.total_files > 0 {
-        let ratio = status.completed_files.saturating_mul(85) / status.total_files;
+    if let Some(ratio) = status
+        .completed_files
+        .saturating_mul(85)
+        .checked_div(status.total_files)
+    {
         status.progress = u8::try_from(5 + ratio).unwrap_or(90).min(90);
     }
 }
@@ -322,7 +325,6 @@ fn safe_relative_path(value: &str) -> Result<PathBuf, String> {
         || value.contains('\\')
         || folded.starts_with("data/")
         || folded.starts_with("webview2/")
-        || folded == "drpa-updater.exe"
     {
         return Err(format!("更新清单包含不安全路径：{value}"));
     }

@@ -14,6 +14,7 @@ import {
   FolderInput,
   FolderPlus,
   FolderTree,
+  LoaderCircle,
   PackageCheck,
   Pencil,
   Play,
@@ -453,8 +454,22 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
   const [document, setDocument] = useState<NotebookDocument>(() => parseNotebook(content));
   const [executing, setExecuting] = useState<number | null>(null);
   const [variables, setVariables] = useState<StudioVariable[]>([]);
+  const [kernelStatus, setKernelStatus] = useState<"preparing" | "ready" | "error">("preparing");
 
   useEffect(() => { setDocument(parseNotebook(content)); }, [content]);
+
+  useEffect(() => {
+    let active = true;
+    setKernelStatus("preparing");
+    void desktopGateway.prepareStudioKernel(projectId).then(() => {
+      if (active) setKernelStatus("ready");
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setKernelStatus("error");
+      onNotice(`Kernel 预热失败，首次执行时将重试：${String(error)}`);
+    });
+    return () => { active = false; };
+  }, [onNotice, projectId]);
 
   const commit = (next: NotebookDocument, persist = false) => {
     const serialized = JSON.stringify(next, null, 2) + "\n";
@@ -491,7 +506,8 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
   const runCell = async (index: number) => {
     if (!projectId || executing !== null) return;
     setExecuting(index);
-    try { commit(await execute(document, index), true); }
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    try { commit(await execute(document, index), true); setKernelStatus("ready"); }
     catch (error) { onNotice(`Kernel 执行失败：${String(error)}`); }
     finally { setExecuting(null); }
   };
@@ -499,10 +515,12 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
   const runAll = async () => {
     if (!projectId || executing !== null) return;
     setExecuting(-1);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     try {
       let next = document;
       for (let index = 0; index < next.cells.length; index += 1) next = await execute(next, index);
       commit(next, true);
+      setKernelStatus("ready");
       onNotice("全部代码单元格执行完成");
     } catch (error) { onNotice(`Kernel 执行失败：${String(error)}`); }
     finally { setExecuting(null); }
@@ -522,19 +540,22 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
 
   const restart = async () => {
     await desktopGateway.restartStudioKernel(projectId);
+    setKernelStatus("preparing");
+    await desktopGateway.prepareStudioKernel(projectId);
+    setKernelStatus("ready");
     setVariables([]);
     onNotice("Python Kernel 已重启，内存变量已清空");
   };
 
   return (
-    <div className="notebook-workspace">
+    <div className="notebook-workspace" aria-busy={executing !== null}>
       <div className="notebook-toolbar">
         <span><BookOpen size={15} /> notebook.ipynb</span>
         <button type="button" onClick={() => addCell("code")}><Plus size={13} /> 代码</button>
         <button type="button" onClick={() => addCell("markdown")}><Plus size={13} /> Markdown</button>
         <button type="button" onClick={runAll} disabled={executing !== null}><Play size={13} /> 全部运行</button>
         <button type="button" onClick={restart} disabled={!projectId || executing !== null}><RefreshCw size={13} /> 重启 Kernel</button>
-        <em>DRPA Python 3.11 · sealed</em>
+        <em className={`kernel-state ${kernelStatus}`}>{(kernelStatus === "preparing" || executing !== null) && <LoaderCircle className="spin" size={12} />}{executing !== null ? "正在运行" : kernelStatus === "preparing" ? "Kernel 准备中" : kernelStatus === "error" ? "按运行重试" : "Kernel 就绪"}</em>
       </div>
       <div className="notebook-scroll">
         {document.cells.map((cell, index) => (
@@ -542,7 +563,7 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
             <div className="cell-gutter"><button type="button" aria-label={`运行单元格 ${index + 1}`} onClick={() => runCell(index)} disabled={cell.cell_type !== "code" || executing !== null}><Play size={13} fill="currentColor" /></button><span>[{cell.execution_count ?? " "}]</span></div>
             <div className="cell-body">
               {cell.cell_type === "code" ? (
-                <Editor height={`${Math.max(92, sourceText(cell.source).split("\n").length * 20 + 30)}px`} language="python" value={sourceText(cell.source)} onChange={(value) => updateSource(index, value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 13, minimap: { enabled: false }, automaticLayout: true, lineNumbers: "on", scrollBeyondLastLine: false, folding: false }} />
+                <Editor height={`${Math.min(420, Math.max(92, sourceText(cell.source).split("\n").length * 20 + 30))}px`} language="python" value={sourceText(cell.source)} onChange={(value) => updateSource(index, value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 13, minimap: { enabled: false }, automaticLayout: true, lineNumbers: "on", scrollBeyondLastLine: false, folding: false, scrollbar: { vertical: "auto", horizontal: "auto" } }} />
               ) : <textarea className="markdown-cell" value={sourceText(cell.source)} onChange={(event) => updateSource(index, event.target.value)} placeholder="Markdown 说明…" />}
               {cell.outputs.length > 0 && <div className="cell-output">{cell.outputs.map((output, outputIndex) => <NotebookOutput output={output} key={outputIndex} />)}</div>}
             </div>

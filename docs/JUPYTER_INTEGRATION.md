@@ -26,6 +26,8 @@ DRPA Next 没有把 `microsoft/vscode-jupyter` 扩展包直接塞进 Tauri。该
 - Kernel 重启与变量浏览。
 - 真实 IPython Kernel、Jupyter 消息协议与 ZMQ；支持标准 stream、execute_result、display_data、error 输出结构。
 - 执行结果回写 `.ipynb`，可在标准 Jupyter/VS Code 中继续打开。
+- 打开 Notebook 时异步预热 Kernel；首次运行的运行时定位、进程启动和输出等待都在 Rust blocking worker 中完成，WebView 主线程保持可交互。
+- Notebook toolbar 与单元格列表位于受约束的内部滚动区；大量单元格由 `.notebook-scroll` 承载，超长代码单元在 420 px 后启用 Monaco 内部滚动。
 - 所有代码都由随安装包封装的 sealed Python 运行，不访问系统 Python 或网络。
 
 ## 明确边界

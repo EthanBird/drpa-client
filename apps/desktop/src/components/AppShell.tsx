@@ -25,6 +25,7 @@ import { useEffect, useState, type MouseEvent, type PropsWithChildren } from "re
 
 import type { NavigationId } from "../domain/models";
 import { useAppStore } from "../app/store";
+import { desktopGateway } from "../infra/gateway";
 
 const primaryNavigation: Array<{
   id: NavigationId;
@@ -45,6 +46,7 @@ const infrastructureNavigation: Array<{
   label: string;
   icon: typeof Gauge;
 }> = [
+  { id: "agent", label: "AI Agent", icon: Bot },
   { id: "runtimes", label: "运行环境", icon: Boxes },
   { id: "secrets", label: "凭据保险箱", icon: KeyRound },
 ];
@@ -55,11 +57,16 @@ export function AppShell({ children }: PropsWithChildren) {
   const setCommandOpen = useAppStore((state) => state.setCommandOpen);
   const inDesktopHost = "__TAURI_INTERNALS__" in window;
   const [maximized, setMaximized] = useState(false);
+  const [currentUser, setCurrentUser] = useState({ displayName: "本地用户", accountName: "local", initials: "本地" });
 
   useEffect(() => {
     if (!inDesktopHost) return;
     void getCurrentWindow().isMaximized().then(setMaximized).catch(() => setMaximized(false));
   }, [inDesktopHost]);
+
+  useEffect(() => {
+    void desktopGateway.getCurrentUser().then(setCurrentUser).catch(() => undefined);
+  }, []);
 
   const controlWindow = async (action: "minimize" | "maximize" | "close") => {
     if (!inDesktopHost) return;
@@ -141,8 +148,8 @@ export function AppShell({ children }: PropsWithChildren) {
           <button type="button" onClick={() => setActiveNavigation("settings")}><Settings size={16} /><span>设置</span></button>
         </div>
         <div className="account-card">
-          <div className="avatar">EB</div>
-          <div><strong>Ethan Bird</strong><span>管理员</span></div>
+          <div className="avatar">{currentUser.initials}</div>
+          <div><strong>{currentUser.displayName}</strong><span title={currentUser.accountName}>本机用户</span></div>
           <ChevronDown size={14} />
         </div>
       </aside>

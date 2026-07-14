@@ -38,7 +38,7 @@
 
 Host 会检查平台、schema、版本、安全路径、文件大小和 SHA-256。更新器只替换清单列出的应用文件，并明确保护 `data/`、WebView2 和更新器安装副本；因此包、项目、运行历史和环境不会被日常应用更新波及。
 
-完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。Release 构建使用上一版本清单生成新增、变化和删除列表；只有依赖摘要实际变化时，对应 runtime 文件才进入差量包。
+完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。push 默认只发布轻量 update：主程序、更新器、合并后的完整库存及 SHA-256。只有手工选择 full 发布时才重新生成 Setup、runtime、WebView2 和示例资产。
 
 当前更新包由用户本地选择，尚未实现自动联网检查、数字签名和块级差分。预览版也未进行代码签名；只使用可信 GitHub Release，并在转移前后验证散列。
 

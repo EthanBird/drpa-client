@@ -13,6 +13,9 @@
 - 自动化计划只读预览页：展示任务、触发器、下一次运行、执行策略与健康状态，并在 Host/前端快照协议中新增 `automations` 字段。
 - 开发工作室文件菜单：新建文件、文件夹、选择导入与拖拽导入。
 - 运行工作台支持创建本地任务配置，并读取 manifest 参数默认值。
+- 基础设施增加轻量 RPAZ AI Agent：支持 OpenAI-compatible URL、model、会话级可选 key、项目绑定、六个内置工具和最多 8 轮 function calling。
+- AI Agent 工具支持项目文件读取/写入、manifest 校验、RPAZ 构建和 30 秒 sealed Python 辅助，并显示工具事件、用量与耗时。
+- 左下角账户卡片从 Host 获取当前系统用户，不再显示固定示例账户。
 
 ### 修复
 
@@ -20,13 +23,15 @@
 - 日常更新不再重复携带 Fixed Version WebView2、Chrome 和未变化的 sealed runtime；WebView2 保持安装器专用基线组件。
 - Windows Python 运行时事件统一为 UTF-8/ASCII-safe JSONL，并对异常字节进行容错解码，修复 Bing 每日一图运行失败。
 - Studio 文件列表和 RPAZ 构建过滤 Python 字节码缓存。
+- Notebook Kernel 初始化和单元执行移入后台 worker，首次运行不再阻塞 WebView；多单元列表和超长代码单元使用分层滚动约束，避免溢出工作区。
+- 桌面发布流水线默认只生成轻量 update 与完整合并库存；sealed runtime、Chrome、WebView2、NSIS Setup 和示例只在手工 full 发布时重建。
 
 ### 计划
 
 - Windows 自动化任务调度、重试和并发策略。
 - 更新包签名、更新通道和离线补丁目录。
 - RPAZ 能力权限、依赖扩展包和包来源治理。
-- 受控的 AI Agent 辅助开发与 RPAZ 工具调用。
+- AI Agent 流式输出、diff/checkpoint、长期会话与日志/Notebook 工具。
 
 ## [0.2.0-preview.10] - 2026-07-14
 

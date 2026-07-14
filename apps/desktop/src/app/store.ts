@@ -10,6 +10,9 @@ interface AppStore {
   inspectorOpen: boolean;
   dragActive: boolean;
   operationNotice: string;
+  agentBaseUrl: string;
+  agentModel: string;
+  agentProjectId: string;
   selectedPackageId: string;
   selectedProfileId: string;
   snapshot: WorkspaceSnapshot | null;
@@ -22,6 +25,9 @@ interface AppStore {
   setSnapshot: (snapshot: WorkspaceSnapshot) => void;
   setDragActive: (active: boolean) => void;
   setOperationNotice: (notice: string) => void;
+  setAgentBaseUrl: (url: string) => void;
+  setAgentModel: (model: string) => void;
+  setAgentProjectId: (projectId: string) => void;
 }
 
 export const useAppStore = create<AppStore>()(persist((set) => ({
@@ -31,6 +37,9 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   inspectorOpen: true,
   dragActive: false,
   operationNotice: "",
+  agentBaseUrl: "https://api.openai.com/v1",
+  agentModel: "gpt-5.4-mini",
+  agentProjectId: "",
   selectedPackageId: "",
   selectedProfileId: "",
   snapshot: null,
@@ -47,7 +56,15 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setSnapshot: (snapshot) => set({ snapshot }),
   setDragActive: (dragActive) => set({ dragActive }),
   setOperationNotice: (operationNotice) => set({ operationNotice }),
+  setAgentBaseUrl: (agentBaseUrl) => set({ agentBaseUrl }),
+  setAgentModel: (agentModel) => set({ agentModel }),
+  setAgentProjectId: (agentProjectId) => set({ agentProjectId }),
 }), {
   name: "drpa-ui-preferences",
-  partialize: (state) => ({ theme: state.theme }),
+  partialize: (state) => ({
+    theme: state.theme,
+    agentBaseUrl: state.agentBaseUrl,
+    agentModel: state.agentModel,
+    agentProjectId: state.agentProjectId,
+  }),
 }));

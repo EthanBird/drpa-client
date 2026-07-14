@@ -5,6 +5,7 @@ export type NavigationId =
   | "workbench"
   | "runs"
   | "automations"
+  | "agent"
   | "runtimes"
   | "secrets"
   | "settings";
@@ -65,6 +66,43 @@ export interface RuntimeStatus {
   environmentRoot: string;
   browserExecutable: string;
   message: string;
+}
+
+export interface CurrentUser {
+  displayName: string;
+  accountName: string;
+  initials: string;
+}
+
+export interface AgentMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AgentTurnRequest {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  projectId: string;
+  messages: AgentMessage[];
+}
+
+export interface AgentToolEvent {
+  callId: string;
+  name: string;
+  status: "completed" | "failed";
+  summary: string;
+  output: string;
+}
+
+export interface AgentTurnResult {
+  message: string;
+  tools: AgentToolEvent[];
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+  };
+  durationMs: number;
 }
 
 export type WindowsUpdatePhase =

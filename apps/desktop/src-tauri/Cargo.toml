@@ -22,5 +22,6 @@ serde_json.workspace = true
 sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+ureq = { version = "3", features = ["json"] }
 uuid.workspace = true
 zip = { version = "4", default-features = false, features = ["deflate"] }

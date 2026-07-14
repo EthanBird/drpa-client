@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use drpa_host::{HostState, RunLaunch};
 use drpa_package::{PackageManifest, safe_relative_path, validate_package_id};
@@ -18,12 +18,16 @@ use tauri::{Manager, State};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
+mod agent;
+
+#[derive(Clone)]
 struct AppPaths {
     workspace_root: PathBuf,
 }
 
+#[derive(Clone)]
 struct StudioKernelManager {
-    sessions: Mutex<HashMap<String, StudioKernel>>,
+    sessions: Arc<Mutex<HashMap<String, StudioKernel>>>,
 }
 
 struct StudioKernel {
@@ -81,6 +85,39 @@ struct StudioCellResult {
     outputs: Vec<serde_json::Value>,
     variables: Vec<StudioVariable>,
     duration_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CurrentUser {
+    display_name: String,
+    account_name: String,
+    initials: String,
+}
+
+#[tauri::command]
+fn get_current_user() -> CurrentUser {
+    let account_name = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Local User".to_owned());
+    let display_name = account_name.clone();
+    let parts = display_name.split_whitespace().collect::<Vec<_>>();
+    let initials = if parts.len() > 1 {
+        parts
+            .iter()
+            .filter_map(|part| part.chars().next())
+            .take(2)
+            .collect()
+    } else {
+        display_name.chars().take(2).collect()
+    };
+    CurrentUser {
+        display_name,
+        account_name,
+        initials,
+    }
 }
 
 #[tauri::command]
@@ -472,22 +509,59 @@ fn open_installed_package(
 }
 
 #[tauri::command]
-fn execute_studio_cell(
+async fn prepare_studio_kernel(
+    project_id: String,
+    paths: State<'_, AppPaths>,
+    kernels: State<'_, StudioKernelManager>,
+) -> Result<(), String> {
+    let paths = paths.inner().clone();
+    let kernels = kernels.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_project_id(&project_id)?;
+        let mut sessions = kernels
+            .sessions
+            .lock()
+            .map_err(|_| "Studio Kernel 状态已损坏".to_owned())?;
+        if let std::collections::hash_map::Entry::Vacant(entry) = sessions.entry(project_id.clone())
+        {
+            let kernel = spawn_studio_kernel(&project_id, &paths)?;
+            entry.insert(kernel);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("准备 Studio Kernel 任务失败：{error}"))?
+}
+
+#[tauri::command]
+async fn execute_studio_cell(
     project_id: String,
     code: String,
     paths: State<'_, AppPaths>,
     kernels: State<'_, StudioKernelManager>,
+) -> Result<StudioCellResult, String> {
+    let paths = paths.inner().clone();
+    let kernels = kernels.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        execute_studio_cell_blocking(project_id, code, &paths, &kernels)
+    })
+    .await
+    .map_err(|error| format!("执行 Notebook 单元任务失败：{error}"))?
+}
+
+fn execute_studio_cell_blocking(
+    project_id: String,
+    code: String,
+    paths: &AppPaths,
+    kernels: &StudioKernelManager,
 ) -> Result<StudioCellResult, String> {
     validate_project_id(&project_id)?;
     let mut sessions = kernels
         .sessions
         .lock()
         .map_err(|_| "Studio Kernel 状态已损坏".to_owned())?;
-    if !sessions.contains_key(&project_id) {
-        sessions.insert(
-            project_id.clone(),
-            spawn_studio_kernel(&project_id, &paths)?,
-        );
+    if let std::collections::hash_map::Entry::Vacant(entry) = sessions.entry(project_id.clone()) {
+        entry.insert(spawn_studio_kernel(&project_id, paths)?);
     }
     let request_id = Uuid::new_v4().simple().to_string();
     let result = (|| {
@@ -538,6 +612,20 @@ fn execute_studio_cell(
         sessions.remove(&project_id);
     }
     result
+}
+
+#[tauri::command]
+async fn run_agent_turn(
+    request: agent::AgentTurnRequest,
+    paths: State<'_, AppPaths>,
+) -> Result<agent::AgentTurnResult, String> {
+    let paths = paths.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = locate_runtime(&paths)?;
+        agent::run_agent_turn(request, paths.workspace_root.clone(), runtime.python)
+    })
+    .await
+    .map_err(|error| format!("Agent 后台任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -786,7 +874,7 @@ fn apply_windows_update(
             {
                 return Err(format!("更新文件 SHA-256 格式无效：{normalized}"));
             }
-            if folded.starts_with("data/") || folded == "drpa-updater.exe" {
+            if folded.starts_with("data/") || folded.starts_with("webview2/") {
                 return Err(format!("更新包试图覆盖受保护路径：{normalized}"));
             }
             total = total
@@ -836,10 +924,7 @@ fn apply_windows_update(
             if !remove_paths.insert(folded.clone()) || package_paths.contains(&folded) {
                 return Err(format!("删除清单包含重复或冲突路径：{normalized}"));
             }
-            if folded.starts_with("data/")
-                || folded.starts_with("webview2/")
-                || folded == "drpa-updater.exe"
-            {
+            if folded.starts_with("data/") || folded.starts_with("webview2/") {
                 return Err(format!("删除清单包含受保护路径：{normalized}"));
             }
         }
@@ -1449,7 +1534,7 @@ pub fn run() {
             app.manage(HostState::new(workspace_root.clone()));
             app.manage(AppPaths { workspace_root });
             app.manage(StudioKernelManager {
-                sessions: Mutex::new(HashMap::new()),
+                sessions: Arc::new(Mutex::new(HashMap::new())),
             });
             Ok(())
         })
@@ -1471,15 +1556,18 @@ pub fn run() {
             import_project_file,
             build_studio_project,
             run_studio_project,
+            prepare_studio_kernel,
             execute_studio_cell,
             restart_studio_kernel,
+            run_agent_turn,
             get_runtime_status,
             initialize_runtime,
             repair_runtime,
             apply_windows_update,
             get_windows_update_status,
             restart_for_windows_update,
-            get_data_directory
+            get_data_directory,
+            get_current_user
         ])
         .run(context)
         .expect("failed to run DRPA Next desktop host");

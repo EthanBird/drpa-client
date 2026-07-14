@@ -2,6 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { mockSnapshot } from "../data/mockSnapshot";
 import type {
+  AgentTurnRequest,
+  AgentTurnResult,
+  CurrentUser,
   PackageSummary,
   RuntimeStatus,
   StudioCellResult,
@@ -30,7 +33,9 @@ export interface DesktopGateway {
   buildStudioProject(projectId: string): Promise<string>;
   runStudioProject(projectId: string, parameters: Record<string, unknown>): Promise<string>;
   executeStudioCell(projectId: string, code: string): Promise<StudioCellResult>;
+  prepareStudioKernel(projectId: string): Promise<void>;
   restartStudioKernel(projectId: string): Promise<void>;
+  runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResult>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
   initializeRuntime(): Promise<RuntimeStatus>;
   repairRuntime(): Promise<RuntimeStatus>;
@@ -38,10 +43,27 @@ export interface DesktopGateway {
   getWindowsUpdateStatus(sessionId: string): Promise<WindowsUpdateStatus>;
   restartForWindowsUpdate(sessionId: string): Promise<void>;
   getDataDirectory(): Promise<string>;
+  getCurrentUser(): Promise<CurrentUser>;
 }
 
 function isTauriHost(): boolean {
   return "__TAURI_INTERNALS__" in window;
+}
+
+const mockStudioProjects: StudioProject[] = [];
+const mockStudioContents = new Map<string, Map<string, string>>();
+
+function addMockProject(project: StudioProject): StudioProject {
+  const existing = mockStudioProjects.find((item) => item.id === project.id);
+  if (!existing) mockStudioProjects.push(project);
+  if (!mockStudioContents.has(project.id)) {
+    mockStudioContents.set(project.id, new Map([
+      ["manifest.yaml", "schema: 2\nid: local.browser-preview\nname: Browser Preview\nversion: 0.1.0\nentrypoint:\n  runtime: python\n  module: main.py\n  callable: main\n"],
+      ["main.py", "def main(ctx):\n    ctx.log.info('你好，DRPA')\n"],
+      ["notebook.ipynb", '{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}\n'],
+    ]));
+  }
+  return structuredClone(existing ?? project);
 }
 
 const mockGateway: DesktopGateway = {
@@ -60,25 +82,56 @@ const mockGateway: DesktopGateway = {
     await new Promise((resolve) => window.setTimeout(resolve, 180));
   },
   async listStudioProjects() {
-    return [];
+    return structuredClone(mockStudioProjects);
   },
   async createStudioProject(name) {
-    return { id: `project-${Date.now().toString(16).padStart(24, "0").slice(-24)}`, name, files: ["main.py", "manifest.yaml", "notebook.ipynb"] };
+    return addMockProject({ id: `project-${Date.now().toString(16).padStart(24, "0").slice(-24)}`, name, files: ["main.py", "manifest.yaml", "notebook.ipynb"] });
   },
   async openInstalledPackage(packageId) {
     const item = mockSnapshot.packages.find((candidate) => candidate.id === packageId);
-    return { id: "project-000000000000000000000001", name: item?.name ?? packageId, files: ["main.py", "manifest.yaml", "notebook.ipynb"] };
+    return addMockProject({ id: `project-${Date.now().toString(16).padStart(24, "0").slice(-24)}`, name: item?.name ?? packageId, files: ["main.py", "manifest.yaml", "notebook.ipynb"] });
   },
-  async readProjectFile(_projectId, relativePath) {
-    if (relativePath === "manifest.yaml") return "schema: 2\n";
-    if (relativePath.endsWith(".ipynb")) return '{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}\n';
-    return "def main(ctx):\n    ctx.log.info('你好，DRPA')\n";
+  async readProjectFile(projectId, relativePath) {
+    return mockStudioContents.get(projectId)?.get(relativePath) ?? "";
   },
-  async writeProjectFile() {},
-  async createProjectDirectory() {},
-  async renameProjectEntry() {},
-  async deleteProjectEntry() {},
-  async deleteStudioProject() {},
+  async writeProjectFile(projectId, relativePath, content) {
+    const project = mockStudioProjects.find((item) => item.id === projectId);
+    if (project && !project.files.includes(relativePath)) project.files.push(relativePath);
+    mockStudioContents.get(projectId)?.set(relativePath, content);
+  },
+  async createProjectDirectory(projectId, relativePath) {
+    const project = mockStudioProjects.find((item) => item.id === projectId);
+    const directory = `${relativePath.replace(/\/$/, "")}/`;
+    if (project && !project.files.includes(directory)) project.files.push(directory);
+  },
+  async renameProjectEntry(projectId, relativePath, targetPath) {
+    const project = mockStudioProjects.find((item) => item.id === projectId);
+    if (!project) return;
+    const source = relativePath.replace(/\/$/, "");
+    project.files = project.files.map((path) => {
+      const normalized = path.replace(/\/$/, "");
+      return normalized === source || normalized.startsWith(`${source}/`)
+        ? `${targetPath}${normalized.slice(source.length)}${path.endsWith("/") ? "/" : ""}`
+        : path;
+    });
+    const contents = mockStudioContents.get(projectId);
+    if (contents?.has(source)) {
+      contents.set(targetPath, contents.get(source) ?? "");
+      contents.delete(source);
+    }
+  },
+  async deleteProjectEntry(projectId, relativePath) {
+    const project = mockStudioProjects.find((item) => item.id === projectId);
+    if (!project) return;
+    const source = relativePath.replace(/\/$/, "");
+    project.files = project.files.filter((path) => !path.replace(/\/$/, "").startsWith(source));
+    mockStudioContents.get(projectId)?.delete(source);
+  },
+  async deleteStudioProject(projectId) {
+    const index = mockStudioProjects.findIndex((item) => item.id === projectId);
+    if (index >= 0) mockStudioProjects.splice(index, 1);
+    mockStudioContents.delete(projectId);
+  },
   async importProjectFile(_projectId, sourcePath, targetDirectory) {
     const fileName = sourcePath.split(/[\\/]/).pop() ?? "imported.file";
     return targetDirectory ? `${targetDirectory}/${fileName}` : fileName;
@@ -92,7 +145,20 @@ const mockGateway: DesktopGateway = {
   async executeStudioCell(_projectId, code) {
     return { executionCount: 1, stdout: "", stderr: "", result: `预览模式：${code.length} 个字符`, traceback: [], outputs: [], variables: [], durationMs: 1 };
   },
+  async prepareStudioKernel() {},
   async restartStudioKernel() {},
+  async runAgentTurn(request) {
+    await new Promise((resolve) => window.setTimeout(resolve, 220));
+    const prompt = request.messages.at(-1)?.content ?? "";
+    return {
+      message: request.projectId
+        ? `已连接浏览器预览 Agent。当前问题：${prompt}`
+        : `已收到问题：${prompt}\n选择一个开发项目后可启用 RPAZ 工具。`,
+      tools: [],
+      usage: { promptTokens: 18, completionTokens: 24 },
+      durationMs: 220,
+    };
+  },
   async getRuntimeStatus() {
     return { state: "ready", bundleVersion: "浏览器预览", pythonVersion: "3.11.9", runtimeRoot: "内存预览", environmentRoot: "内存预览", browserExecutable: "内存预览", message: "浏览器预览使用模拟运行环境" };
   },
@@ -103,6 +169,9 @@ const mockGateway: DesktopGateway = {
   async restartForWindowsUpdate() {},
   async getDataDirectory() {
     return "浏览器预览数据（内存）";
+  },
+  async getCurrentUser() {
+    return { displayName: "本地用户", accountName: "browser-preview", initials: "本地" };
   },
 };
 
@@ -125,7 +194,9 @@ const tauriGateway: DesktopGateway = {
   buildStudioProject: (projectId) => invoke<string>("build_studio_project", { projectId }),
   runStudioProject: (projectId, parameters) => invoke<string>("run_studio_project", { projectId, parameters }),
   executeStudioCell: (projectId, code) => invoke<StudioCellResult>("execute_studio_cell", { projectId, code }),
+  prepareStudioKernel: (projectId) => invoke<void>("prepare_studio_kernel", { projectId }),
   restartStudioKernel: (projectId) => invoke<void>("restart_studio_kernel", { projectId }),
+  runAgentTurn: (request) => invoke<AgentTurnResult>("run_agent_turn", { request }),
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),
   initializeRuntime: () => invoke<RuntimeStatus>("initialize_runtime"),
   repairRuntime: () => invoke<RuntimeStatus>("repair_runtime"),
@@ -133,6 +204,7 @@ const tauriGateway: DesktopGateway = {
   getWindowsUpdateStatus: (sessionId) => invoke<WindowsUpdateStatus>("get_windows_update_status", { sessionId }),
   restartForWindowsUpdate: (sessionId) => invoke<void>("restart_for_windows_update", { sessionId }),
   getDataDirectory: () => invoke<string>("get_data_directory"),
+  getCurrentUser: () => invoke<CurrentUser>("get_current_user"),
 };
 
 export const desktopGateway: DesktopGateway = isTauriHost() ? tauriGateway : mockGateway;

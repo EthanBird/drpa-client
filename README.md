@@ -12,9 +12,10 @@ DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管�
 - 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
 - 工作室可新建项目、编辑源码和 Notebook、直接运行工作副本、导出 `.rpaz`，也可将已安装包复制为可编辑项目。
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路。
+- 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model 与会话级可选 key，通过六个项目受限工具完成读取、写入、校验、构建和 sealed Python 辅助。
 - 清单差量 `.drpa-update` 更新，包含可视化进度、散列校验、直接文件替换、失败回滚和末段自动重启；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。
 
-Windows 预览版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v0.2.0-preview-10>
+Windows 预览版下载：<https://github.com/EthanBird/drpa-client/releases>
 
 > 旧安装首次升级仍由旧更新器执行；新轻量包不再重复携带 runtime/浏览器文件。首次过渡成功后，后续更新使用包内独立 Worker 和可视化进度；若旧版过渡失败，运行最新 Setup 建立新基线。
 
@@ -25,7 +26,7 @@ React / TypeScript UI
         │ typed Tauri invoke
         ▼
 Rust Host ── package / runtime / run / update policy
-        │ versioned JSONL + Jupyter wire protocol
+        │ versioned JSONL + Jupyter wire protocol + Agent tool broker
         ▼
 Sealed Python 3.11 ── RPAZ worker / IPython kernel / Chrome
 ```
@@ -78,6 +79,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - [功能扩展路线](docs/ROADMAP.md)：离线基础环境、自动化任务和 AI Agent 辅助开发。
 - [RPAZ 开发](docs/RPAZ_DEVELOPMENT.md)：schema v2、Runtime Context、直接运行和示例包。
 - [Jupyter 集成](docs/JUPYTER_INTEGRATION.md)：真实能力、VS Code Jupyter 对照和明确边界。
+- [AI Agent 设计](docs/AI_AGENT_DESIGN.md)：OpenAI-compatible 对话循环、RPAZ 工具和配置边界。
 - [离线运行时](offline/README.md)：依赖策略、构建证明和缺包处理流程。
 - [Windows 发布说明](docs/PORTABLE_RELEASE.md)：安装、数据目录和热更新。
 - [架构设计](docs/architecture/DRPA_NEXT.md)：长期模块边界和安全原则。
@@ -88,4 +90,4 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - 只发布 Windows x64；Linux/macOS 仍是未来适配目标，不属于当前交付承诺。
 - 当前更新入口使用本地 `.drpa-update`，已支持逐文件差量；尚未实现在线更新源、签名信任链和大文件块级差分。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
-- 自动调度、浏览器录制器、包签名/私有仓库和 AI Agent 均处于设计阶段，详见路线文档。
+- AI Agent 当前是单 Agent MVP，尚未提供流式输出、diff/checkpoint、长期会话或运行日志工具；自动调度、浏览器录制器、包签名和私有仓库仍处于路线阶段。

@@ -1,17 +1,24 @@
 import { Activity, ArrowUpRight, Box, CheckCircle2, Clock3, Play, TrendingUp, Zap } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { useAppStore } from "../app/store";
+import { desktopGateway } from "../infra/gateway";
 
 export function OverviewPage() {
   const snapshot = useAppStore((state) => state.snapshot);
   const setActiveNavigation = useAppStore((state) => state.setActiveNavigation);
+  const [displayName, setDisplayName] = useState("本地用户");
+
+  useEffect(() => {
+    void desktopGateway.getCurrentUser().then((user) => setDisplayName(user.displayName)).catch(() => undefined);
+  }, []);
 
   if (!snapshot) return <div className="page loading-page"><div className="skeleton skeleton-title" /></div>;
 
   return (
     <div className="page overview-page">
       <header className="page-header overview-header">
-        <div><div className="eyebrow">本地自动化工作区</div><h1>你好，Ethan</h1><p>工作区已就绪，当前有 {snapshot.stats.activeRuns} 个活动任务。</p></div>
+        <div><div className="eyebrow">本地自动化工作区</div><h1>你好，{displayName}</h1><p>工作区已就绪，当前有 {snapshot.stats.activeRuns} 个活动任务。</p></div>
         <button className="button primary" type="button" onClick={() => setActiveNavigation("workbench")}><Play size={15} fill="currentColor" /> 打开运行工作台</button>
       </header>
       <section className="metric-grid" aria-label="工作区指标">

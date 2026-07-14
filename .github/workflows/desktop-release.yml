@@ -2,6 +2,15 @@ name: Publish Windows offline desktop preview
 
 on:
   workflow_dispatch:
+    inputs:
+      release_kind:
+        description: Release payload
+        type: choice
+        required: true
+        default: update
+        options:
+          - update
+          - full
   push:
     branches:
       - codex/drpa-next-platform
@@ -43,6 +52,7 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       DRPA_VERSION: 0.2.0
+      RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || 'update' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,8 +60,10 @@ jobs:
           python-version: "3.11.9"
           cache: pip
       - name: Install pinned offline bundle tooling
+        if: env.RELEASE_KIND == 'full'
         run: python -m pip install "uv==0.11.28"
       - name: Build and air-gap test sealed runtime
+        if: env.RELEASE_KIND == 'full'
         run: python tools/offline/build_runtime_bundle.py --platform "${{ matrix.platform }}" --work-dir "${{ runner.temp }}/drpa-offline"
       - uses: actions/setup-node@v4
         with:
@@ -73,8 +85,40 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo build -p drpa-desktop --bin drpa-updater --release --target "${{ matrix.target }}"
 
+      - name: Assemble lightweight Windows update
+        if: runner.os == 'Windows' && env.RELEASE_KIND == 'update'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Join-Path $env:RUNNER_TEMP "desktop-assets"
+          $overlay = Join-Path $env:RUNNER_TEMP "DRPA-Next-update-overlay"
+          $previous = Join-Path $env:RUNNER_TEMP "previous-release"
+          New-Item -ItemType Directory -Force -Path $assets, $overlay, $previous | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/drpa-desktop.exe" "$overlay/DRPA Next.exe"
+          Copy-Item "target/${{ matrix.target }}/release/drpa-updater.exe" "$overlay/drpa-updater.exe"
+
+          $latestTag = gh release list --repo $env:GITHUB_REPOSITORY --limit 100 --json tagName --jq '[.[] | select(.tagName | startswith("desktop-v"))][0].tagName'
+          if ($LASTEXITCODE -ne 0 -or -not $latestTag) { throw "A full desktop release catalog is required before publishing an update" }
+          $catalogAsset = gh release view $latestTag --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name | select(endswith("install-manifest.json"))' | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0 -or -not $catalogAsset) { throw "Latest desktop release does not contain an install catalog: $latestTag" }
+          gh release download $latestTag --repo $env:GITHUB_REPOSITORY --pattern $catalogAsset --dir $previous
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the base install catalog" }
+          $baseManifest = Get-ChildItem $previous -File -Filter "*-install-manifest.json" | Select-Object -First 1
+          if (-not $baseManifest) { throw "Downloaded base install catalog is missing" }
+
+          $update = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64.drpa-update"
+          python tools/windows/build_update_package.py --stage $overlay --output $update --version "$env:DRPA_VERSION-preview-$env:GITHUB_RUN_NUMBER" --base-manifest $baseManifest.FullName --worker "$overlay/drpa-updater.exe" --partial
+          if ($LASTEXITCODE -ne 0) { throw "Failed to build lightweight Windows update" }
+          $updateHash = (Get-FileHash -Algorithm SHA256 $update).Hash.ToLowerInvariant()
+          "$updateHash  $([IO.Path]::GetFileName($update))" | Set-Content -Encoding ascii "$update.sha256"
+          $catalog = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-install-manifest.json"
+          Copy-Item "$overlay/install-manifest.json" $catalog
+          $catalogHash = (Get-FileHash -Algorithm SHA256 $catalog).Hash.ToLowerInvariant()
+          "$catalogHash  $([IO.Path]::GetFileName($catalog))" | Set-Content -Encoding ascii "$catalog.sha256"
+
       - name: Assemble registry-free Windows installer
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.RELEASE_KIND == 'full'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -161,6 +205,8 @@ jobs:
     name: Publish GitHub prerelease
     needs: build
     runs-on: ubuntu-latest
+    env:
+      RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || 'update' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -170,13 +216,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts/example
-          cp examples/bing_daily_image.rpaz artifacts/example/drpa-example-bing-daily-image-0.2.0.rpaz
-          cd artifacts/example
-          sha256sum drpa-example-bing-daily-image-0.2.0.rpaz > drpa-example-bing-daily-image-0.2.0.rpaz.sha256
-          cd ../..
+          expected=4
+          if [[ "$RELEASE_KIND" == "full" ]]; then
+            mkdir -p artifacts/example
+            cp examples/bing_daily_image.rpaz artifacts/example/drpa-example-bing-daily-image-0.2.0.rpaz
+            cd artifacts/example
+            sha256sum drpa-example-bing-daily-image-0.2.0.rpaz > drpa-example-bing-daily-image-0.2.0.rpaz.sha256
+            cd ../..
+            expected=8
+          fi
           mapfile -t assets < <(find artifacts -type f | sort)
-          test "${#assets[@]}" -eq 8
+          test "${#assets[@]}" -eq "$expected"
       - name: Publish immutable desktop assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -185,10 +235,16 @@ jobs:
           set -euo pipefail
           tag="desktop-v0.2.0-preview-${GITHUB_RUN_NUMBER}"
           mapfile -t assets < <(find artifacts -type f | sort)
-          notes=$'Windows-focused DRPA Next offline preview.\n\nIncludes a registry-free Windows x64 guided installer, a verified inventory/delta .drpa-update package, its complete install-manifest.json, sealed Python 3.11 with real Jupyter Kernel dependencies, Fixed Version WebView2 and the Bing daily image RPAZ example. WebView2 is an installer-only baseline component; Chrome/runtime files enter an update only when their catalog digest changes. The updater shows file-level progress, keeps the application open during replacement, and automatically rolls back on failure.\n\nThis preview is unsigned. Verify the matching SHA-256 file before moving a package to an offline machine.'
+          if [[ "$RELEASE_KIND" == "full" ]]; then
+            title="DRPA Next 0.2.0 离线预览 · ${GITHUB_RUN_NUMBER}"
+            notes=$'Windows-focused DRPA Next offline preview.\n\nIncludes a registry-free Windows x64 guided installer, a verified inventory/delta .drpa-update package, its complete install-manifest.json, sealed Python 3.11 with real Jupyter Kernel dependencies, Fixed Version WebView2 and the Bing daily image RPAZ example. WebView2 is an installer-only baseline component; Chrome/runtime files enter an update only when their catalog digest changes. The updater shows file-level progress and automatically rolls back on failure.\n\nThis preview is unsigned. Verify the matching SHA-256 file before moving a package to an offline machine.'
+          else
+            title="DRPA Next 0.2.0 轻量更新 · ${GITHUB_RUN_NUMBER}"
+            notes=$'Windows x64 lightweight update.\n\nContains only changed application/updater files, a merged complete install inventory, and matching SHA-256 files. Existing sealed Python, Chrome runtime, Fixed Version WebView2 and user data remain in place. Apply the .drpa-update file from Settings; the visual progress window reports verification, replacement, restart and rollback state.'
+          fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "DRPA Next 0.2.0 离线预览 · ${GITHUB_RUN_NUMBER}" --notes "$notes" --prerelease
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes" --prerelease
           else
-            gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "DRPA Next 0.2.0 离线预览 · ${GITHUB_RUN_NUMBER}" --notes "$notes"
+            gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "$title" --notes "$notes"
           fi

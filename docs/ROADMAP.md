@@ -145,9 +145,11 @@ RunAttempt
 
 ## 4. AI Agent 辅助开发
 
+> 状态：轻量 MVP 已实现。当前具备 OpenAI-compatible URL/model/可选会话 key、项目绑定、最多 8 轮工具循环，以及 `rpaz_list_files/read_file/write_file/validate/build/python` 六个 Host 工具。流式输出、diff/checkpoint、日志/Notebook 工具和长期会话仍按本节后续门槛演进。实现说明见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
+
 ### 4.1 参考与取舍
 
-[Hermes Desktop](https://github.com/fathah/hermes-desktop) 展示了桌面端统一管理本地/远程 Agent、会话、profiles、memory、skills/tools、计划任务和工具进度的产品形态。DRPA 可以借鉴这些边界与可见性，但 Hermes Desktop 是第三方参考，不是 DRPA 依赖，也不应照搬其完整聊天或网关体系。
+[OpenCode](https://github.com/anomalyco/opencode) 和 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 展示了开发对话、会话与工具事件的产品形态；[Harness](https://github.com/harness/harness) 提供基础设施产品组织参考。DRPA 借鉴这些边界与可见性，但不引入其完整网关、部署或通用工具体系。
 
 DRPA Agent 的首要目标是 **辅助开发和诊断 RPAZ**：生成项目、解释 manifest、运行 notebook、分析失败日志、建议 selector，并在用户批准后执行受控操作。它不是默认获得桌面控制权的通用个人助手。
 

@@ -40,6 +40,9 @@ describe("DRPA Next desktop shell", () => {
       selectedPackageId: "com.drpa.invoice-hub",
       selectedProfileId: "monthly",
       snapshot: null,
+      agentBaseUrl: "https://api.openai.com/v1",
+      agentModel: "gpt-5.4-mini",
+      agentProjectId: "",
     });
   });
 
@@ -87,6 +90,44 @@ describe("DRPA Next desktop shell", () => {
 
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
     expect(screen.queryByText("紧凑布局")).not.toBeInTheDocument();
+  });
+
+  it("shows the current system account instead of a hard-coded profile", async () => {
+    vi.spyOn(desktopGateway, "getCurrentUser").mockResolvedValue({ displayName: "ci-runner", accountName: "CI\\ci-runner", initials: "CR" });
+    render(<App />);
+
+    expect(await screen.findByText("ci-runner")).toBeVisible();
+    expect(screen.getByText("本机用户")).toBeVisible();
+    expect(screen.getByText("CR")).toBeVisible();
+  });
+
+  it("runs the lightweight AI Agent with persisted endpoint settings and a session key", async () => {
+    const project = { id: "project-000000000000000000000001", name: "Agent 测试项目", files: ["manifest.yaml", "main.py"] };
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
+    const runAgent = vi.spyOn(desktopGateway, "runAgentTurn").mockResolvedValue({
+      message: "项目校验通过。",
+      tools: [{ callId: "call-1", name: "rpaz_validate", status: "completed", summary: "manifest.yaml 校验通过", output: '{"ok":true}' }],
+      usage: { promptTokens: 20, completionTokens: 10 },
+      durationMs: 31,
+    });
+    useAppStore.setState({ activeNavigation: "agent" });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "AI Agent" })).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Agent 开发项目"), { target: { value: project.id } });
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "session-key" } });
+    const composer = screen.getByPlaceholderText(/向 Agent 描述/);
+    fireEvent.change(composer, { target: { value: "校验当前项目" } });
+    fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true });
+
+    await waitFor(() => expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-5.4-mini",
+      apiKey: "session-key",
+      projectId: project.id,
+    })));
+    expect(await screen.findByText("项目校验通过。")).toBeVisible();
+    expect(screen.getByText("manifest.yaml 校验通过")).toBeVisible();
   });
 
   it("shows automation schedules from the workspace snapshot", async () => {
@@ -141,6 +182,29 @@ describe("DRPA Next desktop shell", () => {
 
     await waitFor(() => expect(writeFile).toHaveBeenCalledWith(project.id, "worker.py", ""));
     expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("keeps large notebooks inside a scroll region and paints running state before execution completes", async () => {
+    const project = { id: "project-000000000000000000000001", name: "Notebook 压力测试", files: ["notebook.ipynb"] };
+    const notebook = JSON.stringify({
+      cells: Array.from({ length: 30 }, (_, index) => ({ cell_type: "code", execution_count: null, metadata: {}, outputs: [], source: `value_${index} = ${index}` })),
+      metadata: {}, nbformat: 4, nbformat_minor: 5,
+    });
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
+    vi.spyOn(desktopGateway, "readProjectFile").mockResolvedValue(notebook);
+    vi.spyOn(desktopGateway, "prepareStudioKernel").mockResolvedValue();
+    let resolveExecution!: (value: Awaited<ReturnType<typeof desktopGateway.executeStudioCell>>) => void;
+    vi.spyOn(desktopGateway, "executeStudioCell").mockImplementation(() => new Promise((resolve) => { resolveExecution = resolve; }));
+    const { container } = render(<StudioPage />);
+
+    expect(await screen.findByText("Notebook 压力测试")).toBeVisible();
+    await waitFor(() => expect(container.querySelectorAll(".notebook-cell")).toHaveLength(30));
+    expect(container.querySelector(".notebook-scroll")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "运行单元格 1" }));
+    expect(await screen.findByText("正在运行")).toBeVisible();
+
+    resolveExecution({ executionCount: 1, stdout: "", stderr: "", result: "0", traceback: [], outputs: [], variables: [], durationMs: 8 });
+    await waitFor(() => expect(screen.getByText("Kernel 就绪")).toBeVisible());
   });
 
   it("deletes a Studio project from its context menu after in-app confirmation", async () => {

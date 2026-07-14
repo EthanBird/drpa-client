@@ -11,7 +11,7 @@ from typing import Any
 
 CATALOG_NAME = "install-manifest.json"
 PROTECTED_PREFIXES = ("data/", "webview2/")
-PROTECTED_FILES = {"drpa-updater.exe"}
+PROTECTED_FILES: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -83,13 +83,27 @@ def collect_catalog(stage: Path) -> list[CatalogEntry]:
     return entries
 
 
-def make_catalog(stage: Path, version: str) -> tuple[dict[str, Any], bytes]:
+def make_catalog(
+    stage: Path,
+    version: str,
+    *,
+    base: dict[str, Any] | None = None,
+    partial: bool = False,
+) -> tuple[dict[str, Any], bytes]:
     entries = collect_catalog(stage)
+    if partial:
+        if base is None:
+            raise ValueError("partial update requires a base install manifest")
+        merged = {item["path"]: item for item in base.get("files", [])}
+        merged.update({entry.path: entry.as_dict() for entry in entries})
+        catalog_files = [merged[path] for path in sorted(merged)]
+    else:
+        catalog_files = [entry.as_dict() for entry in entries]
     catalog = {
         "schema": 1,
         "version": version,
         "target": "windows-x86_64",
-        "files": [entry.as_dict() for entry in entries],
+        "files": catalog_files,
     }
     source = (json.dumps(catalog, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     return catalog, source
@@ -111,10 +125,11 @@ def build(
     *,
     base_manifest: Path | None = None,
     worker: Path | None = None,
+    partial: bool = False,
 ) -> dict[str, Any]:
     stage = stage.resolve()
     base = read_catalog(base_manifest)
-    catalog, catalog_source = make_catalog(stage, version)
+    catalog, catalog_source = make_catalog(stage, version, base=base, partial=partial)
     (stage / CATALOG_NAME).write_bytes(catalog_source)
 
     current = {item["path"]: item for item in catalog["files"]}
@@ -139,10 +154,8 @@ def build(
     }
     files.append(catalog_item)
 
-    remove = [
-        path
-        for path in sorted(previous.keys() - current.keys())
-        if not is_protected(path)
+    remove = [] if partial else [
+        path for path in sorted(previous.keys() - current.keys()) if not is_protected(path)
     ]
 
     worker_path = (worker or stage / "drpa-updater.exe").resolve()
@@ -184,6 +197,7 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--base-manifest", type=Path)
     parser.add_argument("--worker", type=Path)
+    parser.add_argument("--partial", action="store_true", help="merge the staged overlay into the base catalog without deleting omitted files")
     args = parser.parse_args()
     build(
         args.stage,
@@ -191,6 +205,7 @@ def main() -> int:
         args.version,
         base_manifest=args.base_manifest,
         worker=args.worker,
+        partial=args.partial,
     )
     return 0
 

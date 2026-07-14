@@ -152,6 +152,8 @@ React notebook UI
 
 Rust 与 Python bridge 之间使用 JSONL；bridge 与 IPython Kernel 之间使用真实 Jupyter wire protocol。当前支持标准 `stream`、`execute_result`、`display_data`、`error` 和变量读取。
 
+`execute_studio_cell` 是异步 Tauri command，所有运行时定位、Kernel 创建和阻塞式 JSONL 读取都进入 blocking worker。Notebook 打开后在后台调用 `prepare_studio_kernel` 预热；React 先提交“正在运行”状态并等待一帧再 invoke。UI 使用完整的 `minmax(0, 1fr)`/`min-height: 0` 容器链和内部滚动区，大量单元格不会扩张主工作区；单个 Monaco 编辑器最高 420 px，超出部分在编辑器内滚动。
+
 这不是 VS Code Extension Host。新增 notebook 能力时优先遵守 nbformat 和 Jupyter 消息规范，不要复制依赖 `NotebookController`、VS Code 命令或扩展市场的代码。详细对照见 [`JUPYTER_INTEGRATION.md`](JUPYTER_INTEGRATION.md)。
 
 ## 7. Windows 更新
@@ -162,14 +164,18 @@ Rust 与 Python bridge 之间使用 JSONL；bridge 与 IPython Kernel 之间使�
 
 默认策略：
 
-1. `data/`、Fixed Version WebView2 和更新器安装副本始终受保护。
+1. `data/` 和 Fixed Version WebView2 始终受保护；更新器从会话副本运行，因此安装目录中的更新器属于可更新受管文件。
 2. 没有基线清单时，sealed runtime 与 Chrome 不进入日常更新包；有基线时也只有摘要变化的文件才会进入差量包。
 3. 更新包内嵌当前版本的独立 Worker，因此 Worker 自身可以随包升级，而不覆盖正在使用的安装副本。
 4. Host 在应用保持打开时校验路径、大小与 SHA-256，停止 Studio Kernel，并在 `data/updates/sessions/<id>/` 创建可审计会话。
 5. Worker 直接替换普通文件并持续写入 JSON 进度；只有主 EXE 需要替换时，前端显示“准备重启”后才退出。
 6. 任一替换失败都会按逆序恢复备份并把失败原因写回进度窗口；主程序退出后发生失败时会重新启动旧版本。
 
-CI 会从上一 Release 下载安装清单生成精确差量，并把新清单及 SHA-256 作为独立 Release 资产。
+CI 默认执行 `update` 发布：只 stage 主程序和更新器，使用 `--partial` 合并上一 Release 的完整库存，不删除 stage 未包含的 runtime、Chrome、WebView2 或文档。只有手工 `workflow_dispatch(release_kind=full)` 才构建 sealed runtime、WebView2、NSIS Setup 和示例资产。
+
+## 7.1 AI Agent
+
+Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker 调用 OpenAI-compatible Chat Completions，并执行最多 8 轮 RPAZ function tools。当前工具仅覆盖项目文件、manifest 校验、RPAZ 构建和 30 秒 sealed Python；API key 只保存在前端会话内。实现与约束见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
 
 当前仍从本地介质导入更新；在线 feed 与清单签名属于后续路线，见 [`ROADMAP.md`](ROADMAP.md)。
 
@@ -217,15 +223,15 @@ python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 
 - `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查。
 - `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
-- `.github/workflows/desktop-release.yml`：组合 runtime、WebView2、Host、更新器和示例，验证最终安装布局，生成安装器和更新包并发布 prerelease。
+- `.github/workflows/desktop-release.yml`：push 默认发布四个轻量 update 资产；手工选择 `full` 时才组合 runtime、WebView2、Host、更新器、示例和安装器。
 
 发布前检查：
 
 1. 更新 `CHANGELOG.md`。
 2. 修改版本时同步 root/npm/Tauri/runtime spec/workflow 中的版本来源，避免只改文件名。
 3. 确认 `offline/requirements/runtime.txt` 已通过精确依赖政策检查。
-4. 观察 Windows workflow 中 runtime bootstrap、Jupyter smoke、NSIS guard 全部通过。
-5. Release 必须同时包含 Setup、`.drpa-update`、`install-manifest.json`、示例 RPAZ 及四个 SHA-256 文件。
+4. 日常发布观察轻量 update 构建、基线库存合并与四个资产校验通过；完整发布还需观察 runtime bootstrap、Jupyter smoke、NSIS guard。
+5. update Release 包含 `.drpa-update`、`install-manifest.json` 及两个 SHA-256；full Release 额外包含 Setup、示例 RPAZ 及对应 SHA-256。
 6. 在独立 Windows 测试机安装到非系统盘，执行环境验证、Bing 示例、Notebook 两单元和一次更新回滚演练。
 7. 预览版未签名时必须在发行说明中显式提示。
 

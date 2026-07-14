@@ -47,7 +47,7 @@ def test_default_update_omits_repeated_runtime_components(tmp_path: Path) -> Non
     assert "runtime/browser/chrome.exe" not in paths
     assert "webview2/msedgewebview2.exe" not in paths
     assert "data/projects/keep.txt" not in paths
-    assert "drpa-updater.exe" not in paths
+    assert "drpa-updater.exe" in paths
     assert (stage / "install-manifest.json").is_file()
     inventory = json.loads((stage / "install-manifest.json").read_text(encoding="utf-8"))
     inventory_paths = {item["path"] for item in inventory["files"]}
@@ -61,6 +61,7 @@ def test_default_update_omits_repeated_runtime_components(tmp_path: Path) -> Non
         names = set(archive.namelist())
         assert "worker/drpa-updater.exe" in names
         assert "files/DRPA Next.exe" in names
+        assert "files/drpa-updater.exe" in names
         assert "files/runtime/browser/chrome.exe" not in names
 
 
@@ -101,3 +102,34 @@ def test_catalog_delta_updates_changed_browser_but_keeps_webview_installer_only(
 
     assert "runtime/browser/chrome.exe" in paths
     assert "webview2/msedgewebview2.exe" not in paths
+
+
+def test_partial_update_merges_overlay_into_complete_inventory(tmp_path: Path) -> None:
+    full_stage = tmp_path / "full"
+    write_fixture(full_stage)
+    base_catalog, _ = MODULE.make_catalog(full_stage, "0.2.0-preview-10")
+    base = tmp_path / "base.json"
+    base.write_text(json.dumps(base_catalog), encoding="utf-8")
+
+    overlay = tmp_path / "overlay"
+    overlay.mkdir()
+    (overlay / "DRPA Next.exe").write_bytes(b"desktop-v3")
+    (overlay / "drpa-updater.exe").write_bytes(b"worker-v3")
+    output = tmp_path / "partial.drpa-update"
+    manifest = MODULE.build(
+        overlay,
+        output,
+        "0.2.0-preview-11",
+        base_manifest=base,
+        worker=overlay / "drpa-updater.exe",
+        partial=True,
+    )
+
+    paths = {item["path"] for item in manifest["files"]}
+    assert paths == {"DRPA Next.exe", "drpa-updater.exe", "install-manifest.json"}
+    assert manifest["remove"] == []
+    merged = json.loads((overlay / "install-manifest.json").read_text(encoding="utf-8"))
+    merged_paths = {item["path"] for item in merged["files"]}
+    assert "runtime/python/python.exe" in merged_paths
+    assert "runtime/browser/chrome.exe" in merged_paths
+    assert "webview2/msedgewebview2.exe" in merged_paths
