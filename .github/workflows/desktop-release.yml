@@ -170,7 +170,7 @@ jobs:
           $makensis = "C:/Program Files (x86)/NSIS/makensis.exe"
           if (-not (Test-Path $makensis)) { throw "Pinned NSIS compiler is missing" }
           $installer = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-setup.exe"
-          & $makensis "/DPAYLOAD_DIR=$portable" "/DOUTPUT_FILE=$installer" "/DICON_FILE=$env:GITHUB_WORKSPACE/apps/desktop/src-tauri/icons/icon.ico" "installer/windows/drpa-next.nsi"
+          & $makensis "/INPUTCHARSET" "UTF8" "/DPAYLOAD_DIR=$portable" "/DOUTPUT_FILE=$installer" "/DICON_FILE=$env:GITHUB_WORKSPACE/apps/desktop/src-tauri/icons/icon.ico" "installer/windows/drpa-next.nsi"
           if ($LASTEXITCODE -ne 0) { throw "Failed to compile registry-free Windows installer" }
           $registryCalls = Select-String -Path "installer/windows/drpa-next.nsi" -Pattern "WriteReg|DeleteReg|ReadReg|InstallDirRegKey" -CaseSensitive:$false
           if ($registryCalls) { throw "Installer contains a forbidden registry instruction" }
@@ -227,7 +227,9 @@ jobs:
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
             if [[ "$RELEASE_KIND" == "full" ]]; then
-              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes" --latest
+              # Same-version full rebuilds replace assets and advance the stable tag only after a successful build.
+              gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes "$notes" --latest
             else
               gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes" --prerelease
             fi

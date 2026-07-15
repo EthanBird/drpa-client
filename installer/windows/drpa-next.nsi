@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 Unicode true
 
 !include "MUI2.nsh"
