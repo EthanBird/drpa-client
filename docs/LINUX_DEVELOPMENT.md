@@ -4,7 +4,7 @@
 
 ## 1. 当前结论
 
-DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage，与 Windows Setup 共用 `desktop-v1.0.0` Release。Ubuntu 22.04 workflow 负责构建 sealed runtime、打包、解包验证、断网 bootstrap 和 X11 启动后上传；Ubuntu 24.04、Wayland 和人工 GUI 验收仍是持续回归项，不能因首次发布而删除这些门禁。
+DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage 与 deb，与 Windows Setup 共用 `desktop-v1.0.0` Release。Ubuntu 22.04 workflow 负责构建 sealed runtime、两种格式打包、解包验证、断网 bootstrap、deb 安装卸载和 X11 启动后上传；Ubuntu 24.04、Wayland 和人工 GUI 验收仍是持续回归项，不能因首次发布而删除这些门禁。
 
 | 能力 | Linux 当前状态 | 证据或入口 |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage，与 W
 | Linux sealed runtime 构建器 | 已有通路 | `tools/offline/build_runtime_bundle.py` 支持 `linux-x86_64` |
 | Linux sealed runtime CI | 已接入 | `.github/workflows/linux-desktop.yml` 的 Ubuntu 22.04 原生构建与 air-gap smoke |
 | AppImage 最终布局 | 已实现并发布，跨发行版回归持续进行 | `tauri.linux.conf.json` 把 runtime 放入只读 resource，Host 使用 `resource_dir` 定位 |
-| deb 最终布局 | 未实现 | 第一阶段只交付 AppImage |
+| deb 最终布局 | 已实现并发布 | Tauri `/usr` 布局、`dpkg-deb` manifest、真实安装/启动/卸载与用户数据保留检查 |
 | Linux 文件级热更新 | 未实现 | 当前命令、协议与独立 Worker 只接受 `windows-x86_64` |
 | Linux GUI、浏览器、Jupyter 端到端 | CI 已覆盖首层 | AppImage 解包 bootstrap、Chrome/Jupyter smoke 与 Xvfb 启动；Wayland/人工验收待完成 |
 | Linux 任务取消 | 已实现 | Python worker/Studio Kernel 独立 process group，`SIGTERM` 后超时 `SIGKILL` |
@@ -30,7 +30,7 @@ DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage，与 W
 
 - 构建基线：Ubuntu 22.04；它能提供 WebKitGTK 4.1，也能降低 AppImage 的 glibc 最低版本。
 - 验证系统：至少 Ubuntu 22.04 和 Ubuntu 24.04 的干净虚拟机。
-- 首选发行格式：AppImage；deb 在 AppImage 验收完成且只读安装前缀确定后再加入。
+- 发行格式：AppImage 适合免安装分发；deb 适合 Ubuntu/Debian 包管理器安装，两者共用只读 runtime 与 XDG 数据合同。
 - Python：CPython `3.11.9`。
 - Node.js：`24`，以 root `package.json` 和 CI 为准。
 - Rust：stable，最低 Rust 版本以 workspace `Cargo.toml` 为准。
@@ -79,7 +79,7 @@ sudo apt install -y \
   xvfb
 ```
 
-依赖边界：WebKitGTK/GTK、编译器和 `patchelf` 属于构建环境；用户侧 UI 依赖由 AppImage 打包。`xdg-utils` 用于请求桌面文件管理器，FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
+依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 属于构建环境；AppImage 封装桌面运行库，deb 则显式依赖 `libwebkit2gtk-4.1-0`、`libgtk-3-0`、`libgbm1`、`libnss3` 和 `xdg-utils`。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
 
 随后安装 Node.js 24、Rust stable 与 Python 3.11.9。建议用版本管理器安装，不要修改仓库中的版本约束来迁就本机旧工具。
 
@@ -200,7 +200,7 @@ Linux Host 会在启动 Python worker 与 Studio Kernel 前调用 `CommandExt::p
 
 ### 5.5 更新能力
 
-当前 `apply_windows_update`、`drpa-updater`、更新清单 target 和重启确认协议均为 Windows 实现。Host 通过 `get_platform_capabilities` 返回 `supportsWindowsUpdates=false`，Linux 设置页不会渲染 Windows 更新入口。Linux 第一版采用完整 AppImage 替换；不要复用 Windows `.drpa-update`。
+当前 `apply_windows_update`、`drpa-updater`、更新清单 target 和重启确认协议均为 Windows 实现。Host 通过 `get_platform_capabilities` 返回 `supportsWindowsUpdates=false`，Linux 设置页不会渲染 Windows 更新入口。Linux 使用完整 AppImage 替换或通过包管理器安装新版 deb；不要复用 Windows `.drpa-update`。
 
 ## 6. 构建 Linux sealed runtime
 
@@ -240,7 +240,7 @@ python tools/linux/verify_runtime_layout.py --runtime-root /path/to/runtime
 
 ## 7. Tauri Linux 包
 
-AppImage 构建使用 `apps/desktop/src-tauri/tauri.linux.conf.json`。它把构建阶段临时目录 `resources/linux/runtime/` 映射到 AppImage 的 `$RESOURCES/runtime/`；该临时目录被 `.gitignore` 排除，禁止把几百 MB 二进制提交进 Git。
+AppImage 与 deb 构建使用 `apps/desktop/src-tauri/tauri.linux.conf.json`。它把构建阶段临时目录 `resources/linux/runtime/` 映射到两种包的 `$RESOURCES/runtime/`；该临时目录被 `.gitignore` 排除，禁止把几百 MB 二进制提交进 Git。deb 配置还固定运行依赖、`devel` section 和 `optional` priority。
 
 本地完整构建顺序：
 
@@ -263,7 +263,14 @@ DRPA_DATA_DIR="$PWD/.drpa-appimage-data" \
   path/to/DRPA-Next_1.0.0_amd64.AppImage
 ```
 
-CI 会用 `--appimage-extract` 找到最终 `runtime/manifest.json`，对解包后的真实文件再次运行布局检查和离线 bootstrap，再用 `APPIMAGE_EXTRACT_AND_RUN=1 + Xvfb` 确认 GUI 不早退。deb 尚未设计，不能直接把 AppImage resource 路径假设搬到 `/usr/bin`。
+CI 会用 `--appimage-extract` 找到 AppImage 的最终 `runtime/manifest.json`，对解包后的真实文件再次运行布局检查和离线 bootstrap，再用 `APPIMAGE_EXTRACT_AND_RUN=1 + Xvfb` 确认 GUI 不早退。对 deb，`tools/linux/verify_deb_bundle.py` 会检查 architecture/version/Depends、`/usr/bin` 入口、只读 runtime、wheel 散列并生成机器可读 manifest；随后用 `apt` 真实安装、Xvfb 启动和卸载，确认 XDG 用户数据不被删除。
+
+deb 安装与卸载：
+
+```bash
+sudo apt install ./drpa-next-1.0.0-linux-x86_64.deb
+sudo apt remove drpa-next
+```
 
 ## 8. 本地验证命令
 
@@ -315,10 +322,10 @@ cargo test -p drpa-desktop
 - 发布 runtime artifact，但暂不发布桌面端。
 - 修正所有写死“Windows 运行时”的诊断文案。
 
-### 里程碑 C：最终包布局（AppImage 已实现，deb 待定）
+### 里程碑 C：最终包布局（AppImage 与 deb 已实现）
 
 - AppImage 使用 Tauri resource path 定位 runtime；不要改回外置同目录猜测。
-- deb 只有在明确只读安装前缀与升级合同后再加入。
+- deb 使用 Tauri `/usr` 只读安装布局；卸载只删除包管理文件，不删除 XDG 用户数据。
 - 最终包不依赖系统 Python、系统 Chrome、npm 或网络。
 - 数据目录遵守 XDG，应用移动或升级不损坏用户数据。
 
@@ -385,7 +392,7 @@ Linux GUI 应用不保证继承 `.bashrc`、`.profile` 等 shell 初始化文件
 - 主开发分支：`codex/drpa-next-platform`。
 - 当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。
 - Windows 稳定基线：`desktop-v1.0.0`，提交 `5e6c793`。
-- Linux 第一优先级：取得 `Build Linux x86_64 offline desktop` workflow 全绿，处理真实 Rust/Clippy/Tauri/AppImage 日志。
+- Linux 第一优先级：保持 `Build and publish Linux x86_64 offline desktop` workflow 全绿，处理真实 Rust/Clippy/Tauri/AppImage/deb 日志。
 - Linux 第二优先级：在 Ubuntu 22.04/24.04 干净虚拟机分别完成 X11/Wayland、断网首次启动、RPAZ、Notebook、Agent 工具、取消进程树和中文路径人工验收。
 
 开始编码前请先阅读：

@@ -4,7 +4,7 @@
 
 ## 1. 产品状态
 
-当前正式交付包括 **Windows x64 Setup** 与 **Linux x86_64 AppImage**。以下能力是两端共享的离线桌面基座，安装和更新策略按平台分离：
+当前正式交付包括 **Windows x64 Setup**，以及 **Linux x86_64 AppImage 与 deb**。以下能力是两端共享的离线桌面基座，安装和更新策略按平台分离：
 
 - 前端：React 19、TypeScript、Vite、Monaco。
 - 桌面壳：Tauri 2。
@@ -15,7 +15,7 @@
 - 安装：无管理员权限、无应用注册表写入的 NSIS 引导安装器。
 - 更新：本地 `.drpa-update` 文件级更新。
 
-Linux x86_64 已完成第一轮发行适配：Rust core/Tauri Host、XDG 数据目录、`xdg-open`、平台能力协议、sealed runtime、AppImage 内嵌资源定位和 Linux 进程组取消均有实现；`.github/workflows/linux-desktop.yml` 在 Ubuntu 22.04 构建 runtime-complete AppImage，并验证最终解包布局、断网 bootstrap、Jupyter/Chrome 依赖和 X11 启动。普通 push 只上传 Actions artifact；显式发布会把 AppImage、SHA-256 和 wheelhouse lock 写入 `desktop-v1.0.0`。Ubuntu 24.04、Wayland 与人工 GUI 验收仍是持续回归项。Windows Release workflow 保持独立。
+Linux x86_64 已完成第一轮发行适配：Rust core/Tauri Host、XDG 数据目录、`xdg-open`、平台能力协议、sealed runtime、AppImage/deb 内嵌资源定位和 Linux 进程组取消均有实现；`.github/workflows/linux-desktop.yml` 在 Ubuntu 22.04 构建 runtime-complete AppImage 与 deb，并验证最终解包布局、断网 bootstrap、deb 安装卸载、Jupyter/Chrome 依赖和 X11 启动。普通 push 只上传 Actions artifact；显式发布会把两种包、SHA-256、deb manifest 和 wheelhouse lock 写入 `desktop-v1.0.0`。Ubuntu 24.04、Wayland 与人工 GUI 验收仍是持续回归项。Windows Release workflow 保持独立。
 
 ## 2. 仓库结构与所有权
 
@@ -228,7 +228,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 4. 跑通普通 RPAZ、Bing 示例、两个 Notebook 单元、知识文档和目录打开；
 5. 再切换到 `DRPA_RUNTIME_ROOT` 验证 `linux-x86_64` sealed runtime。
 
-源码联调通过不等于 Linux 包可发布。当前 AppImage 已把 runtime 放入只读 resource 并由 CI 验证断网初始化；正式发布前仍必须在干净虚拟机、断网、只读应用目录、X11 与 Wayland 条件下重新验收。deb 尚未进入交付范围。
+源码联调通过不等于 Linux 包可发布。当前 AppImage 与 deb 都把 runtime 放入只读 resource，并由 CI 验证断网初始化；deb 还必须通过 `dpkg-deb` 元数据、真实安装、启动、卸载和用户数据保留检查。跨发行版、断网、只读应用目录、X11 与 Wayland 条件仍需持续验收。
 
 ### 9.5 必须在 Windows runner 验证的内容
 
@@ -278,7 +278,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 5. 在 Studio 新建中文名称项目，运行源码、Markdown 单元和两个 Python notebook 单元。
 6. 阅读 `apps/desktop/src/infra/gateway.ts` 与 `apps/desktop/src-tauri/src/lib.rs` 的对应 command，确认参数在 Host 重新验证。
 7. 运行第 9 节全部本地检查，并对目标平台执行原生 GUI/runtime 测试。
-8. 查看最新 Windows/Linux Actions 与 `desktop-v1.0.0` Release，确认 Setup、AppImage、wheelhouse lock 和对应清单均来自成功的原生 runner。
+8. 查看最新 Windows/Linux Actions 与 `desktop-v1.0.0` Release，确认 Setup、AppImage、deb、wheelhouse lock 和对应清单均来自成功的原生 runner。
 9. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
 
 当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `1.0.0` 发布基线提交为 `5e6c793`；Linux `1.0.0` 由专用 Ubuntu 22.04 workflow 构建并发布，后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。
