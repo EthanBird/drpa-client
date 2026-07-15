@@ -1,14 +1,14 @@
 # DRPA sealed 离线运行时
 
-sealed runtime 是平台专用、不可变、可验证的 Release 资产，不是源码目录、pip 缓存或可跨机器复制的 venv。当前只构建和发布 `windows-x86_64`。
+sealed runtime 是平台专用、不可变、可验证的 Release 资产，不是源码目录、pip 缓存或可跨机器复制的 venv。当前 workflow 只构建和发布 `windows-x86_64`；`runtime-spec.json` 与构建器已经声明 `linux-x86_64`，其原生 CI、最终桌面布局和发布验收见 [`../docs/LINUX_DEVELOPMENT.md`](../docs/LINUX_DEVELOPMENT.md)。
 
 ## 运行时合同
 
 ```text
-drpa-runtime-<version>-windows-x86_64/
-├── python/                 可重定位 CPython 3.11.9
-├── tools/uv.exe            固定版本的离线安装器
-├── wheelhouse/             Windows cp311 完整 wheel closure
+drpa-runtime-<version>-<platform>/
+├── python/                 目标平台可重定位 CPython 3.11.9
+├── tools/uv[.exe]          固定版本的离线安装器
+├── wheelhouse/             目标平台 cp311 完整 wheel closure
 ├── browser/                固定 Chrome for Testing
 ├── locks/runtime.txt       直接与传递依赖精确版本
 ├── bootstrap_runtime.py    幂等离线环境初始化
@@ -33,7 +33,7 @@ drpa-runtime-<version>-windows-x86_64/
 
 - 每一项直接和传递依赖都必须使用精确版本。
 - 禁止 VCS URL、直接下载 URL、editable、额外 index 和未固定版本。
-- Windows runtime 只接受与 CPython 3.11 / win_amd64 匹配的二进制 wheel。
+- 每个平台 runtime 只接受与 CPython 3.11、目标 OS 和目标架构匹配的二进制 wheel；不同平台的 wheelhouse 不得混用。
 - 离线机器永远不通过 pip 联网补依赖。
 - 基础环境是经过策划的能力集合，不等于整个 PyPI；OCR、桌面自动化和本地 AI 等大型能力应拆成未来 runtime pack。
 
@@ -47,9 +47,9 @@ python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 
 ## GitHub Actions 完整性证明
 
-`.github/workflows/offline-runtime.yml` 和 Windows desktop release 会在原生 Windows runner 上：
+`.github/workflows/offline-runtime.yml` 和 Windows desktop release 当前会在原生 Windows runner 上：
 
-1. 只下载目标平台二进制 wheels。
+1. 只下载 Windows x64 目标平台二进制 wheels。
 2. 构建 DRPA Python adapter wheel。
 3. 安装受控 CPython，复制固定 uv，下载固定 Chrome。
 4. 使用空 uv cache、`UV_OFFLINE=1`、`--offline --no-index --find-links` 创建全新环境。
@@ -66,29 +66,35 @@ python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 
 离线机器出现 `ModuleNotFoundError`、DLL load failure 或缺少数据文件时，不要在用户机器上临时安装。按以下流程处理：
 
-1. 保存完整错误日志、RPAZ manifest、runtime bundle version、Windows 版本和架构。
+1. 保存完整错误日志、RPAZ manifest、runtime bundle version、操作系统版本和架构。
 2. 判断依赖属于通用基础能力还是特定脚本包：
    - 多数包都会使用：加入 sealed baseline。
-   - 只服务一个 RPAZ：由包携带锁定的 Windows wheels，或建立独立 runtime pack。
+   - 只服务一个 RPAZ：由包携带锁定的目标平台 wheels，或建立独立 runtime pack。
 3. 在 `requirements/runtime.txt` 增加精确版本，并补齐所有传递依赖；若是 DLL/模型/浏览器数据，也必须进入清单。
 4. 更新 import/行为 smoke test，确保不是“安装成功但运行失败”。
 5. 运行本地政策检查并提交代码。
-6. 触发原生 Windows sealed runtime workflow；不得用其他平台下载的 wheel 冒充 Windows 结果。
+6. 触发对应目标平台的原生 sealed runtime workflow；不得用其他平台下载的 wheel 冒充目标平台结果。
 7. 确认 air-gap 初始化、关键 import、浏览器和 Jupyter smoke 全部通过。
 8. 将新的完整 runtime、SHA-256 和依赖变更说明上传 GitHub Release，并让 desktop release 引用该版本。
-9. 在一台真正断网、无系统 Python 的 Windows 测试机安装验证。
+9. 在一台真正断网、无系统 Python 的目标平台测试机安装验证。
 10. 在 `CHANGELOG.md` 记录新增依赖、体积影响、兼容性和回滚方式。
 
 缺失依赖必须进入 GitHub 中可复现、可校验的 Release 资产；禁止只把文件发给单台机器而不更新锁、清单和构建流程。
 
 ## 发布与校验
 
-当前 runtime Release：<https://github.com/EthanBird/drpa-client/releases/tag/offline-runtime-v0.2.0-dev-6>
+当前发行资产统一从 <https://github.com/EthanBird/drpa-client/releases> 获取，并按 runtime tag、平台和版本匹配；不要复用文档中曾出现的旧固定 tag。
 
-传入离线网络前后均应验证配套 `.sha256`。PowerShell 示例：
+传入离线网络前后均应验证配套 `.sha256`。Linux 示例：
+
+```bash
+sha256sum -c drpa-runtime-*.tar.gz.sha256
+```
+
+PowerShell 示例：
 
 ```powershell
 Get-FileHash .\drpa-runtime-*.zip -Algorithm SHA256
 ```
 
-预览版尚未建立代码签名信任链，SHA-256 只能证明文件与发布记录一致。稳定版需要在散列之外增加签名清单、可信公钥轮换和撤销机制。
+当前资产尚未建立代码签名信任链，SHA-256 只能证明文件与发布记录一致。后续供应链工作需要在散列之外增加签名清单、可信公钥轮换和撤销机制。

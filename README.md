@@ -1,6 +1,6 @@
 # DRPA Next
 
-DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管理器。用户只需安装一次桌面应用，即可在不配置系统 Python 的情况下安装、开发、运行、观察和更新 `.rpaz` 自动化脚本包。
+DRPA Next 是一个 Windows 优先、本地优先、以跨平台为目标的可扩展代码包运行管理器。用户只需安装一次桌面应用，即可在不配置系统 Python 的情况下安装、开发、运行、观察和更新 `.rpaz` 自动化脚本包。
 
 当前版本为 `1.0.0` Windows x64 稳定版。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
@@ -19,6 +19,16 @@ DRPA Next 是一个 Windows 优先、本地优先的可扩展代码包运行管�
 Windows 版本下载：<https://github.com/EthanBird/drpa-client/releases>
 
 > `1.0.0` 是当前推荐的全量安装基线。`0.2.x` 及更早安装缺少 protocol-2 安装库存，升级时直接运行最新 Setup；完成一次全量安装后，后续版本使用轻量 `.drpa-update`，不会再次打包 WebView2、未变化的 Chrome/runtime 或用户数据。
+
+## 平台状态
+
+| 平台 | 源码开发 | CI | 正式发行 |
+| --- | --- | --- | --- |
+| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `1.0.0` 全量安装包与轻量更新 |
+| Linux x86_64 | 前端、Rust Host 与 Python adapter 可联调 | Rust core、桌面 Host 编译；sealed runtime 待接入 | 尚未发布 |
+| macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
+
+Linux 已有 XDG 数据目录、`xdg-open`、平台 runtime manifest 和 `linux-x86_64` sealed runtime 构建通路；尚缺原生 runtime workflow、最终 AppImage/deb 资源布局、进程树取消和离线端到端验收。接手 Linux 端请从 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md) 开始。
 
 ## 架构边界
 
@@ -45,7 +55,7 @@ UI 不是安全边界。所有文件路径、包清单、更新清单和运行�
 
 ## 本地开发
 
-要求 Node.js 24+、Rust stable 和 Tauri 2 的 Windows 构建依赖。前端浏览器预览使用确定性的 mock gateway，不需要启动 Rust Host：
+要求 Node.js 24+ 和 Rust stable。桌面联调还需要目标平台的 Tauri 2 系统依赖；Python/RPA 联调建议使用 CPython 3.11.9。前端浏览器预览使用确定性的 mock gateway，不需要启动 Rust Host：
 
 ```bash
 npm ci
@@ -55,11 +65,13 @@ npm run test
 npm run build
 ```
 
-Windows 桌面联调：
+桌面 Host 联调：
 
 ```bash
 npm run tauri:dev
 ```
+
+Linux 需要先安装 WebKitGTK 4.1 等系统依赖，并为开发 Host 设置 `DRPA_DATA_DIR`、`DRPA_RUNTIME_PYTHON` 和 `DRPA_RUNTIME_PYTHONPATH`。完整命令、平台边界和发布验收见 [`docs/LINUX_DEVELOPMENT.md`](docs/LINUX_DEVELOPMENT.md)。
 
 Rust 与 Python 验证：
 
@@ -77,6 +89,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 ## 文档导航
 
 - [开发与交接手册](docs/DEVELOPMENT.md)：当前实现、目录、数据、测试、发布和接手清单。
+- [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md)：Ubuntu 开发环境、真实 Tauri 联调、sealed runtime、打包阻塞项与发布验收。
 - [功能扩展路线](docs/ROADMAP.md)：离线基础环境、自动化任务和 AI Agent 辅助开发。
 - [RPAZ 开发](docs/RPAZ_DEVELOPMENT.md)：schema v2、Runtime Context、直接运行和示例包。
 - [Jupyter 集成](docs/JUPYTER_INTEGRATION.md)：真实能力、VS Code Jupyter 对照和明确边界。
@@ -88,7 +101,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 
 ## 当前限制
 
-- 只发布 Windows x64；Linux/macOS 仍是未来适配目标，不属于当前交付承诺。
+- 当前只发布 Windows x64；Linux x86_64 已进入开发适配阶段，但还没有可交付的离线桌面包；macOS 仍只有编译级基础。
 - 当前更新入口使用本地 `.drpa-update`，已支持逐文件差量；尚未实现在线更新源、签名信任链和大文件块级差分。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
 - AI Agent 当前是单 Agent MVP，尚未提供流式输出、diff/checkpoint、会话导出或运行日志工具；自动调度、浏览器录制器、包签名和私有仓库仍处于路线阶段。

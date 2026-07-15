@@ -1,10 +1,10 @@
 # DRPA Next 开发与交接手册
 
-本文档描述 `codex/drpa-next-platform` 分支的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。
+本文档描述 `codex/drpa-next-platform` 分支和 `1.0.0` 基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
 
 ## 1. 产品状态
 
-当前交付目标只有 **Windows x64 离线桌面版**：
+当前正式交付目标是 **Windows x64 离线桌面版**：
 
 - 前端：React 19、TypeScript、Vite、Monaco。
 - 桌面壳：Tauri 2。
@@ -15,7 +15,7 @@
 - 安装：无管理员权限、无应用注册表写入的 NSIS 引导安装器。
 - 更新：本地 `.drpa-update` 文件级更新。
 
-不要将“Rust crate 能在 Linux/macOS CI 编译”解释为这些平台已经可发布。平台定义保留用于未来适配，当前 Release workflow 只产出 Windows。
+Linux x86_64 已进入开发适配阶段：Rust core 和 Tauri Host 编译由 CI 覆盖，数据目录、`xdg-open`、runtime manifest 与 sealed runtime builder 已有平台分支；原生 runtime workflow、最终 AppImage/deb 布局、进程树取消和离线端到端测试仍待完成。不要将“Rust crate 能在 Linux/macOS CI 编译”解释为这些平台已经可发布。当前 Release workflow 仍只产出 Windows。
 
 ## 2. 仓库结构与所有权
 
@@ -23,7 +23,7 @@
 apps/desktop/
   src/                       React 页面、组件、状态和 typed gateway
   src-tauri/src/lib.rs       Tauri commands、运行时定位、Studio/Jupyter 生命周期
-  src-tauri/src/bin/         独立 Windows 更新器
+  src-tauri/src/bin/         独立 Windows 更新器；Linux 不复用其发布协议
 crates/
   drpa-protocol/             DTO、运行事件和协议版本
   drpa-package/              schema v2、归档与路径安全
@@ -70,7 +70,7 @@ Python adapter 负责执行用户代码和生成结构化事件。不能把安�
 
 ## 3. 数据与安装布局
 
-正式安装采用应用旁数据模型：
+Windows 正式安装采用应用旁数据模型：
 
 ```text
 <install>/
@@ -97,9 +97,11 @@ Python adapter 负责执行用户代码和生成结构化事件。不能把安�
 - 已安装包不可原地编辑。“在工作室打开”会复制到 `data/projects/`。
 - 用户移动整个安装目录后，应从新位置启动并执行运行环境验证；不要只移动 `runtime/`。
 
+Linux 默认使用 `app.path().app_local_data_dir()/workspace`，由 Tauri 按 XDG 规则解析；开发测试应通过 `DRPA_DATA_DIR` 指向仓库内隔离目录。Linux 的只读应用布局、runtime 资源位置和 AppImage/deb 安装合同见 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)，不要照搬 Windows 的应用旁 `data/`。
+
 ## 4. 离线运行时
 
-`offline/runtime-spec.json` 固定 Python、uv、Chrome 和目标平台。`offline/requirements/runtime.txt` 必须包含直接与传递依赖的精确版本，不允许 VCS URL、editable、索引覆盖或未固定版本。
+`offline/runtime-spec.json` 固定 Python、uv、Chrome 和目标平台，当前声明 `windows-x86_64`、`linux-x86_64` 与两个 macOS 架构。`offline/requirements/runtime.txt` 必须包含直接与传递依赖的精确版本，不允许 VCS URL、editable、索引覆盖或未固定版本。现有 runtime workflow 只构建 Windows；Linux 构建器通路存在，但必须在原生 Linux runner 完成 air-gap 证明后才能发布。
 
 sealed runtime 的 `manifest.json` 是机器可验证合同，至少包含：
 
@@ -178,7 +180,7 @@ CI 默认执行 `update` 发布：stage 主程序、更新器、`bootstrap_runti
 
 完整安装 stage 禁止符号链接、Windows Junction 和其他 reparse point。`build_update_package.py` 在生成库存前会逐目录检查并直接失败，保证 `runtime/`、`webview2/` 和应用文件全部来自当前安装 stage，而不是外部目录。
 
-## 7.1 AI Agent
+## 8. AI Agent
 
 Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker 调用 OpenAI-compatible Chat Completions，并执行最多 8 轮 function tools。三个知识库工具始终可用；绑定项目后再启用六个项目文件、manifest、构建和 30 秒 sealed Python 工具。API key 只保存在前端会话内。前端持久化最多 50 个本地对话及每个对话最近 120 条消息，支持逐会话项目绑定和配置面板折叠。实现与约束见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
 
@@ -186,9 +188,9 @@ Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker �
 
 当前仍从本地介质导入更新；在线 feed 与清单签名属于后续路线，见 [`ROADMAP.md`](ROADMAP.md)。
 
-## 8. 开发与验证
+## 9. 开发与验证
 
-### 8.1 前端
+### 9.1 前端
 
 ```bash
 npm ci
@@ -197,7 +199,7 @@ npm run test
 npm run build
 ```
 
-### 8.2 Rust
+### 9.2 Rust
 
 ```bash
 cargo fmt --all --check
@@ -206,7 +208,7 @@ cargo test -p drpa-protocol -p drpa-package -p drpa-host
 cargo check -p drpa-desktop
 ```
 
-### 8.3 Python 与离线政策
+### 9.3 Python 与离线政策
 
 ```bash
 python -m pip install -e "./runtime/python[test]"
@@ -216,7 +218,19 @@ python -m unittest discover -s tools/offline/tests -v
 python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 ```
 
-### 8.4 必须在 Windows runner 验证的内容
+### 9.4 Linux 源码联调
+
+Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启动命令见 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。最小联调顺序是：
+
+1. `npm run dev` 验证浏览器 mock UI；
+2. `cargo check -p drpa-desktop` 验证 WebKitGTK 链接；
+3. 使用 `DRPA_RUNTIME_PYTHON`、`DRPA_RUNTIME_PYTHONPATH` 和隔离的 `DRPA_DATA_DIR` 启动 `npm run tauri:dev`；
+4. 跑通普通 RPAZ、Bing 示例、两个 Notebook 单元、知识文档和目录打开；
+5. 再切换到 `DRPA_RUNTIME_ROOT` 验证 `linux-x86_64` sealed runtime。
+
+源码联调通过不等于 Linux 包可发布。最终 AppImage/deb 必须在干净虚拟机、断网和只读应用目录条件下重新验收。
+
+### 9.5 必须在 Windows runner 验证的内容
 
 - GUI subsystem 不弹 CMD。
 - Fixed Version WebView2 可启动。
@@ -226,9 +240,9 @@ python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 - NSIS 编译与注册表指令守卫。
 - `.drpa-update` 构建、内容保护和发布资产数量。
 
-## 9. CI 与发布
+## 10. CI 与发布
 
-- `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查。
+- `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查；Ubuntu 目前只做到 Host 编译，没有 GUI/runtime 最终包验收。
 - `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
 - `.github/workflows/desktop-release.yml`：push 默认发布两个轻量 update 资产；手工选择 `full` 时才组合 runtime、WebView2、Host、更新器、示例和安装器。
 
@@ -240,29 +254,31 @@ python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 4. 日常发布观察轻量 update 构建、基线库存合并与两个资产集合检查通过；完整发布还需观察 runtime bootstrap、Jupyter smoke、NSIS guard。
 5. update Release 只包含 `.drpa-update` 与 `install-manifest.json`；full 基线 Release 只包含 Setup、`install-manifest.json` 与示例 RPAZ，不附带无法跨协议使用的轻量包。
 6. 在独立 Windows 测试机安装到非系统盘，执行环境验证、Bing 示例、Notebook 两单元和一次更新回滚演练。
-7. 预览版未签名时必须在发行说明中显式提示。
+7. 资产未签名时必须在发行说明中显式说明，不得因版本号进入稳定版就省略供应链状态。
 
-## 10. 新功能设计规则
+## 11. 新功能设计规则
 
 - 先定义领域状态和失败恢复，再画页面。
 - 把“已实现”“实验性”“仅设计”显示在文档和 UI 中。
 - 离线优先：新功能不得隐式下载 Python 包、浏览器、模型或前端 CDN。
 - Windows 优先不等于把平台判断散落到业务层；平台差异应隔离在 adapter。
+- UI 必须根据 Host 暴露的平台能力决定功能是否显示，不能让 Linux 用户点击 Windows-only 更新入口后才得到错误。
 - 长任务必须可取消、可恢复或明确不可恢复，并产生日志和审计事件。
 - 密钥不写入 manifest、任务参数快照、日志或命令行。
 - AI Agent 只能通过受策略控制的工具调用 Host，不能获得任意 Tauri invoke 或任意 shell 权限。
 
-## 11. 接手清单
+## 12. 接手清单
 
 接手开发前建议依次完成：
 
-1. 阅读本文件、`ROADMAP.md`、`offline/README.md` 和 `JUPYTER_INTEGRATION.md`。
-2. 安装 preview-10 到非系统盘，确认 `data/` 实际位置。
-3. 安装并运行 Bing 每日一图示例，检查日志与产物。
-4. 在 Studio 新建中文名称项目，运行源码和两个 notebook 单元。
-5. 阅读 `gateway.ts` 与 `src-tauri/src/lib.rs` 的对应 command。
-6. 运行第 8 节全部本地检查。
-7. 查看最新 Windows Actions 与 Release，确认分支和产物基线。
-8. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
+1. 阅读本文件、`ROADMAP.md`、`offline/README.md` 和 `JUPYTER_INTEGRATION.md`；Linux 开发者额外完整阅读 `LINUX_DEVELOPMENT.md`。
+2. 查看分支、PR、最新提交和工作区状态，先区分当前 Tauri 实现与冻结的 PySide6 参考代码。
+3. Windows 维护者安装 `1.0.0` 到非系统盘；Linux 维护者使用隔离的 `DRPA_DATA_DIR` 启动真实 Tauri Host，确认数据目录实际位置。
+4. 安装并运行 Bing 每日一图示例，检查实时日志、进度、输出目录和产物。
+5. 在 Studio 新建中文名称项目，运行源码、Markdown 单元和两个 Python notebook 单元。
+6. 阅读 `apps/desktop/src/infra/gateway.ts` 与 `apps/desktop/src-tauri/src/lib.rs` 的对应 command，确认参数在 Host 重新验证。
+7. 运行第 9 节全部本地检查，并对目标平台执行原生 GUI/runtime 测试。
+8. 查看最新 Windows Actions 与 `desktop-v1.0.0` Release，确认已发布基线；Linux 资产尚未建立，不要从临时 AppImage 推断发布合同。
+9. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
 
-当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。
+当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `1.0.0` 发布基线提交为 `5e6c793`；Linux 下一步以 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 的里程碑 A、B 为准。

@@ -1,6 +1,6 @@
 # DRPA Next architecture
 
-> 本文记录长期目标架构。当前可交付基线是 Windows x64、单一 sealed Python 3.11 baseline 和本地 `.drpa-update`；尚未实现的 content-addressed 多环境、包签名、跨平台安装器和远程 worker 均属于路线目标。当前实现与接手说明以 [`../DEVELOPMENT.md`](../DEVELOPMENT.md) 为准。
+> 本文记录长期目标架构。当前可交付基线是 Windows x64、单一 sealed Python 3.11 baseline 和本地 `.drpa-update`；尚未实现的 content-addressed 多环境、包签名、跨平台安装器和远程 worker 均属于路线目标。当前实现与接手说明以 [`../DEVELOPMENT.md`](../DEVELOPMENT.md) 为准，Linux 适配状态见 [`../LINUX_DEVELOPMENT.md`](../LINUX_DEVELOPMENT.md)。
 
 ## 1. Product definition
 
@@ -28,7 +28,7 @@ The initial market is Python and DrissionPage automation, but the domain model m
 
 ### Desktop shell
 
-- **Tauri 2** for the current Windows desktop package, while keeping host APIs portable for later macOS and Linux work.
+- **Tauri 2** for the current Windows desktop package, while keeping host APIs portable for the active Linux adaptation and later macOS work.
 - **Rust** for privileged host operations, process supervision, filesystem policy, package verification, and persistence.
 - Tauri capabilities expose a deliberately small command surface to the webview.
 
@@ -130,7 +130,7 @@ Rules:
 
 ## 6. Runtime isolation
 
-The current Windows preview creates one verified application baseline environment beside the install. A package cannot mutate it at runtime. Content-addressed per-lock environments remain the intended next isolation step:
+The current Windows release creates one verified application baseline environment beside the install. A package cannot mutate it at runtime. Content-addressed per-lock environments remain the intended next isolation step:
 
 Environment key:
 
@@ -186,7 +186,7 @@ Budgets are CI-visible measurements, not marketing claims.
 ## 10. Delivery model
 
 - Current release workflow: Windows x64 only, built and smoke-tested on a native Windows runner.
-- Current preview assets are unsigned. Runtime build fingerprints remain in the install inventory for delta selection, while desktop update application validates protocol, paths and sizes without publishing separate SHA-256 assets; signed update manifests and key rotation remain stable-release requirements.
+- Current assets are unsigned. Runtime build fingerprints remain in the install inventory for delta selection, while desktop update application validates protocol, paths and sizes without publishing separate SHA-256 assets; signed update manifests and key rotation remain supply-chain hardening work.
 - Full desktop releases carry the sealed runtime and WebView2 baseline. Daily releases carry only changed managed files plus the merged inventory; content-addressed block delta delivery is future work.
-- A software bill of materials and dependency-license inventory are required before the stable release.
-- macOS and Linux remain future targets and must not be advertised until native offline runtime, installer, data-path and process-lifecycle tests pass.
+- A software bill of materials and dependency-license inventory remain required release-governance work.
+- Linux x86_64 is an active development target but must not be advertised as released until its native offline runtime, package layout, data-path and process-lifecycle tests pass. macOS remains a later target.
