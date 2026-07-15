@@ -393,7 +393,7 @@ impl HostState {
             .read()
             .runs
             .iter()
-            .any(|run| run.id == run_id && run.status == RunStatus::Cancelled)
+            .any(|run| run.id == run_id && matches!(&run.status, RunStatus::Cancelled))
     }
 
     fn push_log(

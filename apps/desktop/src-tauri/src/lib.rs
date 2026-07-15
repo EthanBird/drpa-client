@@ -109,7 +109,9 @@ impl RunProcessManager {
                         let _ = signal_linux_process_group(process_group, libc::SIGKILL);
                     }
                     if let Ok(mut groups) = groups.lock()
-                        && groups.get(&run_id).is_some_and(|group| group.id == process_group)
+                        && groups
+                            .get(&run_id)
+                            .is_some_and(|group| group.id == process_group)
                     {
                         groups.remove(&run_id);
                     }
@@ -260,8 +262,7 @@ async fn start_run(
             &background_processes,
             &launch,
             &parameters,
-        )
-            && !background_state.run_is_cancelled(&background_run_id)
+        ) && !background_state.run_is_cancelled(&background_run_id)
         {
             background_state.fail_run(&background_run_id, error);
         }
@@ -275,7 +276,9 @@ fn cancel_run(
     state: State<'_, HostState>,
     processes: State<'_, RunProcessManager>,
 ) -> Result<(), String> {
-    state.cancel_run(&run_id).map_err(|error| error.to_string())?;
+    state
+        .cancel_run(&run_id)
+        .map_err(|error| error.to_string())?;
     processes.cancel(&run_id)
 }
 
@@ -585,8 +588,7 @@ async fn run_studio_project(
             &background_processes,
             &launch,
             &parameters,
-        )
-            && !background_state.run_is_cancelled(&background_run_id)
+        ) && !background_state.run_is_cancelled(&background_run_id)
         {
             background_state.fail_run(&background_run_id, error);
         }
@@ -1969,8 +1971,8 @@ fn configure_linux_process_group(_command: &mut Command) {}
 
 #[cfg(target_os = "linux")]
 fn signal_linux_process_group(process_group: u32, signal: libc::c_int) -> Result<(), String> {
-    let process_group = i32::try_from(process_group)
-        .map_err(|_| format!("进程组标识超出范围：{process_group}"))?;
+    let process_group =
+        i32::try_from(process_group).map_err(|_| format!("进程组标识超出范围：{process_group}"))?;
     // SAFETY: kill receives a negative, validated child process-group id and a
     // constant POSIX signal. No borrowed memory crosses the FFI boundary.
     let result = unsafe { libc::kill(-process_group, signal) };
