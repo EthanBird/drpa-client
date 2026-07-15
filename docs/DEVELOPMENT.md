@@ -4,7 +4,7 @@
 
 ## 1. 产品状态
 
-当前正式交付目标是 **Windows x64 离线桌面版**：
+当前正式交付包括 **Windows x64 Setup** 与 **Linux x86_64 AppImage**。以下能力是两端共享的离线桌面基座，安装和更新策略按平台分离：
 
 - 前端：React 19、TypeScript、Vite、Monaco。
 - 桌面壳：Tauri 2。
@@ -15,7 +15,7 @@
 - 安装：无管理员权限、无应用注册表写入的 NSIS 引导安装器。
 - 更新：本地 `.drpa-update` 文件级更新。
 
-Linux x86_64 已完成第一轮发行适配：Rust core/Tauri Host、XDG 数据目录、`xdg-open`、平台能力协议、sealed runtime、AppImage 内嵌资源定位和 Linux 进程组取消均有实现；`.github/workflows/linux-desktop.yml` 在 Ubuntu 22.04 构建 runtime-complete AppImage，并验证最终解包布局、断网 bootstrap、Jupyter/Chrome 依赖和 X11 启动。它当前只上传 Actions artifact，不创建正式 Release；Ubuntu 22.04/24.04 干净虚拟机、Wayland 与人工 GUI 验收仍是发布前门禁。Windows Release workflow 保持独立。
+Linux x86_64 已完成第一轮发行适配：Rust core/Tauri Host、XDG 数据目录、`xdg-open`、平台能力协议、sealed runtime、AppImage 内嵌资源定位和 Linux 进程组取消均有实现；`.github/workflows/linux-desktop.yml` 在 Ubuntu 22.04 构建 runtime-complete AppImage，并验证最终解包布局、断网 bootstrap、Jupyter/Chrome 依赖和 X11 启动。普通 push 只上传 Actions artifact；显式发布会把 AppImage、SHA-256 和 wheelhouse lock 写入 `desktop-v1.0.0`。Ubuntu 24.04、Wayland 与人工 GUI 验收仍是持续回归项。Windows Release workflow 保持独立。
 
 ## 2. 仓库结构与所有权
 
@@ -278,7 +278,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 5. 在 Studio 新建中文名称项目，运行源码、Markdown 单元和两个 Python notebook 单元。
 6. 阅读 `apps/desktop/src/infra/gateway.ts` 与 `apps/desktop/src-tauri/src/lib.rs` 的对应 command，确认参数在 Host 重新验证。
 7. 运行第 9 节全部本地检查，并对目标平台执行原生 GUI/runtime 测试。
-8. 查看最新 Windows Actions 与 `desktop-v1.0.0` Release，确认已发布基线；Linux 查看 `Build Linux x86_64 offline desktop` 的 AppImage、wheelhouse lock 与 SHA-256 artifact，但不要把 Actions artifact 当作正式 Release。
+8. 查看最新 Windows/Linux Actions 与 `desktop-v1.0.0` Release，确认 Setup、AppImage、wheelhouse lock 和对应清单均来自成功的原生 runner。
 9. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
 
-当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `1.0.0` 发布基线提交为 `5e6c793`；Linux 下一步是取得专用 workflow 绿灯并完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的双 Ubuntu 版本、Wayland 和人工 GUI 验收。
+当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `1.0.0` 发布基线提交为 `5e6c793`；Linux `1.0.0` 由专用 Ubuntu 22.04 workflow 构建并发布，后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。

@@ -4,7 +4,7 @@
 
 ## 1. 当前结论
 
-DRPA Next `1.0.0` 的正式发行物仍是 Windows x64 全量离线安装包。Linux x86_64 已完成第一轮代码与打包适配，可以由 Ubuntu 22.04 workflow 生成包含 sealed runtime 的 AppImage；在干净虚拟机、Wayland 和人工 GUI 验收完成前，它仍不是面向终端用户的正式 Release。
+DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage，与 Windows Setup 共用 `desktop-v1.0.0` Release。Ubuntu 22.04 workflow 负责构建 sealed runtime、打包、解包验证、断网 bootstrap 和 X11 启动后上传；Ubuntu 24.04、Wayland 和人工 GUI 验收仍是持续回归项，不能因首次发布而删除这些门禁。
 
 | 能力 | Linux 当前状态 | 证据或入口 |
 | --- | --- | --- |
@@ -16,13 +16,13 @@ DRPA Next `1.0.0` 的正式发行物仍是 Windows x64 全量离线安装包。L
 | Linux x86_64 runtime 规格 | 已声明 | `offline/runtime-spec.json` 的 `linux-x86_64` |
 | Linux sealed runtime 构建器 | 已有通路 | `tools/offline/build_runtime_bundle.py` 支持 `linux-x86_64` |
 | Linux sealed runtime CI | 已接入 | `.github/workflows/linux-desktop.yml` 的 Ubuntu 22.04 原生构建与 air-gap smoke |
-| AppImage 最终布局 | 已实现，待跨发行版验收 | `tauri.linux.conf.json` 把 runtime 放入只读 resource，Host 使用 `resource_dir` 定位 |
+| AppImage 最终布局 | 已实现并发布，跨发行版回归持续进行 | `tauri.linux.conf.json` 把 runtime 放入只读 resource，Host 使用 `resource_dir` 定位 |
 | deb 最终布局 | 未实现 | 第一阶段只交付 AppImage |
 | Linux 文件级热更新 | 未实现 | 当前命令、协议与独立 Worker 只接受 `windows-x86_64` |
 | Linux GUI、浏览器、Jupyter 端到端 | CI 已覆盖首层 | AppImage 解包 bootstrap、Chrome/Jupyter smoke 与 Xvfb 启动；Wayland/人工验收待完成 |
 | Linux 任务取消 | 已实现 | Python worker/Studio Kernel 独立 process group，`SIGTERM` 后超时 `SIGKILL` |
 
-因此，Linux 后续工作重点已从“接通代码”转为“证明发行质量”：先取得专用 workflow 绿灯，再在 Ubuntu 22.04/24.04、X11/Wayland 和真实断网机器上完成验收。不要把一次 `cargo check`、单独生成 AppImage 或 Xvfb 启动当作正式交付完成。
+因此，Linux 后续工作重点已从“接通代码”转为“维持发行质量”：每次发布都必须取得专用 workflow 绿灯，并继续在 Ubuntu 22.04/24.04、X11/Wayland 和真实断网机器上扩展验收。不要用一次 `cargo check` 或单独生成 AppImage 替代完整发布门禁。
 
 ## 2. 目标基线
 
@@ -322,7 +322,7 @@ cargo test -p drpa-desktop
 - 最终包不依赖系统 Python、系统 Chrome、npm 或网络。
 - 数据目录遵守 XDG，应用移动或升级不损坏用户数据。
 
-### 里程碑 D：原生验收与发布（当前阻塞项）
+### 里程碑 D：原生验收与发布回归（持续进行）
 
 - 在 Ubuntu 22.04 构建，在 Ubuntu 22.04/24.04 干净虚拟机测试。
 - 覆盖 X11 与 Wayland 至少各一次人工 GUI 验收。
@@ -331,9 +331,9 @@ cargo test -p drpa-desktop
 - 验证断网首次初始化、Bing 本地流程、Notebook、知识库导入导出和 Agent 本地工具。
 - Linux Release 使用独立平台资产名和平台清单，不复用 Windows `.drpa-update`。
 
-## 10. Linux 发布验收标准
+## 10. Linux 发布与回归验收标准
 
-Linux 端只有同时满足以下条件才进入 Release：
+Linux 发布流水线必须满足自动化条目；标注为人工覆盖的跨发行版与 Wayland 条目应在后续回归中持续补齐并记录：
 
 1. 干净系统无需安装 Python、Node、Rust 或 Chrome 即可启动并运行 RPAZ。
 2. 首次运行断网可完成 runtime 初始化，后续运行也不触发 pip/uv 网络请求。

@@ -1,8 +1,8 @@
 # DRPA Next
 
-DRPA Next 是一个 Windows 优先、本地优先、以跨平台为目标的可扩展代码包运行管理器。用户只需安装一次桌面应用，即可在不配置系统 Python 的情况下安装、开发、运行、观察和更新 `.rpaz` 自动化脚本包。
+DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包运行管理器。用户无需配置系统 Python，即可安装、开发、运行和观察 `.rpaz` 自动化脚本包。
 
-当前版本为 `1.0.0` Windows x64 稳定版。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
+当前版本为 `1.0.0`，正式提供 Windows x64 Setup 与 Linux x86_64 AppImage。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
 ## 当前能力
 
@@ -16,7 +16,7 @@ DRPA Next 是一个 Windows 优先、本地优先、以跨平台为目标的可�
 - 内置本地 Markdown 知识库：支持目录树、阅读/编辑/分栏渲染、相对文档跳转、内联新建/重命名/删除、拖拽导入、原生导入导出与自动保存，并首次初始化多篇详细 RPAZ 开发指南。
 - 协议化 `.drpa-update` 差量更新，包含可视化进度、结构/大小检查、精确基线匹配、独立 Worker、失败回滚和新 Host 启动确认；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。
 
-Windows 版本下载：<https://github.com/EthanBird/drpa-client/releases>
+正式版本下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v1.0.0>
 
 > `1.0.0` 是当前推荐的全量安装基线。`0.2.x` 及更早安装缺少 protocol-2 安装库存，升级时直接运行最新 Setup；完成一次全量安装后，后续版本使用轻量 `.drpa-update`，不会再次打包 WebView2、未变化的 Chrome/runtime 或用户数据。
 
@@ -25,10 +25,10 @@ Windows 版本下载：<https://github.com/EthanBird/drpa-client/releases>
 | 平台 | 源码开发 | CI | 正式发行 |
 | --- | --- | --- | --- |
 | Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `1.0.0` 全量安装包与轻量更新 |
-| Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 sealed runtime、AppImage 布局、X11 启动门禁 | 尚未正式发布 |
+| Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 sealed runtime、AppImage 布局、X11 启动门禁 | `1.0.0` runtime-complete AppImage |
 | macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
 
-Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录；任务和 Studio Kernel 使用独立进程组，设置页按平台隐藏 Windows 更新。专用 Ubuntu 22.04 workflow 会验证 wheel 散列清单、air-gap bootstrap、AppImage 解包布局和 X11 启动。正式 Release 仍需完成 Ubuntu 22.04/24.04 干净虚拟机、Wayland 和人工 GUI 验收。接手 Linux 端请从 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md) 开始。
+Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录；任务和 Studio Kernel 使用独立进程组，设置页按平台隐藏 Windows 更新。专用 Ubuntu 22.04 workflow 会验证 wheel 散列清单、air-gap bootstrap、AppImage 解包布局和 X11 启动后再发布到 `desktop-v1.0.0`。Ubuntu 24.04 与 Wayland 人工 GUI 回归仍是持续验收项；Linux 暂不支持 `.drpa-update`，升级时替换 AppImage。接手 Linux 端请从 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md) 开始。
 
 ## 架构边界
 
@@ -101,7 +101,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 
 ## 当前限制
 
-- 当前稳定 Release 只发布 Windows x64；Linux x86_64 已有 runtime-complete AppImage 构建流水线，但在干净虚拟机与 Wayland 验收完成前只作为 Actions 构建资产；macOS 仍只有编译级基础。
+- 当前稳定 Release 发布 Windows x64 Setup 与 Linux x86_64 runtime-complete AppImage；Linux 的 Ubuntu 24.04/Wayland 人工回归仍在补充，macOS 仍只有编译级基础。
 - 当前更新入口使用本地 `.drpa-update`，已支持逐文件差量；尚未实现在线更新源、签名信任链和大文件块级差分。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
 - AI Agent 当前是单 Agent MVP，尚未提供流式输出、diff/checkpoint、会话导出或运行日志工具；自动调度、浏览器录制器、包签名和私有仓库仍处于路线阶段。
