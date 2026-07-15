@@ -4,7 +4,7 @@
 
 ## 1. 当前结论
 
-DRPA Next `1.0.0` 的正式发行物仍是 Windows x64 全量离线安装包。Linux 端不是从零开始，但现阶段也不是可对终端用户发布的产品。
+DRPA Next `1.0.0` 的正式发行物仍是 Windows x64 全量离线安装包。Linux x86_64 已完成第一轮代码与打包适配，可以由 Ubuntu 22.04 workflow 生成包含 sealed runtime 的 AppImage；在干净虚拟机、Wayland 和人工 GUI 验收完成前，它仍不是面向终端用户的正式 Release。
 
 | 能力 | Linux 当前状态 | 证据或入口 |
 | --- | --- | --- |
@@ -15,12 +15,14 @@ DRPA Next `1.0.0` 的正式发行物仍是 Windows x64 全量离线安装包。L
 | Linux 数据目录与 `xdg-open` | 已有实现 | `app_local_data_dir()/workspace`、`open_directory_in_file_explorer` |
 | Linux x86_64 runtime 规格 | 已声明 | `offline/runtime-spec.json` 的 `linux-x86_64` |
 | Linux sealed runtime 构建器 | 已有通路 | `tools/offline/build_runtime_bundle.py` 支持 `linux-x86_64` |
-| Linux sealed runtime CI/Release | 待接入 | workflow 目前只包含 `windows-x86_64` |
-| AppImage / deb 最终布局 | 待实现和验收 | Tauri 能生成包，但 runtime 尚未进入平台安装布局 |
+| Linux sealed runtime CI | 已接入 | `.github/workflows/linux-desktop.yml` 的 Ubuntu 22.04 原生构建与 air-gap smoke |
+| AppImage 最终布局 | 已实现，待跨发行版验收 | `tauri.linux.conf.json` 把 runtime 放入只读 resource，Host 使用 `resource_dir` 定位 |
+| deb 最终布局 | 未实现 | 第一阶段只交付 AppImage |
 | Linux 文件级热更新 | 未实现 | 当前命令、协议与独立 Worker 只接受 `windows-x86_64` |
-| Linux GUI、浏览器、Jupyter 端到端 | 待加入 CI | 目前没有 Linux 最终包和离线机器验收 |
+| Linux GUI、浏览器、Jupyter 端到端 | CI 已覆盖首层 | AppImage 解包 bootstrap、Chrome/Jupyter smoke 与 Xvfb 启动；Wayland/人工验收待完成 |
+| Linux 任务取消 | 已实现 | Python worker/Studio Kernel 独立 process group，`SIGTERM` 后超时 `SIGKILL` |
 
-因此，Linux 开发应分成两个阶段：先用源码模式打通真实 Tauri Host，再完成 sealed runtime、最终包布局和原生发行验收。不要把一次 `cargo check` 或单独生成的 AppImage 当作交付完成。
+因此，Linux 后续工作重点已从“接通代码”转为“证明发行质量”：先取得专用 workflow 绿灯，再在 Ubuntu 22.04/24.04、X11/Wayland 和真实断网机器上完成验收。不要把一次 `cargo check`、单独生成 AppImage 或 Xvfb 启动当作正式交付完成。
 
 ## 2. 目标基线
 
@@ -28,7 +30,7 @@ DRPA Next `1.0.0` 的正式发行物仍是 Windows x64 全量离线安装包。L
 
 - 构建基线：Ubuntu 22.04；它能提供 WebKitGTK 4.1，也能降低 AppImage 的 glibc 最低版本。
 - 验证系统：至少 Ubuntu 22.04 和 Ubuntu 24.04 的干净虚拟机。
-- 首选发行格式：AppImage；deb 在 runtime 资源路径确定后再加入。
+- 首选发行格式：AppImage；deb 在 AppImage 验收完成且只读安装前缀确定后再加入。
 - Python：CPython `3.11.9`。
 - Node.js：`24`，以 root `package.json` 和 CI 为准。
 - Rust：stable，最低 Rust 版本以 workspace `Cargo.toml` 为准。
@@ -64,6 +66,20 @@ sudo apt install -y \
 ```
 
 CI 当前使用的最小编译依赖见 `.github/workflows/ci.yml`。上面的列表按 Tauri 2 官方开发前置要求补齐了本地运行和打包常用组件。
+
+原生打包与 CI GUI smoke 还会使用以下工具/运行库：
+
+```bash
+sudo apt install -y \
+  dbus-x11 \
+  libfuse2 \
+  libgbm1 \
+  libnss3 \
+  xauth \
+  xvfb
+```
+
+依赖边界：WebKitGTK/GTK、编译器和 `patchelf` 属于构建环境；用户侧 UI 依赖由 AppImage 打包。`xdg-utils` 用于请求桌面文件管理器，FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
 
 随后安装 Node.js 24、Rust stable 与 Python 3.11.9。建议用版本管理器安装，不要修改仓库中的版本约束来迁就本机旧工具。
 
@@ -178,11 +194,13 @@ Linux Host 使用 `xdg-open` 打开工作区、构建输出和任务产物。发
 
 ### 5.4 进程与取消
 
-Python worker、Jupyter kernel 和浏览器可能创建子进程。Linux 发布前必须把“取消任务”验证到完整进程树，而不只是杀死直接 child。建议把平台差异收敛到进程 adapter：Linux 使用独立 process group，并对 group 发送终止信号；业务层保持同一取消语义。
+Linux Host 会在启动 Python worker 与 Studio Kernel 前调用 `CommandExt::process_group(0)`。任务运行期间 `RunProcessManager` 保存 `run_id → pgid`：取消时先把领域状态写为 `cancelled`，向整个进程组发送 `SIGTERM`，两秒后仍未退出则发送 `SIGKILL`。后台退出处理会检查 cancelled 状态，不再把它覆盖为 failed。`cargo test -p drpa-desktop` 包含真实 `sh + sleep` 进程组回归。
+
+浏览器由 Python worker 派生并继承同一进程组，因此取消普通 RPAZ 会覆盖 Chrome 子进程。Agent 尚没有独立“取消当前 turn”协议，不属于这条任务取消链。
 
 ### 5.5 更新能力
 
-当前 `apply_windows_update`、`drpa-updater`、更新清单 target 和重启确认协议均为 Windows 实现。Linux 第一版可只提供完整 AppImage 替换，但 UI 必须根据平台能力隐藏 Windows 更新入口。不要让 Linux 用户选择 `.drpa-update` 后才收到 Windows-only 错误。
+当前 `apply_windows_update`、`drpa-updater`、更新清单 target 和重启确认协议均为 Windows 实现。Host 通过 `get_platform_capabilities` 返回 `supportsWindowsUpdates=false`，Linux 设置页不会渲染 Windows 更新入口。Linux 第一版采用完整 AppImage 替换；不要复用 Windows `.drpa-update`。
 
 ## 6. 构建 Linux sealed runtime
 
@@ -196,13 +214,15 @@ Python worker、Jupyter kernel 和浏览器可能创建子进程。Linux 发布�
   --work-dir "$PWD/offline-build/linux-x86_64"
 ```
 
-构建阶段需要网络，用于下载受控 Python、精确 wheels 和固定 Chrome for Testing。构建器随后会在空 uv cache、禁止联网的条件下：
+构建阶段需要网络，用于下载受控 Python、精确 wheels 和固定 Chrome for Testing。`offline/requirements/runtime.txt` 是跨平台精确版本集合，Windows-only 项使用 environment marker；Linux 构建必须在 CPython 3.11.9 x86_64 原生环境执行 `pip download --only-binary=:all:`，不能使用旧 `wheelhouse/linux-x86_64/` 兼容目录。构建器随后会在空 uv cache、禁止联网的条件下：
 
 1. 创建全新环境；
 2. 验证 adapter 与依赖；
 3. 用 DrissionPage 启动内置 Chrome 并访问本地 HTML；
 4. 启动真实 Jupyter Kernel 连续执行两个单元；
-5. 生成 `manifest.json`、文件库存、归档与归档校验文件。
+5. 生成 `wheelhouse-lock.json`（实际文件名、版本、大小、SHA-256）、`manifest.json`、文件库存、归档与归档校验文件。
+
+Linux wheel 中需要重点关注的原生/ABI 包包括 `debugpy`、`lxml`、`numpy`、`pandas`、`psutil`、`pyzmq`、`rpds-py` 和 `tornado`；其余纯 Python wheel 同样进入锁和散列清单。最终布局验证器会拒绝 `win_amd64`、`macosx`、`musllinux` wheel 混入 glibc 包，并复核所有 wheel 的大小和散列。
 
 输出目录位于：
 
@@ -210,36 +230,40 @@ Python worker、Jupyter kernel 和浏览器可能创建子进程。Linux 发布�
 offline-build/linux-x86_64/out/
 ```
 
-把归档解压后，将内部 `drpa-runtime-...-linux-x86_64/` 目录作为 `DRPA_RUNTIME_ROOT` 即可进行 Host 联调。正式 workflow 接入前，先确保该命令在 Ubuntu 22.04 的全新 runner 上可重复成功。
+把归档解压后，将内部 `drpa-runtime-...-linux-x86_64/` 目录作为 `DRPA_RUNTIME_ROOT` 即可进行 Host 联调。也可运行：
+
+```bash
+python tools/linux/verify_runtime_layout.py --runtime-root /path/to/runtime
+```
+
+该检查覆盖平台、Python 版本一致性、安全路径、wheel 散列以及 Python/uv/Chrome 可执行位。
 
 ## 7. Tauri Linux 包
 
-探索性构建命令：
+AppImage 构建使用 `apps/desktop/src-tauri/tauri.linux.conf.json`。它把构建阶段临时目录 `resources/linux/runtime/` 映射到 AppImage 的 `$RESOURCES/runtime/`；该临时目录被 `.gitignore` 排除，禁止把几百 MB 二进制提交进 Git。
+
+本地完整构建顺序：
 
 ```bash
-npm run tauri:build --workspace @drpa/desktop -- --bundles appimage,deb
+runtime_stage="$(find offline-build/linux-x86_64 -maxdepth 1 -type d -name 'drpa-runtime-*-linux-x86_64' -print -quit)"
+rm -rf apps/desktop/src-tauri/resources/linux/runtime
+mkdir -p apps/desktop/src-tauri/resources/linux/runtime
+cp -a "$runtime_stage/." apps/desktop/src-tauri/resources/linux/runtime/
+python tools/linux/verify_runtime_layout.py --runtime-root apps/desktop/src-tauri/resources/linux/runtime
+npm run tauri:build --workspace @drpa/desktop -- --bundles appimage
 ```
 
-这条命令成功只证明 Tauri 应用可以打包。当前 `tauri.conf.json` 没有把 Linux sealed runtime 放入 AppImage/deb 的最终资源布局，单独生成的包仍不满足离线交付要求。
+Host 启动时把 `app.path().resource_dir()/runtime` 放在运行时候选列表中，优先级低于显式 `DRPA_RUNTIME_ROOT`、高于应用旁外置 runtime。AppImage 内 runtime 保持只读；`bootstrap_runtime.py` 在 XDG workspace 的 `runtime-environment/environment` 创建可写 venv。
 
-在确定正式布局前，可以这样联调 AppImage：
+完整 AppImage 可直接联调：
 
 ```bash
 chmod +x path/to/DRPA-Next_1.0.0_amd64.AppImage
-DRPA_RUNTIME_ROOT="$PWD/runtime" \
 DRPA_DATA_DIR="$PWD/.drpa-appimage-data" \
   path/to/DRPA-Next_1.0.0_amd64.AppImage
 ```
 
-正式布局需要一次明确设计决策：
-
-- AppImage 是把 runtime 作为外部同目录资产，还是作为可定位的只读资源携带；
-- deb 把 runtime 安装到哪个只读目录；
-- `runtime_roots()` 如何通过 Tauri resource API 定位，而不是假设 `/usr/bin/runtime`；
-- 应用升级时如何保留 XDG 数据并重建或复用生成环境；
-- Chrome sandbox、文件权限和可执行位如何在归档与安装后保持正确。
-
-在这些问题完成前，不要上传 Linux Release。
+CI 会用 `--appimage-extract` 找到最终 `runtime/manifest.json`，对解包后的真实文件再次运行布局检查和离线 bootstrap，再用 `APPIMAGE_EXTRACT_AND_RUN=1 + Xvfb` 确认 GUI 不早退。deb 尚未设计，不能直接把 AppImage resource 路径假设搬到 `/usr/bin`。
 
 ## 8. 本地验证命令
 
@@ -267,7 +291,8 @@ cargo test -p drpa-desktop
 ```bash
 ./.venv/bin/python -m pytest -q runtime/python/tests tools/windows/tests
 ./.venv/bin/python -m unittest discover -s tools/offline/tests -v
-./.venv/bin/python -m compileall -q tools/offline offline/bootstrap runtime/python/src
+./.venv/bin/python -m unittest discover -s tools/linux/tests -v
+./.venv/bin/python -m compileall -q tools/offline tools/linux offline/bootstrap runtime/python/src
 ./.venv/bin/python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 ./.venv/bin/python tools/release/check_version_consistency.py --expected 1.0.0
 ```
@@ -276,28 +301,28 @@ cargo test -p drpa-desktop
 
 ## 9. 推荐实施顺序
 
-### 里程碑 A：源码模式可用
+### 里程碑 A：源码模式可用（代码已具备，需人工复核）
 
 - 在 Ubuntu 22.04 图形会话启动 `npm run tauri:dev`。
 - 工作区、知识文档、Studio 文件操作和 `xdg-open` 正常。
 - 使用开发 Python 运行普通 RPAZ、Bing 示例和两个 Notebook 单元。
 - 设置页隐藏或禁用 Windows-only 能力，并显示准确平台状态。
 
-### 里程碑 B：sealed runtime 可复现
+### 里程碑 B：sealed runtime 可复现（已进入专用 workflow）
 
-- 把 `linux-x86_64` 加入独立 runtime workflow matrix。
+- 在 Ubuntu 22.04 构建 `linux-x86_64` runtime 与 wheelhouse lock。
 - 在原生 Ubuntu runner 完成 air-gap bootstrap、DrissionPage 和 Jupyter smoke。
 - 发布 runtime artifact，但暂不发布桌面端。
 - 修正所有写死“Windows 运行时”的诊断文案。
 
-### 里程碑 C：最终包布局
+### 里程碑 C：最终包布局（AppImage 已实现，deb 待定）
 
-- 先完成 AppImage，随后再完成 deb。
-- 用 Tauri resource path 或明确安装前缀定位 runtime。
+- AppImage 使用 Tauri resource path 定位 runtime；不要改回外置同目录猜测。
+- deb 只有在明确只读安装前缀与升级合同后再加入。
 - 最终包不依赖系统 Python、系统 Chrome、npm 或网络。
 - 数据目录遵守 XDG，应用移动或升级不损坏用户数据。
 
-### 里程碑 D：原生验收与发布
+### 里程碑 D：原生验收与发布（当前阻塞项）
 
 - 在 Ubuntu 22.04 构建，在 Ubuntu 22.04/24.04 干净虚拟机测试。
 - 覆盖 X11 与 Wayland 至少各一次人工 GUI 验收。
@@ -349,7 +374,7 @@ echo "$DRPA_RUNTIME_ROOT"
 cat "$DRPA_RUNTIME_ROOT/manifest.json"
 ```
 
-单独的 AppImage 当前不是完整离线产品包。
+专用 workflow 生成的 AppImage 包含完整 runtime；自行运行普通 `tauri build` 而没有先 stage runtime 的结果不属于完整离线产品包。
 
 ### GUI 中启动的进程找不到 shell 里的命令
 
@@ -360,8 +385,8 @@ Linux GUI 应用不保证继承 `.bashrc`、`.profile` 等 shell 初始化文件
 - 主开发分支：`codex/drpa-next-platform`。
 - 当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。
 - Windows 稳定基线：`desktop-v1.0.0`，提交 `5e6c793`。
-- Linux 第一优先级：让 Ubuntu 22.04 上的真实 Tauri Host + 开发 Python 跑通，并记录截图、终端日志和平台差异。
-- Linux 第二优先级：把现有 `linux-x86_64` runtime builder 接入 CI，在修改打包布局前先取得可重复的 air-gap 运行时证据。
+- Linux 第一优先级：取得 `Build Linux x86_64 offline desktop` workflow 全绿，处理真实 Rust/Clippy/Tauri/AppImage 日志。
+- Linux 第二优先级：在 Ubuntu 22.04/24.04 干净虚拟机分别完成 X11/Wayland、断网首次启动、RPAZ、Notebook、Agent 工具、取消进程树和中文路径人工验收。
 
 开始编码前请先阅读：
 

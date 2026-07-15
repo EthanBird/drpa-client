@@ -25,10 +25,10 @@ Windows 版本下载：<https://github.com/EthanBird/drpa-client/releases>
 | 平台 | 源码开发 | CI | 正式发行 |
 | --- | --- | --- | --- |
 | Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `1.0.0` 全量安装包与轻量更新 |
-| Linux x86_64 | 前端、Rust Host 与 Python adapter 可联调 | Rust core、桌面 Host 编译；sealed runtime 待接入 | 尚未发布 |
+| Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 sealed runtime、AppImage 布局、X11 启动门禁 | 尚未正式发布 |
 | macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
 
-Linux 已有 XDG 数据目录、`xdg-open`、平台 runtime manifest 和 `linux-x86_64` sealed runtime 构建通路；尚缺原生 runtime workflow、最终 AppImage/deb 资源布局、进程树取消和离线端到端验收。接手 Linux 端请从 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md) 开始。
+Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录；任务和 Studio Kernel 使用独立进程组，设置页按平台隐藏 Windows 更新。专用 Ubuntu 22.04 workflow 会验证 wheel 散列清单、air-gap bootstrap、AppImage 解包布局和 X11 启动。正式 Release 仍需完成 Ubuntu 22.04/24.04 干净虚拟机、Wayland 和人工 GUI 验收。接手 Linux 端请从 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md) 开始。
 
 ## 架构边界
 
@@ -101,7 +101,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 
 ## 当前限制
 
-- 当前只发布 Windows x64；Linux x86_64 已进入开发适配阶段，但还没有可交付的离线桌面包；macOS 仍只有编译级基础。
+- 当前稳定 Release 只发布 Windows x64；Linux x86_64 已有 runtime-complete AppImage 构建流水线，但在干净虚拟机与 Wayland 验收完成前只作为 Actions 构建资产；macOS 仍只有编译级基础。
 - 当前更新入口使用本地 `.drpa-update`，已支持逐文件差量；尚未实现在线更新源、签名信任链和大文件块级差分。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
 - AI Agent 当前是单 Agent MVP，尚未提供流式输出、diff/checkpoint、会话导出或运行日志工具；自动调度、浏览器录制器、包签名和私有仓库仍处于路线阶段。

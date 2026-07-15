@@ -10,6 +10,7 @@ import type {
   CurrentUser,
   KnowledgeEntry,
   PackageSummary,
+  PlatformCapabilities,
   RuntimeStatus,
   StudioCellResult,
   StudioProject,
@@ -43,6 +44,7 @@ export interface DesktopGateway {
   runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResult>;
   listenAgentStream(requestId: string, onEvent: (event: AgentStreamEvent) => void): Promise<() => void>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
+  getPlatformCapabilities(): Promise<PlatformCapabilities>;
   initializeRuntime(): Promise<RuntimeStatus>;
   repairRuntime(): Promise<RuntimeStatus>;
   applyWindowsUpdate(packagePath: string): Promise<WindowsUpdateSession>;
@@ -232,6 +234,16 @@ const mockGateway: DesktopGateway = {
   async getRuntimeStatus() {
     return { state: "ready", bundleVersion: "浏览器预览", pythonVersion: "3.11.9", runtimeRoot: "内存预览", environmentRoot: "内存预览", browserExecutable: "内存预览", message: "浏览器预览使用模拟运行环境" };
   },
+  async getPlatformCapabilities() {
+    return {
+      os: "windows",
+      displayName: "Windows x64",
+      runtimeTarget: "windows-x86_64",
+      supportsWindowsUpdates: true,
+      fileManagerName: "资源管理器",
+      dataDirectoryPolicy: "安装目录 data",
+    };
+  },
   async initializeRuntime() { return this.getRuntimeStatus(); },
   async repairRuntime() { return this.getRuntimeStatus(); },
   async applyWindowsUpdate() { throw new Error("浏览器预览不能应用 Windows 更新包"); },
@@ -328,6 +340,7 @@ const tauriGateway: DesktopGateway = {
   runAgentTurn: (request) => invoke<AgentTurnResult>("run_agent_turn", { request }),
   listenAgentStream: async (requestId, onEvent) => listen<AgentStreamEvent>(`agent-stream-${requestId}`, (event) => onEvent(event.payload)),
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),
+  getPlatformCapabilities: () => invoke<PlatformCapabilities>("get_platform_capabilities"),
   initializeRuntime: () => invoke<RuntimeStatus>("initialize_runtime"),
   repairRuntime: () => invoke<RuntimeStatus>("repair_runtime"),
   applyWindowsUpdate: (packagePath) => invoke<WindowsUpdateSession>("apply_windows_update", { packagePath }),

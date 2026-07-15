@@ -24,3 +24,6 @@ tauri-plugin-dialog = "2"
 ureq = { version = "3", features = ["json"] }
 uuid.workspace = true
 zip = { version = "4", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

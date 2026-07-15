@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StudioPage } from "../pages/StudioPage";
 import { WorkbenchPage } from "../pages/WorkbenchPage";
 import { RuntimePage } from "../pages/RuntimePage";
+import { SettingsPage } from "../pages/SettingsPage";
 import { desktopGateway } from "../infra/gateway";
 import { App } from "./App";
 import { useAppStore } from "./store";
@@ -107,6 +108,22 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "在资源管理器中打开" }));
     await waitFor(() => expect(openWorkspace).toHaveBeenCalledOnce());
     expect(screen.queryByText("紧凑布局")).not.toBeInTheDocument();
+  });
+
+  it("uses Linux platform capabilities and hides the Windows updater", async () => {
+    vi.spyOn(desktopGateway, "getPlatformCapabilities").mockResolvedValue({
+      os: "linux",
+      displayName: "Linux x86_64",
+      runtimeTarget: "linux-x86_64",
+      supportsWindowsUpdates: false,
+      fileManagerName: "文件管理器",
+      dataDirectoryPolicy: "XDG 本地数据目录",
+    });
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole("button", { name: "在文件管理器中打开" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Windows 轻量热更新" })).not.toBeInTheDocument();
+    expect(screen.getByText(/XDG 本地数据目录/)).toBeVisible();
   });
 
   it("requires an explicit in-app confirmation before rebuilding the sealed runtime", async () => {
@@ -347,7 +364,7 @@ describe("DRPA Next desktop shell", () => {
     vi.spyOn(desktopGateway, "readProjectFile").mockResolvedValue(notebook);
     vi.spyOn(desktopGateway, "prepareStudioKernel").mockResolvedValue();
     let resolveExecution!: (value: Awaited<ReturnType<typeof desktopGateway.executeStudioCell>>) => void;
-    vi.spyOn(desktopGateway, "executeStudioCell").mockImplementation(() => new Promise((resolve) => { resolveExecution = resolve; }));
+    const executeCell = vi.spyOn(desktopGateway, "executeStudioCell").mockImplementation(() => new Promise((resolve) => { resolveExecution = resolve; }));
     const { container } = render(<StudioPage />);
 
     expect(await screen.findByText("Notebook 压力测试")).toBeVisible();
@@ -355,6 +372,7 @@ describe("DRPA Next desktop shell", () => {
     expect(container.querySelector(".notebook-scroll")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "运行单元格 1" }));
     expect(await screen.findByText("正在运行")).toBeVisible();
+    await waitFor(() => expect(executeCell).toHaveBeenCalledOnce());
 
     resolveExecution({ executionCount: 1, stdout: "", stderr: "", result: "0", traceback: [], outputs: [], variables: [], durationMs: 8 });
     await waitFor(() => expect(screen.getByText("Kernel 就绪")).toBeVisible());

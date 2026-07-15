@@ -28,11 +28,98 @@ const WINDOWS_UPDATE_WORKER_PROTOCOL: u32 = 2;
 #[derive(Clone)]
 pub(crate) struct AppPaths {
     pub(crate) workspace_root: PathBuf,
+    resource_dir: Option<PathBuf>,
 }
 
 #[derive(Clone)]
 struct StudioKernelManager {
     sessions: Arc<Mutex<HashMap<String, StudioKernel>>>,
+}
+
+#[derive(Clone, Default)]
+struct RunProcessManager {
+    #[cfg(target_os = "linux")]
+    process_groups: Arc<Mutex<HashMap<String, LinuxRunProcessGroup>>>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+struct LinuxRunProcessGroup {
+    id: u32,
+    cancelling: bool,
+}
+
+impl RunProcessManager {
+    fn register(&self, run_id: &str, process_group: u32) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        self.process_groups
+            .lock()
+            .map_err(|_| "任务进程状态已损坏".to_owned())?
+            .insert(
+                run_id.to_owned(),
+                LinuxRunProcessGroup {
+                    id: process_group,
+                    cancelling: false,
+                },
+            );
+        #[cfg(not(target_os = "linux"))]
+        let _ = (run_id, process_group);
+        Ok(())
+    }
+
+    fn unregister(&self, run_id: &str, process_group: u32) {
+        #[cfg(target_os = "linux")]
+        if let Ok(mut groups) = self.process_groups.lock()
+            && groups
+                .get(run_id)
+                .is_some_and(|group| group.id == process_group && !group.cancelling)
+        {
+            groups.remove(run_id);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (run_id, process_group);
+    }
+
+    fn cancel(&self, run_id: &str) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        {
+            let process_group = {
+                let mut groups = self
+                    .process_groups
+                    .lock()
+                    .map_err(|_| "任务进程状态已损坏".to_owned())?;
+                groups.get_mut(run_id).map(|group| {
+                    group.cancelling = true;
+                    group.id
+                })
+            };
+            if let Some(process_group) = process_group {
+                signal_linux_process_group(process_group, libc::SIGTERM)?;
+                let groups = Arc::clone(&self.process_groups);
+                let run_id = run_id.to_owned();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let still_running = groups.lock().ok().and_then(|groups| {
+                        groups
+                            .get(&run_id)
+                            .filter(|group| group.id == process_group && group.cancelling)
+                            .map(|group| group.id)
+                    });
+                    if still_running.is_some() {
+                        let _ = signal_linux_process_group(process_group, libc::SIGKILL);
+                    }
+                    if let Ok(mut groups) = groups.lock()
+                        && groups.get(&run_id).is_some_and(|group| group.id == process_group)
+                    {
+                        groups.remove(&run_id);
+                    }
+                });
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = run_id;
+        Ok(())
+    }
 }
 
 struct StudioKernel {
@@ -43,6 +130,8 @@ struct StudioKernel {
 
 impl Drop for StudioKernel {
     fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        let _ = signal_linux_process_group(self.child.id(), libc::SIGKILL);
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -154,6 +243,7 @@ async fn start_run(
     parameters: serde_json::Value,
     state: State<'_, HostState>,
     paths: State<'_, AppPaths>,
+    processes: State<'_, RunProcessManager>,
 ) -> Result<String, String> {
     let launch = state
         .prepare_run(&package_id, &profile_id, &parameters)
@@ -161,10 +251,17 @@ async fn start_run(
     let run_id = launch.run_id.clone();
     let background_state = state.inner().clone();
     let background_paths = paths.inner().clone();
+    let background_processes = processes.inner().clone();
     let background_run_id = run_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Err(error) =
-            execute_python_run(&background_state, &background_paths, &launch, &parameters)
+        if let Err(error) = execute_python_run(
+            &background_state,
+            &background_paths,
+            &background_processes,
+            &launch,
+            &parameters,
+        )
+            && !background_state.run_is_cancelled(&background_run_id)
         {
             background_state.fail_run(&background_run_id, error);
         }
@@ -173,8 +270,13 @@ async fn start_run(
 }
 
 #[tauri::command]
-fn cancel_run(run_id: String, state: State<'_, HostState>) -> Result<(), String> {
-    state.cancel_run(&run_id).map_err(|error| error.to_string())
+fn cancel_run(
+    run_id: String,
+    state: State<'_, HostState>,
+    processes: State<'_, RunProcessManager>,
+) -> Result<(), String> {
+    state.cancel_run(&run_id).map_err(|error| error.to_string())?;
+    processes.cancel(&run_id)
 }
 
 #[tauri::command]
@@ -459,6 +561,7 @@ async fn run_studio_project(
     parameters: serde_json::Value,
     state: State<'_, HostState>,
     paths: State<'_, AppPaths>,
+    processes: State<'_, RunProcessManager>,
 ) -> Result<String, String> {
     validate_project_id(&project_id)?;
     let root = paths.workspace_root.join("projects").join(project_id);
@@ -473,10 +576,17 @@ async fn run_studio_project(
     let run_id = launch.run_id.clone();
     let background_state = state.inner().clone();
     let background_paths = paths.inner().clone();
+    let background_processes = processes.inner().clone();
     let background_run_id = run_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Err(error) =
-            execute_python_run(&background_state, &background_paths, &launch, &parameters)
+        if let Err(error) = execute_python_run(
+            &background_state,
+            &background_paths,
+            &background_processes,
+            &launch,
+            &parameters,
+        )
+            && !background_state.run_is_cancelled(&background_run_id)
         {
             background_state.fail_run(&background_run_id, error);
         }
@@ -813,6 +923,17 @@ struct RuntimeStatus {
     environment_root: String,
     browser_executable: String,
     message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformCapabilities {
+    os: &'static str,
+    display_name: &'static str,
+    runtime_target: &'static str,
+    supports_windows_updates: bool,
+    file_manager_name: &'static str,
+    data_directory_policy: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -1256,6 +1377,42 @@ fn get_runtime_status(paths: State<'_, AppPaths>) -> Result<RuntimeStatus, Strin
 }
 
 #[tauri::command]
+fn get_platform_capabilities() -> PlatformCapabilities {
+    if cfg!(windows) {
+        PlatformCapabilities {
+            os: "windows",
+            display_name: "Windows x64",
+            runtime_target: "windows-x86_64",
+            supports_windows_updates: true,
+            file_manager_name: "资源管理器",
+            data_directory_policy: "安装目录 data",
+        }
+    } else if cfg!(target_os = "linux") {
+        PlatformCapabilities {
+            os: "linux",
+            display_name: "Linux x86_64",
+            runtime_target: "linux-x86_64",
+            supports_windows_updates: false,
+            file_manager_name: "文件管理器",
+            data_directory_policy: "XDG 本地数据目录",
+        }
+    } else {
+        PlatformCapabilities {
+            os: "macos",
+            display_name: "macOS",
+            runtime_target: if cfg!(target_arch = "aarch64") {
+                "macos-arm64"
+            } else {
+                "macos-x86_64"
+            },
+            supports_windows_updates: false,
+            file_manager_name: "Finder",
+            data_directory_policy: "应用本地数据目录",
+        }
+    }
+}
+
+#[tauri::command]
 fn initialize_runtime(paths: State<'_, AppPaths>) -> Result<RuntimeStatus, String> {
     let runtime = locate_runtime(&paths)?;
     verify_runtime_imports(&runtime)?;
@@ -1306,6 +1463,7 @@ fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKerne
     if let Some(browser) = browser {
         command.env("DRPA_BROWSER_PATH", browser);
     }
+    configure_linux_process_group(&mut command);
     hide_child_window(&mut command);
     let mut child = command
         .spawn()
@@ -1328,9 +1486,13 @@ fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKerne
 fn execute_python_run(
     state: &HostState,
     paths: &AppPaths,
+    processes: &RunProcessManager,
     launch: &RunLaunch,
     parameters: &serde_json::Value,
 ) -> Result<(), String> {
+    if state.run_is_cancelled(&launch.run_id) {
+        return Ok(());
+    }
     let runtime = locate_runtime(paths)?;
     fs::create_dir_all(&launch.output_dir).map_err(|error| error.to_string())?;
     let run_root = launch
@@ -1369,60 +1531,70 @@ fn execute_python_run(
     if let Some(browser) = runtime.browser {
         command.env("DRPA_BROWSER_PATH", browser);
     }
+    configure_linux_process_group(&mut command);
     hide_child_window(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| format!("无法启动封装 Python：{error}"))?;
+    let process_group = child.id();
+    processes.register(&launch.run_id, process_group)?;
+    if state.run_is_cancelled(&launch.run_id) {
+        processes.cancel(&launch.run_id)?;
+    }
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "无法读取 Python 标准输出".to_owned())?;
-    let mut reader = BufReader::new(stdout);
-    let mut buffer = Vec::new();
-    loop {
-        buffer.clear();
-        let read = reader
-            .read_until(b'\n', &mut buffer)
-            .map_err(|error| format!("读取运行时事件失败：{error}"))?;
-        if read == 0 {
-            break;
-        }
-        let line = decode_runtime_event_line(&buffer);
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<RuntimeEvent>(&line) {
-            Ok(event) => {
-                state.record_runtime_event(&launch.run_id, event.clone());
-                if let RuntimeEvent::OpenDirectory { path, sequence } = event
-                    && let Err(error) = open_runtime_output_directory(launch, &path)
-                {
-                    state.record_runtime_event(
-                        &launch.run_id,
-                        RuntimeEvent::Warning {
-                            sequence,
-                            message: error,
-                        },
-                    );
-                }
+    let result = (|| {
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "无法读取 Python 标准输出".to_owned())?;
+        let mut reader = BufReader::new(stdout);
+        let mut buffer = Vec::new();
+        loop {
+            buffer.clear();
+            let read = reader
+                .read_until(b'\n', &mut buffer)
+                .map_err(|error| format!("读取运行时事件失败：{error}"))?;
+            if read == 0 {
+                break;
             }
-            Err(error) => state.fail_run(
-                &launch.run_id,
-                format!("运行时返回了无效事件：{error} · {line}"),
-            ),
+            let line = decode_runtime_event_line(&buffer);
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<RuntimeEvent>(&line) {
+                Ok(event) => {
+                    state.record_runtime_event(&launch.run_id, event.clone());
+                    if let RuntimeEvent::OpenDirectory { path, sequence } = event
+                        && let Err(error) = open_runtime_output_directory(launch, &path)
+                    {
+                        state.record_runtime_event(
+                            &launch.run_id,
+                            RuntimeEvent::Warning {
+                                sequence,
+                                message: error,
+                            },
+                        );
+                    }
+                }
+                Err(error) => state.fail_run(
+                    &launch.run_id,
+                    format!("运行时返回了无效事件：{error} · {line}"),
+                ),
+            }
         }
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("等待 Python 进程失败：{error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        if !stderr.is_empty() {
-            return Err(format!("Python 进程异常退出：{stderr}"));
+        let output = child
+            .wait_with_output()
+            .map_err(|error| format!("等待 Python 进程失败：{error}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            if !stderr.is_empty() {
+                return Err(format!("Python 进程异常退出：{stderr}"));
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })();
+    processes.unregister(&launch.run_id, process_group);
+    result
 }
 
 fn collect_project_entries(
@@ -1474,8 +1646,8 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
         });
     }
 
-    for root in runtime_roots()? {
-        if !root.is_dir() {
+    for root in runtime_roots(paths)? {
+        if !root.join("manifest.json").is_file() {
             continue;
         }
         let environment = paths.workspace_root.join("runtime-environment");
@@ -1510,16 +1682,21 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
     }
 
     Err(format!(
-        "未找到封装 Python 运行时。请把平台 runtime 放到应用同目录的 runtime 文件夹；工作区：{}",
+        "未找到封装 Python 运行时。请检查发行包内的 runtime 资源，或为源码联调设置 DRPA_RUNTIME_ROOT；工作区：{}",
         paths.workspace_root.display()
     ))
 }
 
-fn runtime_roots() -> Result<Vec<PathBuf>, String> {
+fn runtime_roots(paths: &AppPaths) -> Result<Vec<PathBuf>, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut roots = Vec::new();
     if let Some(root) = std::env::var_os("DRPA_RUNTIME_ROOT") {
         roots.push(PathBuf::from(root));
+    }
+    if cfg!(target_os = "linux")
+        && let Some(resource_dir) = &paths.resource_dir
+    {
+        roots.push(resource_dir.join("runtime"));
     }
     if let Some(parent) = executable.parent() {
         roots.push(parent.join("runtime"));
@@ -1538,10 +1715,10 @@ fn runtime_roots() -> Result<Vec<PathBuf>, String> {
 }
 
 fn inspect_runtime_status(paths: &AppPaths) -> Result<RuntimeStatus, String> {
-    let root = runtime_roots()?
+    let root = runtime_roots(paths)?
         .into_iter()
-        .find(|candidate| candidate.is_dir())
-        .ok_or_else(|| "未找到随安装包提供的 Windows 运行时".to_owned())?;
+        .find(|candidate| candidate.join("manifest.json").is_file())
+        .ok_or_else(|| "未找到与当前平台匹配的封装运行时".to_owned())?;
     let manifest = read_offline_runtime_manifest(&root)?;
     let browser = resolve_runtime_manifest_path(&root, &manifest.browser_executable)?;
     let environment_root = paths.workspace_root.join("runtime-environment/environment");
@@ -1781,6 +1958,33 @@ fn hide_child_window(command: &mut Command) {
 #[cfg(not(windows))]
 fn hide_child_window(_command: &mut Command) {}
 
+#[cfg(target_os = "linux")]
+fn configure_linux_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_linux_process_group(_command: &mut Command) {}
+
+#[cfg(target_os = "linux")]
+fn signal_linux_process_group(process_group: u32, signal: libc::c_int) -> Result<(), String> {
+    let process_group = i32::try_from(process_group)
+        .map_err(|_| format!("进程组标识超出范围：{process_group}"))?;
+    // SAFETY: kill receives a negative, validated child process-group id and a
+    // constant POSIX signal. No borrowed memory crosses the FFI boundary.
+    let result = unsafe { libc::kill(-process_group, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(format!("终止 Linux 任务进程组失败：{error}"))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(windows)]
@@ -1815,6 +2019,7 @@ pub fn run() {
             };
             fs::create_dir_all(&workspace_root)?;
             knowledge::seed_default_knowledge(&workspace_root)?;
+            let resource_dir = app.path().resource_dir().ok();
 
             #[cfg(windows)]
             {
@@ -1828,10 +2033,12 @@ pub fn run() {
             app.manage(HostState::new(workspace_root.clone()));
             app.manage(AppPaths {
                 workspace_root: workspace_root.clone(),
+                resource_dir,
             });
             app.manage(StudioKernelManager {
                 sessions: Arc::new(Mutex::new(HashMap::new())),
             });
+            app.manage(RunProcessManager::default());
             acknowledge_windows_update_startup(&workspace_root)?;
             Ok(())
         })
@@ -1863,6 +2070,7 @@ pub fn run() {
             agent_config::write_agent_skill,
             agent_config::delete_agent_skill,
             get_runtime_status,
+            get_platform_capabilities,
             initialize_runtime,
             repair_runtime,
             apply_windows_update,
@@ -1916,6 +2124,46 @@ mod tests {
         let root = std::env::temp_dir().join(format!("drpa-runtime-test-{}", Uuid::new_v4()));
         let error = resolve_runtime_manifest_path(&root, "../python.exe").unwrap_err();
         assert!(error.contains("不安全路径"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_runtime_roots_include_tauri_resource_directory() {
+        let resource_dir =
+            std::env::temp_dir().join(format!("drpa-resource-test-{}", Uuid::new_v4()));
+        let paths = AppPaths {
+            workspace_root: std::env::temp_dir(),
+            resource_dir: Some(resource_dir.clone()),
+        };
+
+        let roots = runtime_roots(&paths).unwrap();
+
+        assert!(roots.contains(&resource_dir.join("runtime")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_cancel_terminates_the_worker_process_group() {
+        let processes = RunProcessManager::default();
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("sleep 30 & wait");
+        configure_linux_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let process_group = child.id();
+        processes.register("run-test", process_group).unwrap();
+
+        processes.cancel("run-test").unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if child.try_wait().unwrap().is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = signal_linux_process_group(process_group, libc::SIGKILL);
+        let _ = child.wait();
+        panic!("Linux worker process group did not terminate after cancellation");
     }
 
     #[test]

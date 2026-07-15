@@ -69,6 +69,15 @@ export interface RuntimeStatus {
   message: string;
 }
 
+export interface PlatformCapabilities {
+  os: "windows" | "linux" | "macos";
+  displayName: string;
+  runtimeTarget: string;
+  supportsWindowsUpdates: boolean;
+  fileManagerName: string;
+  dataDirectoryPolicy: string;
+}
+
 export interface CurrentUser {
   displayName: string;
   accountName: string;

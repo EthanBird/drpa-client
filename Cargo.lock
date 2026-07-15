@@ -694,6 +694,7 @@ dependencies = [
  "drpa-host",
  "drpa-package",
  "drpa-protocol",
+ "libc",
  "serde",
  "serde_json",
  "tauri",

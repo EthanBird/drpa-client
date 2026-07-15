@@ -23,7 +23,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { useAppStore, type FontScale } from "../app/store";
-import type { AgentWorkspaceConfig, WindowsUpdateSession, WindowsUpdateStatus } from "../domain/models";
+import type { AgentWorkspaceConfig, PlatformCapabilities, WindowsUpdateSession, WindowsUpdateStatus } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 
 const phaseLabel: Record<WindowsUpdateStatus["phase"], string> = {
@@ -72,6 +72,7 @@ export function SettingsPage() {
   const setAgentMaxOutputTokens = useAppStore((state) => state.setAgentMaxOutputTokens);
   const setAgentTemperature = useAppStore((state) => state.setAgentTemperature);
   const [dataDirectory, setDataDirectory] = useState("正在读取…");
+  const [platform, setPlatform] = useState<PlatformCapabilities | null>(null);
   const [workspaceNotice, setWorkspaceNotice] = useState("");
   const [agentWorkspace, setAgentWorkspace] = useState<AgentWorkspaceConfig | null>(null);
   const [agentWorkspaceError, setAgentWorkspaceError] = useState("");
@@ -106,6 +107,17 @@ export function SettingsPage() {
 
   useEffect(() => {
     void desktopGateway.getDataDirectory().then(setDataDirectory);
+    void desktopGateway.getPlatformCapabilities().then((capabilities) => {
+      setPlatform(capabilities);
+      if (capabilities.supportsWindowsUpdates) {
+        void desktopGateway.getLatestWindowsUpdateStatus().then((status) => {
+          if (status?.phase === "failed" && localStorage.getItem("drpa.dismissedUpdateSession") !== status.sessionId) {
+            setUpdateStatus(status);
+            setUpdateError(status.message);
+          }
+        });
+      }
+    });
     void desktopGateway.getAgentWorkspaceConfig().then(async (config) => {
       setAgentWorkspace(config);
       setDocumentDraft(config.agentsMarkdown);
@@ -113,12 +125,6 @@ export function SettingsPage() {
       setSelectedSkill(first);
       if (first) setSkillDraft(await desktopGateway.readAgentSkill(first));
     }).catch((error: unknown) => setAgentWorkspaceError(String(error)));
-    void desktopGateway.getLatestWindowsUpdateStatus().then((status) => {
-      if (status?.phase === "failed" && localStorage.getItem("drpa.dismissedUpdateSession") !== status.sessionId) {
-        setUpdateStatus(status);
-        setUpdateError(status.message);
-      }
-    });
     return () => window.clearTimeout(pollTimer.current);
   }, []);
 
@@ -252,7 +258,7 @@ export function SettingsPage() {
   const openWorkspaceDirectory = async () => {
     try {
       await desktopGateway.openWorkspaceDataDirectory();
-      setWorkspaceNotice("已在 Windows 资源管理器中打开工作区");
+      setWorkspaceNotice(`已在${platform?.fileManagerName ?? "文件管理器"}中打开工作区`);
     } catch (error) {
       setWorkspaceNotice(String(error));
     }
@@ -275,14 +281,14 @@ export function SettingsPage() {
           <div className="setting-row setting-row-divider"><div><strong>字号等级</strong><span>仅缩放文字，不改变窗口和控件密度</span></div><div className="font-scale-picker" role="radiogroup" aria-label="字号等级">{fontScaleOptions.map((option) => <button type="button" role="radio" aria-checked={fontScale === option.id} className={fontScale === option.id ? "active" : ""} onClick={() => setFontScale(option.id)} key={option.id}><strong>{option.label}</strong><small>{option.detail}</small></button>)}</div></div>
         </section>
 
-        <section className="settings-card settings-card-wide">
+        {platform?.supportsWindowsUpdates && <section className="settings-card settings-card-wide">
           <header><Download size={18} /><div><h2>Windows 轻量热更新</h2><p>基于安装文件清单执行差量替换；运行依赖只在内容真正变化时进入更新包。</p></div></header>
           <div className="setting-row"><div><strong>本地更新包</strong><span>WebView2 与用户 data 始终受保护；更新由独立 Worker 应用并保留回滚现场。</span></div><button className="button secondary" type="button" onClick={() => void applyUpdate()} disabled={updating}><Download size={13} /> {updating ? "更新进行中" : "选择更新包"}</button></div>
-        </section>
+        </section>}
 
         <section className="settings-card">
           <header><Database size={18} /><div><h2>工作区数据</h2><p>项目、脚本包、会话、知识文档与产物统一保存在本地。</p></div></header>
-          <div className="setting-row data-directory-row"><div><strong>当前数据目录</strong><code>{dataDirectory}</code><span>{workspaceNotice || "热更新不会覆盖此目录"}</span></div><button className="button secondary small" type="button" onClick={() => void openWorkspaceDirectory()}><FolderOpen size={13} /> 在资源管理器中打开</button></div>
+          <div className="setting-row data-directory-row"><div><strong>当前数据目录</strong><code>{dataDirectory}</code><span>{workspaceNotice || `${platform?.dataDirectoryPolicy ?? "本地数据目录"} · 应用升级不会覆盖此目录`}</span></div><button className="button secondary small" type="button" onClick={() => void openWorkspaceDirectory()}><FolderOpen size={13} /> 在{platform?.fileManagerName ?? "文件管理器"}中打开</button></div>
         </section>
 
         <section className="settings-card">

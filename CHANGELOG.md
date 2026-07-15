@@ -2,6 +2,17 @@
 
 本项目从 `0.2.0` 开始维护面向开发者和发布使用者的变更记录。格式参考 Keep a Changelog；预览版可能继续调整内部协议，稳定版发布前必须明确迁移策略。
 
+## [Unreleased]
+
+### Linux x86_64 适配
+
+- 新增 Ubuntu 22.04 原生离线桌面流水线：构建 CPython 3.11 sealed runtime，将 Jupyter、DrissionPage 和 Chrome for Testing 作为 Tauri resource 内嵌 AppImage，并上传 AppImage、SHA-256 与 wheelhouse lock。
+- Host 通过 Tauri `resource_dir` 定位 AppImage 内的只读 runtime；生成环境、缓存、项目和日志继续写入 XDG 本地数据目录。
+- 新增平台能力协议；Linux 设置页隐藏 Windows `.drpa-update`，运行环境和目录打开文案使用 Linux/XDG 语义。
+- Linux Python worker 与 Studio Kernel 进入独立 process group；取消任务先发送 `SIGTERM`，超时后发送 `SIGKILL`，避免浏览器等后代进程残留，且 cancelled 状态不会被后台退出覆盖为 failed。
+- sealed runtime 新增 `wheelhouse-lock.json`，记录实际 wheel 文件、大小和 SHA-256；最终 AppImage 解包验收拒绝 Windows/macOS/musl wheel、缺失文件和丢失的可执行位。
+- 当前 Linux 产物仍是 Actions 验证资产，不是正式 Release；Ubuntu 22.04/24.04 干净虚拟机、Wayland 与人工 GUI 验收完成后再发布。
+
 ## [1.0.0] - 2026-07-15
 
 ### 发布

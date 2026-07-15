@@ -388,6 +388,14 @@ impl HostState {
         Ok(())
     }
 
+    pub fn run_is_cancelled(&self, run_id: &str) -> bool {
+        self.snapshot
+            .read()
+            .runs
+            .iter()
+            .any(|run| run.id == run_id && run.status == RunStatus::Cancelled)
+    }
+
     fn push_log(
         &self,
         snapshot: &mut WorkspaceSnapshot,

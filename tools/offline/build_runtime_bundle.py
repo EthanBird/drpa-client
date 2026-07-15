@@ -16,7 +16,10 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from validate_requirements import validate_requirements
+try:
+    from tools.offline.validate_requirements import validate_requirements
+except ModuleNotFoundError:  # Direct script execution adds tools/offline to sys.path.
+    from validate_requirements import validate_requirements
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,6 +98,50 @@ def browser_executable(stage: Path, chrome_platform: str) -> Path:
         "mac-x64": stage / "browser" / "chrome-mac-x64" / "Google Chrome for Testing.app" / "Contents" / "MacOS" / "Google Chrome for Testing",
     }
     return paths[chrome_platform]
+
+
+def create_wheelhouse_lock(stage: Path, platform_id: str, python_version: str) -> None:
+    wheelhouse = stage / "wheelhouse"
+    wheels = sorted(wheelhouse.glob("*.whl"))
+    if not wheels:
+        raise RuntimeError("sealed runtime wheelhouse is empty")
+
+    incompatible_tokens = {
+        "linux-x86_64": ("win32", "win_amd64", "macosx", "musllinux"),
+        "windows-x86_64": ("manylinux", "musllinux", "macosx"),
+        "macos-arm64": ("manylinux", "musllinux", "win32", "win_amd64", "x86_64"),
+        "macos-x86_64": ("manylinux", "musllinux", "win32", "win_amd64", "arm64"),
+    }[platform_id]
+    entries: list[dict[str, object]] = []
+    for wheel in wheels:
+        lowered = wheel.name.lower()
+        if any(token in lowered for token in incompatible_tokens):
+            raise RuntimeError(f"wheel is incompatible with {platform_id}: {wheel.name}")
+        parts = wheel.name.removesuffix(".whl").split("-")
+        if len(parts) < 5:
+            raise RuntimeError(f"invalid wheel filename: {wheel.name}")
+        entries.append(
+            {
+                "name": parts[0].replace("_", "-"),
+                "version": parts[1],
+                "filename": wheel.name,
+                "bytes": wheel.stat().st_size,
+                "sha256": sha256(wheel),
+            }
+        )
+
+    lock = {
+        "schema": 1,
+        "platform": platform_id,
+        "pythonVersion": python_version,
+        "pythonTag": f"cp{python_version.split('.')[0]}{python_version.split('.')[1]}",
+        "requirementsSha256": sha256(REQUIREMENTS),
+        "wheels": entries,
+    }
+    (stage / "wheelhouse-lock.json").write_text(
+        json.dumps(lock, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def create_inventory(stage: Path, spec: dict[str, Any], platform_id: str, chrome_platform: str) -> None:
@@ -244,6 +291,7 @@ def build(platform_id: str, work_dir: Path) -> Path:
     run([sys.executable, "-m", "pip", "download", "--only-binary=:all:", "--dest", str(stage / "wheelhouse"), "--requirement", str(REQUIREMENTS)])
     run([str(uv_source), "build", str(RUNTIME_PROJECT), "--out-dir", str(stage / "wheelhouse")])
     shutil.copy2(REQUIREMENTS, stage / "locks" / "runtime.txt")
+    create_wheelhouse_lock(stage, platform_id, spec["pythonVersion"])
     for bootstrap in BOOTSTRAP.iterdir():
         if bootstrap.is_file():
             copied = stage / bootstrap.name

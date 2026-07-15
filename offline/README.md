@@ -1,6 +1,6 @@
 # DRPA sealed 离线运行时
 
-sealed runtime 是平台专用、不可变、可验证的 Release 资产，不是源码目录、pip 缓存或可跨机器复制的 venv。当前 workflow 只构建和发布 `windows-x86_64`；`runtime-spec.json` 与构建器已经声明 `linux-x86_64`，其原生 CI、最终桌面布局和发布验收见 [`../docs/LINUX_DEVELOPMENT.md`](../docs/LINUX_DEVELOPMENT.md)。
+sealed runtime 是平台专用、不可变、可验证的构建资产，不是源码目录、pip 缓存或可跨机器复制的 venv。Windows workflow 发布 `windows-x86_64` Runtime/桌面资产；Linux 专用 workflow 在 Ubuntu 22.04 原生构建 `linux-x86_64` runtime 并内嵌到 AppImage，目前只上传 Actions artifact，正式发布验收见 [`../docs/LINUX_DEVELOPMENT.md`](../docs/LINUX_DEVELOPMENT.md)。
 
 ## 运行时合同
 
@@ -11,6 +11,7 @@ drpa-runtime-<version>-<platform>/
 ├── wheelhouse/             目标平台 cp311 完整 wheel closure
 ├── browser/                固定 Chrome for Testing
 ├── locks/runtime.txt       直接与传递依赖精确版本
+├── wheelhouse-lock.json    实际 wheel 文件、大小、平台与 SHA-256
 ├── bootstrap_runtime.py    幂等离线环境初始化
 ├── prepare-runtime.ps1
 ├── manifest.json           平台、精确可执行路径、大小和 SHA-256
@@ -34,6 +35,7 @@ drpa-runtime-<version>-<platform>/
 - 每一项直接和传递依赖都必须使用精确版本。
 - 禁止 VCS URL、直接下载 URL、editable、额外 index 和未固定版本。
 - 每个平台 runtime 只接受与 CPython 3.11、目标 OS 和目标架构匹配的二进制 wheel；不同平台的 wheelhouse 不得混用。
+- 构建器必须生成 `wheelhouse-lock.json`；最终桌面布局必须复核其中的每个文件大小和 SHA-256，并拒绝其他 OS 或 musl wheel 混入 glibc Linux 包。
 - 离线机器永远不通过 pip 联网补依赖。
 - 基础环境是经过策划的能力集合，不等于整个 PyPI；OCR、桌面自动化和本地 AI 等大型能力应拆成未来 runtime pack。
 
@@ -42,14 +44,15 @@ drpa-runtime-<version>-<platform>/
 ```bash
 python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 python -m unittest discover -s tools/offline/tests -v
-python -m compileall -q tools/offline offline/bootstrap runtime/python/src
+python -m unittest discover -s tools/linux/tests -v
+python -m compileall -q tools/offline tools/linux offline/bootstrap runtime/python/src
 ```
 
 ## GitHub Actions 完整性证明
 
-`.github/workflows/offline-runtime.yml` 和 Windows desktop release 当前会在原生 Windows runner 上：
+`.github/workflows/offline-runtime.yml`、Windows desktop release 和 `.github/workflows/linux-desktop.yml` 会在各自原生 runner 上：
 
-1. 只下载 Windows x64 目标平台二进制 wheels。
+1. 只下载当前目标平台的 CPython 3.11 二进制 wheels。
 2. 构建 DRPA Python adapter wheel。
 3. 安装受控 CPython，复制固定 uv，下载固定 Chrome。
 4. 使用空 uv cache、`UV_OFFLINE=1`、`--offline --no-index --find-links` 创建全新环境。
@@ -57,8 +60,8 @@ python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 6. 用 DrissionPage 启动内置 Chrome 并访问本地 HTML。
 7. 导入 runtime、浏览器、数据、Excel、`ipykernel`、`jupyter_client`、`zmq` 和 `nbformat`。
 8. 启动真实 Jupyter/ZMQ Kernel，连续执行两个单元并验证状态和输出。
-9. 生成逐文件散列、归档、上传 Actions artifact 并发布 prerelease。
-10. desktop release 再在最终安装目录结构中执行一次 bootstrap 和关键 import。
+9. 生成逐文件散列、wheelhouse lock、归档并上传 Actions artifact；Windows runtime workflow另行发布 prerelease。
+10. desktop build 再在最终安装/AppImage 解包结构中执行一次 bootstrap 和关键 import；Linux 还检查 Python、uv 与 Chrome 的可执行位。
 
 任何缺 wheel、ABI 错误、路径错误、浏览器失败或锁文件不合法都会让 job 在发布前失败。
 
