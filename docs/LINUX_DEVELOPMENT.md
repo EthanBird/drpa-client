@@ -80,7 +80,7 @@ sudo apt install -y \
   xvfb
 ```
 
-依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 只属于源码构建环境。AppImage 封装桌面运行库；现代 deb `1.0.0-2` 直接复用同一 AppDir，把 WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 和 helper process 放入 `/opt/drpa-next`，`Depends` 不得再出现 `libwebkit2gtk-4.1-0` 等 WebKit/GTK 桌面包。现代包的 glibc 2.35+、libgcc 与 libstdc++ 由系统提供；UOS deb 则私有携带这三类 ABI 运行库、NSS 动态加载模块和满足 WebKitGTK 符号要求的 GBM。EGL、GL 与 DRM 必须来自目标机以匹配显卡驱动，不应强行内置。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
+依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 只属于源码构建环境。AppImage 封装桌面运行库；现代 deb `1.0.0-2` 直接复用同一 AppDir，把 WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 和 helper process 放入 `/opt/drpa-next`，`Depends` 不得再出现 `libwebkit2gtk-4.1-0` 等 WebKit/GTK 桌面包。现代包的 glibc 2.35+、libgcc 与 libstdc++ 由系统提供；UOS deb 则私有携带这三类 ABI 运行库、NSS 动态加载模块和满足 WebKitGTK 符号要求的 GBM/通用 libdrm。EGL、GL、内核 DRM 与厂商 DRI 组件必须来自目标机以匹配显卡驱动，不应强行内置。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
 
 随后安装 Node.js 24、Rust stable 与 Python 3.11.9。建议用版本管理器安装，不要修改仓库中的版本约束来迁就本机旧工具。
 
@@ -299,7 +299,7 @@ Ubuntu 22.04 生成的普通 AppImage 和现代 deb 不能在 UOS 20 上直接�
 - 给每个动态 ELF 写入传递型 `DT_RPATH`，覆盖桌面 Host、WebKit 子进程、Python/uv、生成 venv、Python 原生扩展和 Chrome；
 - 启动器只设置 GTK/AppDir 环境，不导出全局 `LD_LIBRARY_PATH`，避免 UOS 自带的 `xdg-open`、文件管理器或 shell 错误加载私有 libc；
 - WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup、Python/Jupyter、uv 和 Chrome 全部来自应用包，不安装系统 `libwebkit2gtk-4.1-0`；
-- 只有 EGL、GL 与 DRM 驱动栈仍来自 UOS；GBM 必须私有携带，因为 UOS 时代的 `libgbm` 缺少当前 WebKitGTK 要求的 `gbm_bo_create_with_modifiers2`。
+- 只有 EGL、GL、内核 DRM 与厂商 DRI 组件仍来自 UOS；GBM 与通用 `libdrm.so.2` 必须私有携带，因为 UOS 时代的库分别缺少当前 WebKitGTK 要求的 `gbm_bo_create_with_modifiers2` 与 `drmGetFormatModifierName`。
 
 专用包只能在 glibc 2.35 的 Ubuntu 22.04 runner 组装，不能在开发者当前发行版随意生成：
 
@@ -403,7 +403,7 @@ cargo test -p drpa-desktop
 
 Linux 发布流水线必须满足自动化条目；标注为人工覆盖的跨发行版与 Wayland 条目应在后续回归中持续补齐并记录：
 
-1. 干净系统无需安装 WebKitGTK、Python、Node、Rust、Chrome 或新版 GBM 即可启动并运行 RPAZ；现代包要求系统 glibc 2.35+ 与 C/C++ 运行库，UOS 包只要求系统 glibc 2.28 并使用私有 glibc/C++/GBM 层；EGL/GL/DRM 仍由系统提供。
+1. 干净系统无需安装 WebKitGTK、Python、Node、Rust、Chrome 或新版 GBM/libdrm 即可启动并运行 RPAZ；现代包要求系统 glibc 2.35+ 与 C/C++ 运行库，UOS 包只要求系统 glibc 2.28 并使用私有 glibc/C++/GBM/libdrm 层；EGL/GL、内核 DRM 与厂商 DRI 组件仍由系统提供。
 2. 首次运行断网可完成 runtime 初始化，后续运行也不触发 pip/uv 网络请求。
 3. AppImage 或 deb 能稳定定位与自身匹配的 `linux-x86_64` runtime manifest。
 4. UI 使用 WebKitGTK，自动化使用内置 Chrome，两者升级边界清晰。

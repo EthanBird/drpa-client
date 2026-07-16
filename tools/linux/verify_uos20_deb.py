@@ -39,6 +39,7 @@ FORBIDDEN_DEPENDENCIES = {
     "libjavascriptcoregtk-4.1-0",
     "libgtk-3-0",
     "libgbm1",
+    "libdrm2",
 }
 REQUIRED_PRIVATE_RUNTIME_FILES = {
     "ld-linux-x86-64.so.2",
@@ -62,6 +63,7 @@ REQUIRED_PRIVATE_RUNTIME_FILES = {
     "libsoftokn3.so",
     "libsoftokn3.chk",
     "libgbm.so.1",
+    "libdrm.so.2",
     "libX11.so.6",
     "libasound.so.2",
     "libfontconfig.so.1",
@@ -125,6 +127,12 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         and b"gbm_bo_create_with_modifiers2" not in private_gbm.read_bytes()
     ):
         errors.append("private libgbm.so.1 lacks gbm_bo_create_with_modifiers2")
+    private_drm = private_root / "libdrm.so.2"
+    if (
+        private_drm.is_file()
+        and b"drmGetFormatModifierName" not in private_drm.read_bytes()
+    ):
+        errors.append("private libdrm.so.2 lacks drmGetFormatModifierName")
 
     provenance_path = app_root / "uos-runtime-manifest.json"
     if not provenance_path.is_file():

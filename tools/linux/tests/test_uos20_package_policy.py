@@ -22,6 +22,7 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertNotIn("libgcc-s1", dependencies)
         self.assertNotIn("libstdc++6", dependencies)
         self.assertNotIn("libgbm1", dependencies)
+        self.assertNotIn("libdrm2", dependencies)
         self.assertIn("libegl1", dependencies)
 
     def test_launcher_does_not_poison_system_child_processes(self) -> None:
@@ -106,6 +107,7 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn("libegl1", dependencies)
         self.assertIn("libgl1", dependencies)
         self.assertNotIn("libgbm1", dependencies)
+        self.assertNotIn("libdrm2", dependencies)
 
 
 if __name__ == "__main__":

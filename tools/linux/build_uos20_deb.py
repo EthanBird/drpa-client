@@ -42,7 +42,6 @@ BASE_DEPENDENCIES = (
     "libc6 (>= 2.28)",
     "libegl1",
     "libgl1",
-    "libdrm2",
     "xdg-utils",
 )
 
@@ -54,7 +53,6 @@ SYSTEM_DRIVER_SONAMES = {
     "libGLX.so.0",
     "libGLdispatch.so.0",
     "libOpenGL.so.0",
-    "libdrm.so.2",
 }
 SYSTEM_LIBRARY_DIRS = (
     "lib/x86_64-linux-gnu",
@@ -391,9 +389,10 @@ def build_uos20_deb(
         "It installs a private glibc 2.35 dynamic loader, libstdc++ and libgcc under\n"
         "/opt/drpa-next-uos20/uos-runtime and pins every bundled ELF to that runtime.\n"
         "WebKitGTK, GTK, Python/Jupyter and Chrome remain private application files.\n"
-        "GBM is private because UOS-era Mesa lacks symbols required by WebKitGTK. EGL,\n"
-        "GL and DRM stay system-owned to match the installed graphics driver. User data\n"
-        "remains in the XDG local data directory.\n",
+        "GBM and generic libdrm are private because UOS-era Mesa lacks symbols required\n"
+        "by WebKitGTK. EGL, GL, kernel DRM and vendor DRI components stay system-owned\n"
+        "to match the installed graphics driver. User data remains in the XDG local\n"
+        "data directory.\n",
         encoding="utf-8",
     )
     provenance = {
