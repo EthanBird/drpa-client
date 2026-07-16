@@ -195,6 +195,10 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
             errors.append("UOS launcher must not export LD_LIBRARY_PATH to system child processes")
         if f"/{INSTALL_ROOT.as_posix()}/usr/bin/drpa-desktop" not in launcher_text:
             errors.append("UOS launcher does not execute the fixed-root desktop binary")
+        if "WEBKIT_EXEC_PATH" not in launcher_text:
+            errors.append("UOS launcher does not set the WebKit helper process path")
+        if "WEBKIT_INJECTED_BUNDLE_PATH" not in launcher_text:
+            errors.append("UOS launcher does not set the WebKit injected bundle path")
 
     runtime_manifests = [
         path for path in app_root.rglob("manifest.json") if path.parent.name == "runtime"
