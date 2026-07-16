@@ -289,6 +289,8 @@ sudo apt remove drpa-next
 
 ### 7.1 UOS Desktop 20 / glibc 2.28 专用包
 
+本节给出 Linux 交接所需的架构摘要；完整的依赖分层、包内布局、ELF 修补原理、可复现命令、历史故障与实体机检查表见 [`UOS20_PACKAGING.md`](UOS20_PACKAGING.md)。修改 UOS 打包策略前必须同时阅读两处，并以构建器、验证器和成功 workflow 的实际行为为准。
+
 Ubuntu 22.04 生成的普通 AppImage 和现代 deb 不能在 UOS 20 上直接运行。原因不只是 Debian `Depends`：桌面 Host 需要 `GLIBC_2.34`，随包 WebKitGTK/JavaScriptCoreGTK 需要 `GLIBC_2.35`、`GLIBCXX_3.4.30` 和比 GCC 8 系统库更高的 C++ ABI。禁止通过删除版本约束或伪造 control 文件宣称兼容。
 
 `tools/linux/build_uos20_deb.py` 从同一个已验证 AppDir 生成独立包：
@@ -465,5 +467,6 @@ Linux GUI 应用不保证继承 `.bashrc`、`.profile` 等 shell 初始化文件
 3. [`../offline/README.md`](../offline/README.md)
 4. [`JUPYTER_INTEGRATION.md`](JUPYTER_INTEGRATION.md)
 5. [`PORTABLE_RELEASE.md`](PORTABLE_RELEASE.md)
+6. [`UOS20_PACKAGING.md`](UOS20_PACKAGING.md)
 
 平台适配应落在小而明确的 adapter 或配置层。不要复制一套 Linux 业务页面，也不要用 `cfg` 把领域规则分叉成两套。

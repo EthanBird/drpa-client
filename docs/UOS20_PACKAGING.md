@@ -1,0 +1,458 @@
+# UOS Desktop 20 兼容包构建、打包与验证手册
+
+本文记录 DRPA Next `1.0.0` 的 UOS Desktop 20 Professional（eagle）x86_64 专用 Debian 包如何生成、为什么采用私有 ELF 运行层、哪些依赖必须随包携带、哪些依赖必须由目标机提供，以及发布前必须通过的自动化与人工验收。目标是让后续维护者能够复现当前产物，而不是只复制一条 `dpkg-deb` 命令。
+
+当前正式产物：
+
+- 文件：`drpa-next-1.0.0-linux-x86_64-uos20.deb`
+- Debian 包名：`drpa-next`
+- Debian 版本：`1.0.0-2+uos20.1`
+- 架构：`amd64`
+- 固定安装根：`/opt/drpa-next-uos20`
+- 最低系统用户态：glibc 2.28
+- 构建运行层：Ubuntu 22.04 / glibc 2.35
+- Release：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v1.0.0>
+- 成功构建：<https://github.com/EthanBird/drpa-client/actions/runs/29509379676>
+- 发布提交：`5246ca1c0ddde5b95a2434572a1852cc5708a868`
+- 发布包大小：`300890584` bytes
+- SHA-256：`e2fa614e6617e2a89d5924db2f8720a77afc9a4603a83f8137dad0d7565eb69c`
+
+## 1. 目标环境与兼容性声明
+
+初始目标机器为：
+
+| 项目 | 目标值 |
+| --- | --- |
+| 发行版 | UOS Desktop 20 Professional（eagle） |
+| 架构 | x86_64 |
+| 内核 | 4.19.0-amd64-desktop |
+| 系统 glibc | 2.28.31-deepin1 |
+| 系统 GCC/C++ 时代 | GCC 8.3 |
+| 已知缺包 | `libwebkit2gtk-4.1-0:amd64` |
+
+自动化门禁使用 Debian 10 `debian:10-slim` 提供真实 glibc 2.28 用户态，并明确拒绝安装系统 `libwebkit2gtk-4.1-0`。这能验证最关键的用户态 ABI、离线 Python/Jupyter、Chrome 和 X11 GUI 启动链路，但 Docker 共享 GitHub Runner 的宿主内核，因此不能把它表述为“已经在 UOS 4.19 实体机完整验证”。每次改变 Chrome、WebKitGTK、glibc 私有层或图形依赖后，仍须在真实 UOS 20 / kernel 4.19 / DDE 与实际显卡上完成一次人工回归。
+
+兼容范围只包含 Linux x86_64 + glibc。ARM、musl、32 位 x86、非 Debian 包管理系统不属于此产物的承诺范围。
+
+## 2. 为什么普通 AppImage/deb 不能直接用于 UOS 20
+
+普通 Linux 包在 Ubuntu 22.04 原生构建，其桌面 Host 和桌面运行库包含以下 ABI 要求：
+
+- Rust/Tauri Host 可能引用 `GLIBC_2.34`；
+- WebKitGTK/JavaScriptCoreGTK 可能引用 `GLIBC_2.35`；
+- C++ 组件需要 `GLIBCXX_3.4.30` 和相应 `CXXABI`；
+- 现代 WebKitGTK 的 GBM 路径需要 `gbm_bo_create_with_modifiers2`；
+- 现代通用 libdrm 路径需要 `drmGetFormatModifierName`。
+
+UOS 20 的 glibc 2.28、GCC 8 时代 libstdc++、GBM 和 libdrm 无法满足这些符号。删除 Debian `Depends`、复制一个 `libwebkit2gtk` 文件或伪造 control 版本都不会改变 ELF 的真实符号需求，最终只会把安装错误推迟成启动时的 `version not found` 或 `undefined symbol`。
+
+当前方案不是在 UOS 上重新编译整个 Rust/WebKitGTK 技术栈，而是从已经通过验证的 Ubuntu 22.04 AppImage AppDir 派生固定根 deb，并给应用拥有的 ELF 配置一套私有 glibc/C++/用户态图形运行层。
+
+## 3. 总体流水线
+
+```text
+精确 runtime 依赖锁
+        │
+        ▼
+Ubuntu 22.04 构建 sealed CPython 3.11/Jupyter/Chrome
+        │ air-gap bootstrap + Jupyter/Chrome smoke
+        ▼
+Tauri 构建 runtime-complete AppImage
+        │ 解包后再次验证 runtime 与 X11 GUI
+        ▼
+验证后的 AppDir
+        │
+        ├── tools/linux/build_bundled_deb.py  ──► 现代 deb
+        │
+        └── tools/linux/build_uos20_deb.py
+                │ 私有 loader/libc/C++/NSS/GBM/libdrm
+                │ 递归 DT_NEEDED 闭包
+                │ ELF interpreter + DT_RPATH
+                ▼
+              UOS 20 deb
+                │
+                ├── 静态解包与 ELF/manifest 校验
+                └── Debian 10/glibc 2.28 容器真实安装与运行
+```
+
+UOS 包必须从同一轮已经验证的 AppDir 派生。不要绕过 AppImage runtime 验证，直接拿 `cargo build` 的单个 Host 二进制组装 deb；那样会漏掉 WebKit helper、GTK/GStreamer、sealed Python、wheelhouse 或 Chrome。
+
+## 4. 代码与职责边界
+
+| 文件 | 职责 |
+| --- | --- |
+| `.github/workflows/linux-desktop.yml` | Ubuntu 22.04 原生构建、磁盘回收、glibc 2.28 容器门禁、9 项资产发布 |
+| `tools/linux/build_uos20_deb.py` | 固定根布局、私有运行层、依赖闭包、ELF 修补、control、deb 生成 |
+| `tools/linux/verify_uos20_deb.py` | 包元数据、禁止依赖、私有符号、ELF interpreter/RPATH、launcher、runtime 校验 |
+| `tools/linux/uos20-smoke.Dockerfile` | Debian 10/glibc 2.28 最低用户态测试镜像 |
+| `tools/linux/uos20_container_smoke.sh` | 安装后 loader、Python/Jupyter、Chrome、X11、卸载数据验证 |
+| `tools/linux/tests/test_uos20_package_policy.py` | 构建与验证策略的单元测试 |
+| `tools/linux/build_bundled_deb.py` | 普通现代 deb 与 UOS 包共享的 AppDir/桌面元数据基础函数 |
+| `tools/offline/build_runtime_bundle.py` | sealed Python、wheelhouse、uv、Chrome runtime 构建 |
+
+修改包策略时，必须同步检查构建器、验证器、策略测试、workflow、Release notes 和本文件，不能只改其中一处。
+
+## 5. 最终安装布局
+
+```text
+/
+├── usr/bin/drpa-next                         # UOS launcher
+├── usr/bin/drpa-desktop -> drpa-next
+├── usr/share/applications/...                # desktop entry
+├── usr/share/icons/...                       # 图标
+├── usr/share/doc/drpa-next/
+│   ├── README.UOS20
+│   └── *-copyright                           # glibc/libgcc/libstdc++ 许可证
+└── opt/drpa-next-uos20/
+    ├── uos-runtime/
+    │   ├── ld-linux-x86-64.so.2              # 私有动态加载器
+    │   ├── libc.so.6
+    │   ├── libstdc++.so.6
+    │   ├── libgcc_s.so.1
+    │   ├── libsoftokn3.so + .chk             # NSS dlopen 模块
+    │   ├── libgbm.so.1
+    │   ├── libdrm.so.2
+    │   └── ...                                # 递归用户态依赖闭包
+    ├── uos-runtime-manifest.json              # 来源、大小、散列、ELF 库存
+    └── usr/
+        ├── bin/drpa-desktop
+        ├── lib/.../WebKitNetworkProcess
+        ├── lib/.../WebKitWebProcess
+        ├── lib/DRPA Next/runtime/
+        │   ├── manifest.json
+        │   ├── bootstrap_runtime.py
+        │   ├── python/
+        │   ├── wheelhouse/
+        │   └── browser/
+        └── share/...
+```
+
+应用文件是包管理器管理的只读内容。项目、设置、日志、生成环境和运行产物继续写入 Host 的 XDG 本地数据目录；卸载 deb 不得删除这些用户数据。测试时可用 `DRPA_DATA_DIR` 指定隔离目录。
+
+现代 deb 和 UOS deb 的 Debian 包名都为 `drpa-next`，因此两者不能并存；安装其中一个会升级或替换另一个。维护者必须通过版本和文件名区分目标系统，UOS 用户只能选择文件名包含 `uos20` 的资产。
+
+## 6. 依赖分层
+
+### 6.1 随包携带
+
+- glibc 2.35 动态加载器及 libc、libm、libdl、libpthread、librt、libresolv 等运行组件；
+- glibc NSS 模块，如 `libnss_files.so.2`、`libnss_dns.so.2`；
+- libstdc++、libgcc；
+- WebKitGTK 4.1、JavaScriptCoreGTK、GTK 3、GStreamer、Soup、WebKit helper；
+- NSS/NSPR 的运行库及通过 `dlopen` 加载的 `libsoftokn3`、`libfreebl3`、`libnssdbm3`、`libnssckbi` 和匹配 `.chk`；
+- 满足现代 WebKitGTK 符号要求的 `libgbm.so.1` 和通用 `libdrm.so.2`；
+- 通过 `DT_NEEDED` 递归发现的 X11/XCB、ALSA、字体、Fribidi 等非驱动用户态库；
+- sealed CPython 3.11.9、uv、完整离线 wheelhouse、Jupyter、DrissionPage、Chrome for Testing。
+
+### 6.2 由系统提供
+
+当前 control 只声明：
+
+```text
+libc6 (>= 2.28), libegl1, libgl1, xdg-utils
+```
+
+其中 `libc6` 表示最低目标用户态与 Debian 包管理基线；应用 ELF 实际使用包内 loader/libc。EGL、GL、GLX、GLdispatch、OpenGL、内核 DRM 接口和厂商 DRI 驱动与目标机器的内核、Mesa/GLVND、显卡驱动紧密耦合，必须由目标系统提供。强行把这些组件从 Ubuntu 22.04 打进包，可能造成软件渲染、黑屏、GPU 进程崩溃，甚至错误加载与内核不匹配的驱动。
+
+`xdg-utils` 用于从 GUI 打开工作区与产物目录。UOS 桌面通常已经具备 EGL/GL 和 `xdg-open`；若缺失，`apt install ./包.deb` 会从配置的软件源补齐这些基础包。
+
+### 6.3 仅构建环境需要
+
+`build-essential`、`dpkg-dev`、`fakeroot`、`patchelf`、WebKitGTK 4.1 开发包、Tauri 编译依赖、Node.js、Rust 和构建 Python 都不应出现在最终目标机依赖中。
+
+## 7. 私有 ELF 运行层
+
+### 7.1 固定动态加载器
+
+构建器识别所有 x86_64 动态 ELF，并对具有 interpreter 的可执行文件执行等价操作：
+
+```bash
+patchelf \
+  --set-interpreter /opt/drpa-next-uos20/uos-runtime/ld-linux-x86-64.so.2 \
+  <elf>
+```
+
+这保证桌面 Host、WebKit helper、Python、uv 和 Chrome 的动态入口不会先交给 UOS 的 glibc 2.28 loader。当前发布 manifest 记录 195 个已修补 ELF，其中 12 个包含动态解释器。
+
+### 7.2 必须使用传递型 `DT_RPATH`
+
+每个动态 ELF 都写入私有绝对搜索目录，并使用 `patchelf --force-rpath` 生成 `DT_RPATH`：
+
+```text
+/opt/drpa-next-uos20/uos-runtime
+/opt/drpa-next-uos20/usr/lib
+/opt/drpa-next-uos20/usr/lib/x86_64-linux-gnu
+```
+
+这里不能退化成 `DT_RUNPATH`。WebKit、Chrome 和 Python 原生扩展拥有多层依赖，`DT_RPATH` 的传递行为能让子依赖继续找到私有 libc/C++ 与用户态闭包；验证器会拒绝出现 `RUNPATH` 或缺少任一私有路径的应用 ELF。
+
+### 7.3 不使用全局 `LD_LIBRARY_PATH`
+
+launcher 不导出 `LD_LIBRARY_PATH`。否则从应用启动的 `/usr/bin/xdg-open`、文件管理器、shell 或其他系统程序也会继承私有 glibc 2.35，进而和 UOS 自身的 2.28 用户态混用。私有解释器与每个应用 ELF 的 RPATH 已经足以完成隔离，系统子进程继续使用系统 loader 和系统库。
+
+### 7.4 递归闭包与动态加载模块
+
+构建器从 AppDir 和私有运行层的 ELF 出发，读取 `patchelf --print-needed`，递归复制尚未存在且不属于显卡驱动边界的 SONAME。仅扫描 `DT_NEEDED` 仍不完整：NSS 会在运行时通过 `dlopen` 查找加密模块，因此 `libsoftokn3`、`libfreebl3`、`libnssdbm3`、信任模块和 `.chk` 文件必须显式列入 `SYSTEM_RUNTIME_FILES`。
+
+Ubuntu 上 NSS 文件可能位于普通 multiarch 目录、`nss/` 子目录或由 p11-kit 提供。构建器为这些文件维护多个候选路径，复制后统一落到私有运行层根目录，并记录真实来源与 SHA-256。
+
+## 8. WebKitGTK 与图形兼容处理
+
+### 8.1 WebKit helper 相对路径
+
+Ubuntu 的生产版 WebKitGTK 使用编译期 `PKGLIBEXECDIR` 定位 Network/Web process。重定位 AppDir 后，helper 路径可能表现为相对于 `usr/` 的 `./lib/.../WebKitNetworkProcess`。`WEBKIT_EXEC_PATH` 只在 WebKit developer mode 生效，不能作为生产修复。
+
+UOS launcher 因此在启动 Host 前执行：
+
+```sh
+cd "$APPDIR/usr"
+exec /opt/drpa-next-uos20/usr/bin/drpa-desktop "$@"
+```
+
+验证器明确要求该工作目录切换，并拒绝重新引入无效的 `WEBKIT_EXEC_PATH`。
+
+### 8.2 GBM 与 libdrm
+
+UOS 时代的系统 GBM 和 libdrm 缺少现代 WebKitGTK 使用的符号。构建器把 Ubuntu 22.04 的兼容 `libgbm.so.1` 与通用 `libdrm.so.2` 放入私有层，验证器同时检查：
+
+- `gbm_bo_create_with_modifiers2`；
+- `drmGetFormatModifierName`。
+
+EGL/GL、厂商 DRI 和内核 DRM 不随包复制。launcher 还设置 `WEBKIT_DISABLE_DMABUF_RENDERER=1`，避开老 Mesa/驱动上不稳定的 WebKit DMABUF renderer；这不替代实体机图形测试。
+
+### 8.3 X11 基线
+
+当前 launcher 固定 `GDK_BACKEND=x11`，自动化用 Xvfb 验证 X11 启动。Wayland/DDE 混合环境尚未成为发布硬门禁；如果未来开放 Wayland backend，必须保留 X11 回归并新增真实 Wayland 会话测试。
+
+## 9. 可复现构建
+
+### 9.1 构建机要求
+
+正式包只能在 `.github/workflows/linux-desktop.yml` 指定的 `ubuntu-22.04` 原生 x86_64 Runner 组装。构建器会执行：
+
+```bash
+getconf GNU_LIBC_VERSION
+```
+
+结果必须严格为 `glibc 2.35`。`--system-root` 参数用于测试 fixture 或受控 sysroot，不是允许在任意新发行版上悄悄生成正式 UOS 包的后门。
+
+关键 apt 构建依赖包括：
+
+```text
+build-essential dbus-x11 dpkg-dev fakeroot file
+libayatana-appindicator3-dev libegl1 libfuse2 libgbm1 libgl1
+libnss3 librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev
+patchelf xauth xdg-utils xvfb
+```
+
+此外需要 Node.js 24、Rust stable、CPython 3.11.9 和精确版本的 runtime builder。完整版本与命令以 workflow、`package-lock.json`、`Cargo.lock`、`offline/runtime-spec.json` 和 `offline/requirements/runtime.txt` 为准。
+
+### 9.2 从验证后的 AppDir 生成 deb
+
+若已有 runtime-complete AppImage，可先在独立目录解包：
+
+```bash
+mkdir -p /tmp/drpa-uos-build/appimage-extract
+cd /tmp/drpa-uos-build/appimage-extract
+/absolute/path/drpa-next-1.0.0-linux-x86_64.AppImage --appimage-extract
+```
+
+随后回到仓库根目录执行：
+
+```bash
+python tools/linux/build_uos20_deb.py \
+  --appdir /tmp/drpa-uos-build/appimage-extract/squashfs-root \
+  --package-version '1.0.0-2+uos20.1' \
+  --output /tmp/drpa-next-1.0.0-linux-x86_64-uos20.deb \
+  --work-dir /tmp/drpa-uos-build/package-work
+```
+
+构建步骤按顺序为：
+
+1. 验证输入 AppDir 具备完整桌面布局；
+2. 复制 AppDir 到 `/opt/drpa-next-uos20` 对应的包根；
+3. 给应用 ELF 写入私有 interpreter 与传递型 RPATH；
+4. 复制固定 glibc/C++/NSS 文件并递归补齐非驱动 `DT_NEEDED`；
+5. 生成 launcher、desktop entry、图标和文档；
+6. 写入包内 `uos-runtime-manifest.json`；
+7. 生成 Debian control 和 `Installed-Size`；
+8. 使用 `dpkg-deb --root-owner-group -Zxz -z6` 压缩产物。
+
+不要为了缩短构建时间删除静态验证或容器测试。若 GitHub Runner 空间不足，应像当前 workflow 一样先把最终资产移动到 Runner 临时目录的 `linux-assets`，再删除 Cargo target、runtime staging、AppImage 解包目录和 deb 中间目录，并执行 Docker/apt 缓存清理。
+
+## 10. 静态验证
+
+生成 deb 后执行：
+
+```bash
+python tools/linux/verify_uos20_deb.py \
+  --deb /tmp/drpa-next-1.0.0-linux-x86_64-uos20.deb \
+  --expected-version '1.0.0-2+uos20.1' \
+  --extract-root /tmp/drpa-uos-build/verify-root \
+  --manifest-output /tmp/drpa-next-1.0.0-linux-x86_64-uos20-deb-manifest.json
+```
+
+验证器覆盖：
+
+- 包名、版本、`amd64` 架构和 `libc6 (>= 2.28)`；
+- `Depends` 不得出现系统 WebKitGTK/JavaScriptCoreGTK/GTK、libstdc++6、`libgcc-s1`、`libgbm1` 或 `libdrm2`；
+- 私有 loader、glibc、C++、NSS、GBM、libdrm、X11、音频和字体关键文件存在；
+- 私有 GBM/libdrm 具备必需符号；
+- 所有应用动态 ELF 的 RPATH 完整且为 `DT_RPATH`；
+- 所有带 interpreter 的应用 ELF 指向固定私有 loader；
+- 实际 ELF 数量与包内 provenance manifest 一致；
+- `/usr/bin/drpa-next` 可执行、不导出 `LD_LIBRARY_PATH`、切换到 `$APPDIR/usr` 且不使用 `WEBKIT_EXEC_PATH`；
+- 包内只有一份 sealed runtime，manifest、wheel 散列、平台、Python/uv/Chrome 可执行位均正确。
+
+发布 manifest 是对最终 deb 的机器可读摘要；包内 provenance manifest 进一步记录每个私有运行库的来源、字节数、SHA-256、修补 ELF 清单和许可证文件。
+
+## 11. glibc 2.28 容器门禁
+
+静态检查无法证明应用真的能启动。workflow 在回收构建磁盘后，用 `tools/linux/uos20-smoke.Dockerfile` 创建 Debian 10 测试镜像并真实安装最终 deb：
+
+```bash
+docker build \
+  --build-arg DEB_FILENAME=drpa-next-1.0.0-linux-x86_64-uos20.deb \
+  --file tools/linux/uos20-smoke.Dockerfile \
+  --tag drpa-next-uos20-smoke \
+  <包含 deb 与 uos20_container_smoke.sh 的临时 context>
+
+docker run --rm drpa-next-uos20-smoke
+```
+
+容器测试必须全部满足：
+
+1. `getconf GNU_LIBC_VERSION` 精确返回 `glibc 2.28`；
+2. 系统没有安装 `libwebkit2gtk-4.1-0`；
+3. 私有 loader 能 `--verify` 和 `--list` 桌面 Host；
+4. loader 列表中的 libc、libstdc++、X11、Fribidi、GBM、libdrm 来自 `/opt/drpa-next-uos20/uos-runtime`；
+5. sealed Python 通过 `ctypes` 观察到私有 glibc 2.35；
+6. 在 `PIP_NO_INDEX=1`、`UV_OFFLINE=1`、禁止下载 Python 的条件下创建全新环境；
+7. 新环境导入 `debugpy`、`drpa_runner`、DrissionPage、ipykernel、jupyter_client、lxml、nbformat、NumPy、Pandas、psutil、rpds、tornado、ZMQ；
+8. 内置 Chrome 以普通用户完成 headless DOM 测试；
+9. `/usr/bin/drpa-next` 在 Xvfb/X11 中持续运行 20 秒，预期由 `timeout` 返回 124，任何提前退出都失败；
+10. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
+
+Dockerfile 会安装 Debian 10 自身的 EGL/GL/GBM/libdrm 等桌面/驱动基础包来模拟目标系统，但不会安装 WebKitGTK 4.1；运行时断言确保应用实际解析到包内 GBM/libdrm，而不是容器的旧版本。
+
+## 12. 发布资产与触发规则
+
+Linux workflow 最终必须收集恰好 9 个资产：
+
+```text
+drpa-next-1.0.0-linux-x86_64.AppImage
+drpa-next-1.0.0-linux-x86_64.AppImage.sha256
+drpa-next-1.0.0-linux-x86_64.deb
+drpa-next-1.0.0-linux-x86_64.deb.sha256
+drpa-next-1.0.0-linux-x86_64-deb-manifest.json
+drpa-next-1.0.0-linux-x86_64-uos20.deb
+drpa-next-1.0.0-linux-x86_64-uos20.deb.sha256
+drpa-next-1.0.0-linux-x86_64-uos20-deb-manifest.json
+drpa-next-1.0.0-linux-x86_64-wheelhouse-lock.json
+```
+
+普通 push 只有在提交信息以 `release(linux):` 开头时才会上传并覆盖 Release 资产；也可手动运行 workflow 并设置 `publish=true`。文档提交不应伪装成发布提交，否则会无意义地重建数百 MB 产物。
+
+发布前检查：
+
+```bash
+python -m unittest discover -s tools/linux/tests -v
+python -m compileall -q tools/linux
+git diff --check
+```
+
+发布后必须从 GitHub Release API 或页面重新核对文件名、大小、资产状态和 SHA-256，不能只看到 Actions 绿灯就宣布完成。
+
+## 13. 已解决的典型故障
+
+| 现象 | 根因 | 固化修复 |
+| --- | --- | --- |
+| `libfribidi.so.0` 等随机库缺失 | 只复制直接依赖，未覆盖传递闭包 | 递归解析全部非驱动 `DT_NEEDED` |
+| Chrome NSS 错误、`-5925` | `libsoftokn3`/FreeBL 由 `dlopen` 加载，不出现在 `DT_NEEDED` | 显式携带 NSS 模块、信任模块和匹配 `.chk` |
+| 找不到 `libnssckbi.so` | Ubuntu NSS/p11-kit 安装布局不同 | 为 multiarch、`nss/`、`pkcs11/` 维护候选源路径 |
+| `gbm_bo_create_with_modifiers2` 未定义 | UOS 系统 GBM 太旧 | 私有携带并验证 `libgbm.so.1` |
+| `drmGetFormatModifierName` 未定义 | UOS 系统通用 libdrm 太旧 | 私有携带并验证 `libdrm.so.2` |
+| WebKit 查找 `././/lib/.../WebKitNetworkProcess` 失败 | 重定位后生产 `PKGLIBEXECDIR` 相对工作目录不正确 | launcher 在执行 Host 前 `cd "$APPDIR/usr"` |
+| 设置 `WEBKIT_EXEC_PATH` 仍无效 | 该变量只在 WebKit developer mode 生效 | 删除该变量，按生产路径语义修复工作目录 |
+| 系统工具加载私有 libc 后崩溃 | launcher 全局导出 `LD_LIBRARY_PATH` | 用 interpreter + 每 ELF RPATH 隔离，不污染系统子进程 |
+| Docker 构建前磁盘只剩几十 MB | AppImage、Cargo target、两个 deb 工作树并存 | 先 stage 9 项最终资产，再清理构建树和缓存 |
+| CI 构建成功但目标机仍失败 | 只做编译或静态检查，没有旧用户态运行 | 增加 Debian 10/glibc 2.28 真实安装、Chrome、X11 门禁 |
+
+遇到新缺库时，不要立即把目标机的任意 `.so` 复制进包。先确认它属于普通用户态闭包还是显卡/内核 ABI 边界，再更新构建器、验证器和测试；对 `dlopen` 模块还要补完整的数据/校验伴随文件。
+
+## 14. 目标机安装、诊断与卸载
+
+安装前确认架构与 glibc：
+
+```bash
+dpkg --print-architecture
+getconf GNU_LIBC_VERSION
+```
+
+期望为 `amd64` 和 `glibc 2.28` 或更高。安装：
+
+```bash
+sudo apt install ./drpa-next-1.0.0-linux-x86_64-uos20.deb
+```
+
+核对包信息：
+
+```bash
+dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' drpa-next
+dpkg-deb -f ./drpa-next-1.0.0-linux-x86_64-uos20.deb Depends
+```
+
+确认私有 loader 解析：
+
+```bash
+/opt/drpa-next-uos20/uos-runtime/ld-linux-x86-64.so.2 \
+  --list /opt/drpa-next-uos20/usr/bin/drpa-desktop
+```
+
+启动日志排查可在终端运行：
+
+```bash
+G_MESSAGES_DEBUG=all /usr/bin/drpa-next
+```
+
+卸载：
+
+```bash
+sudo apt remove drpa-next
+```
+
+卸载不会主动删除 XDG 用户数据。若确需清理数据，应先在应用中确认数据目录并由用户显式备份/删除，不能把清理用户数据加入 package maintainer script。
+
+## 15. UOS 20 实体机人工回归
+
+发布后至少记录以下结果：
+
+- 从文件管理器和终端各启动一次，窗口可移动、缩放、最小化、最大化和关闭；
+- DDE/X11 会话正常，若系统使用 Wayland/XWayland 也记录实际 backend；
+- 断网首次初始化运行环境，状态页显示 Python/Jupyter/Chrome 健康；
+- 安装并运行 Bing 示例 RPAZ，浏览器能启动、日志和产物可见；
+- Studio 连续运行两个 Notebook 单元，Kernel 状态保持；
+- 打开工作区和产物目录，确认 `xdg-open` 未被私有 libc 污染；
+- 取消任务后 Python/Jupyter/Chrome 进程树退出；
+- 中文、空格与非 ASCII 项目路径；
+- 普通用户运行，不依赖 root；
+- 升级安装新 deb 后用户项目、设置、日志和运行记录保留；
+- 卸载后 XDG 用户数据仍保留；
+- 至少记录显卡型号、驱动/Mesa 版本、内核、会话类型和测试日志。
+
+若实体机只在 GPU/WebKit 路径失败，可临时收集软件渲染对照结果帮助定位，但不能把永久禁用所有 GPU 当作未经评估的默认修复。
+
+## 16. 后续维护约束
+
+以下变化都要求重新执行完整 UOS 门禁和实体机回归：
+
+- Rust toolchain、Tauri、WebKitGTK、GTK、GStreamer 或系统构建基线升级；
+- CPython、uv、Jupyter、原生 wheel 或 Chrome for Testing 升级；
+- 私有 glibc/libstdc++/libgcc、NSS、GBM、libdrm 清单变化；
+- AppDir 或 WebKit helper 目录变化；
+- interpreter、RPATH、launcher、XDG 数据路径变化；
+- Debian control 依赖、包名、安装根、版本或升级策略变化。
+
+不要把 `ubuntu-latest` 作为 UOS 正式运行层来源；当前构建器故意要求 Ubuntu 22.04 的 glibc 2.35。未来若迁移构建基线，应先分析新 glibc 的最低内核/系统调用要求、C++ ABI、WebKit helper 和所有私有库来源，再引入新的包修订号与兼容矩阵。
+
+Linux 当前没有 Windows `.drpa-update` 文件级更新链。UOS 版本升级通过 `apt install ./新版-uos20.deb` 完成，包管理文件可替换，XDG 用户数据保持独立。若未来实现 Linux updater，必须处理正在运行的 ELF、deb 数据库一致性、签名、回滚和权限边界，不能直接复用 Windows Worker。
