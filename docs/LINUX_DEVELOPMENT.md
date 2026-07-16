@@ -294,12 +294,12 @@ Ubuntu 22.04 生成的普通 AppImage 和现代 deb 不能在 UOS 20 上直接�
 `tools/linux/build_uos20_deb.py` 从同一个已验证 AppDir 生成独立包：
 
 - 固定安装根为 `/opt/drpa-next-uos20`，Debian 包名仍为 `drpa-next`，可由包管理器正常升级或卸载；
-- 从 Ubuntu 22.04 原生 runner 复制 glibc 2.35 动态加载器、libc/NSS、libstdc++ 和 libgcc，并保存文件散列与许可证；
+- 从 Ubuntu 22.04 原生 runner 复制 glibc 2.35 动态加载器、libc/NSS、libstdc++ 和 libgcc，并递归解析全部 `DT_NEEDED`，把 Fribidi、X11/XCB、ALSA、字体等非驱动用户态库补入私有层；所有文件保存来源、散列与许可证；
 - 使用 `patchelf` 给 AppDir 中每个 x86_64 动态 ELF 写入 `/opt/drpa-next-uos20/uos-runtime/ld-linux-x86-64.so.2`；
 - 给每个动态 ELF 写入传递型 `DT_RPATH`，覆盖桌面 Host、WebKit 子进程、Python/uv、生成 venv、Python 原生扩展和 Chrome；
 - 启动器只设置 GTK/AppDir 环境，不导出全局 `LD_LIBRARY_PATH`，避免 UOS 自带的 `xdg-open`、文件管理器或 shell 错误加载私有 libc；
 - WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup、Python/Jupyter、uv 和 Chrome 全部来自应用包，不安装系统 `libwebkit2gtk-4.1-0`；
-- EGL、GL、GBM 与其 DRM 驱动栈仍来自 UOS，因为把构建机 Mesa 强塞给目标机反而会破坏显卡 ABI。
+- 只有 EGL、GL、GBM 与其 DRM 驱动栈仍来自 UOS，因为把构建机 Mesa 强塞给目标机反而会破坏显卡 ABI。
 
 专用包只能在 glibc 2.35 的 Ubuntu 22.04 runner 组装，不能在开发者当前发行版随意生成：
 

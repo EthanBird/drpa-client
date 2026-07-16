@@ -77,6 +77,15 @@ class Uos20PackagePolicyTests(unittest.TestCase):
             self.assertIn("libnss_files.so.2", copied)
             self.assertIn("libstdc++.so.6", copied)
 
+    def test_only_graphics_driver_abi_packages_remain_system_dependencies(self) -> None:
+        dependencies = ", ".join(BASE_DEPENDENCIES)
+        self.assertNotIn("libx11-6", dependencies)
+        self.assertNotIn("libasound2", dependencies)
+        self.assertNotIn("libfontconfig1", dependencies)
+        self.assertIn("libegl1", dependencies)
+        self.assertIn("libgl1", dependencies)
+        self.assertIn("libgbm1", dependencies)
+
 
 if __name__ == "__main__":
     unittest.main()

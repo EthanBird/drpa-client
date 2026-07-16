@@ -22,6 +22,8 @@ test -x "$desktop"
 "$loader" --list "$desktop" > /tmp/drpa-desktop-loader-list.txt
 grep -Fq "$app_root/uos-runtime/libc.so.6" /tmp/drpa-desktop-loader-list.txt
 grep -Fq "$app_root/uos-runtime/libstdc++.so.6" /tmp/drpa-desktop-loader-list.txt
+grep -Fq "$app_root/uos-runtime/libX11.so.6" /tmp/drpa-desktop-loader-list.txt
+grep -Fq "$app_root/uos-runtime/libfribidi.so.0" /tmp/drpa-desktop-loader-list.txt
 
 runtime_manifest="$(find "$app_root" -type f -path '*/runtime/manifest.json' -print -quit)"
 test -n "$runtime_manifest"

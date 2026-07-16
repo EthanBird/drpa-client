@@ -51,6 +51,12 @@ REQUIRED_PRIVATE_RUNTIME_FILES = {
     "libnss_files.so.2",
     "libgcc_s.so.1",
     "libstdc++.so.6",
+    "libX11.so.6",
+    "libasound.so.2",
+    "libfontconfig.so.1",
+    "libfreetype.so.6",
+    "libfribidi.so.0",
+    "libxcb.so.1",
 }
 
 

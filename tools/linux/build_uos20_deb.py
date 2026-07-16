@@ -44,12 +44,25 @@ BASE_DEPENDENCIES = (
     "libgl1",
     "libgbm1",
     "libdrm2",
-    "libx11-6",
-    "libxcb1",
-    "libasound2",
-    "libfontconfig1",
-    "libfreetype6",
     "xdg-utils",
+)
+
+# These sonames are coupled to the target system's Mesa/GLVND/DRM driver stack.
+# Every other missing DT_NEEDED entry is copied recursively into the private layer.
+SYSTEM_DRIVER_SONAMES = {
+    "libEGL.so.1",
+    "libGL.so.1",
+    "libGLX.so.0",
+    "libGLdispatch.so.0",
+    "libOpenGL.so.0",
+    "libgbm.so.1",
+    "libdrm.so.2",
+}
+SYSTEM_LIBRARY_DIRS = (
+    "lib/x86_64-linux-gnu",
+    "usr/lib/x86_64-linux-gnu",
+    "lib64",
+    "usr/lib64",
 )
 
 SYSTEM_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
@@ -112,7 +125,17 @@ def resolved_source(root: Path, candidates: tuple[str, ...]) -> Path:
     raise ValueError(f"required private runtime file is missing: {', '.join(candidates)}")
 
 
-def copy_private_runtime(system_root: Path, target: Path) -> list[dict[str, object]]:
+def resolve_runtime_soname(system_root: Path, soname: str) -> Path:
+    for directory in SYSTEM_LIBRARY_DIRS:
+        candidate = system_root / directory / soname
+        if candidate.exists() and candidate.resolve().is_file():
+            return candidate.resolve()
+    raise ValueError(f"Ubuntu 22.04 runtime closure cannot resolve {soname}")
+
+
+def copy_private_runtime(
+    system_root: Path, target: Path, app_root: Path | None = None
+) -> list[dict[str, object]]:
     target.mkdir(parents=True, exist_ok=True)
     inventory: list[dict[str, object]] = []
     copied_names: set[str] = set()
@@ -145,6 +168,35 @@ def copy_private_runtime(system_root: Path, target: Path) -> list[dict[str, obje
     libstdcxx = target / "libstdc++.so.6"
     if b"GLIBCXX_3.4.30" not in libstdcxx.read_bytes():
         raise ValueError("private libstdc++.so.6 does not provide GLIBCXX_3.4.30")
+
+    if app_root is not None:
+        existing_names = {
+            path.name for path in app_root.rglob("*") if path.is_file() or path.is_symlink()
+        }
+        existing_names.update(copied_names)
+        queue = [path for path in app_root.rglob("*") if is_x86_64_elf(path)]
+        inspected: set[Path] = set()
+        while queue:
+            path = queue.pop()
+            if path in inspected:
+                continue
+            inspected.add(path)
+            needed = patchelf_output(path, "--print-needed")
+            if needed.returncode != 0:
+                continue
+            for soname in needed.stdout.splitlines():
+                soname = soname.strip()
+                if (
+                    not soname
+                    or "/" in soname
+                    or soname in existing_names
+                    or soname in SYSTEM_DRIVER_SONAMES
+                ):
+                    continue
+                source = resolve_runtime_soname(system_root, soname)
+                copy(source, soname)
+                existing_names.add(soname)
+                queue.append(target / soname)
     return sorted(inventory, key=lambda entry: str(entry["path"]))
 
 
@@ -282,7 +334,9 @@ def build_uos20_deb(
     shutil.copytree(appdir, app_target, symlinks=True)
 
     patched, interpreters = patch_appdir_elfs(app_target)
-    private_inventory = copy_private_runtime(system_root, package_root / PRIVATE_RUNTIME)
+    private_inventory = copy_private_runtime(
+        system_root, package_root / PRIVATE_RUNTIME, app_target
+    )
 
     launcher = package_root / "usr/bin/drpa-next"
     launcher.parent.mkdir(parents=True, exist_ok=True)
@@ -310,6 +364,7 @@ def build_uos20_deb(
         "privateGlibcVersion": glibc_version,
         "privateInterpreter": f"/{PRIVATE_LOADER.as_posix()}",
         "privateRpath": PRIVATE_RPATH,
+        "systemDriverSonames": sorted(SYSTEM_DRIVER_SONAMES),
         "patchedElfCount": len(patched),
         "interpreterElfCount": len(interpreters),
         "patchedElfs": patched,
