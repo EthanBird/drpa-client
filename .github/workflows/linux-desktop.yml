@@ -227,12 +227,53 @@ jobs:
             --expected-version "$DRPA_UOS20_DEB_VERSION" \
             --extract-root "${{ runner.temp }}/uos20-deb-extract" \
             --manifest-output "${{ runner.temp }}/uos20-deb-package-manifest.json"
+      - name: Stage release assets and reclaim build disk
+        shell: bash
+        run: |
+          assets="${{ runner.temp }}/linux-assets"
+          mkdir -p "$assets"
+          appimage="$(find target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          mv "$appimage" "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64.AppImage"
+          mv "${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64.deb" \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64.deb"
+          mv "${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb" \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          mv "${{ runner.temp }}/deb-package-manifest.json" \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-deb-manifest.json"
+          mv "${{ runner.temp }}/uos20-deb-package-manifest.json" \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20-deb-manifest.json"
+          cp apps/desktop/src-tauri/resources/linux/runtime/wheelhouse-lock.json \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-wheelhouse-lock.json"
+          (
+            cd "$assets"
+            sha256sum "drpa-next-${DRPA_VERSION}-linux-x86_64.AppImage" \
+              >"drpa-next-${DRPA_VERSION}-linux-x86_64.AppImage.sha256"
+            sha256sum "drpa-next-${DRPA_VERSION}-linux-x86_64.deb" \
+              >"drpa-next-${DRPA_VERSION}-linux-x86_64.deb.sha256"
+            sha256sum "drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb" \
+              >"drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb.sha256"
+          )
+          rm -rf \
+            target \
+            apps/desktop/src-tauri/resources/linux/runtime \
+            "${{ runner.temp }}/drpa-linux" \
+            "${{ runner.temp }}/appimage-extract" \
+            "${{ runner.temp }}/bundled-deb-work" \
+            "${{ runner.temp }}/uos20-deb-work" \
+            "${{ runner.temp }}/deb-extract" \
+            "${{ runner.temp }}/uos20-deb-extract" \
+            "${{ runner.temp }}/installed-layout-environment" \
+            "${{ runner.temp }}/deb-installed-layout-environment"
+          docker system prune --all --force
+          sudo apt-get clean
+          df -h /
       - name: Install and run UOS package on glibc 2.28
         shell: bash
         run: |
           context="${{ runner.temp }}/uos20-container-context"
           mkdir -p "$context"
-          uos_deb="${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          uos_deb="${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
           cp "$uos_deb" "$context/$(basename "$uos_deb")"
           cp tools/linux/uos20_container_smoke.sh "$context/uos20_container_smoke.sh"
           docker build \
@@ -242,25 +283,18 @@ jobs:
             --tag drpa-next-uos20-smoke \
             "$context"
           docker run --rm drpa-next-uos20-smoke
-      - name: Collect Linux desktop assets
+      - name: Verify collected Linux desktop assets
         shell: bash
         run: |
-          mkdir -p "${{ runner.temp }}/linux-assets"
-          appimage="$(find target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
-          output="${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64.AppImage"
-          cp "$appimage" "$output"
-          deb="${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64.deb"
-          deb_output="${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64.deb"
-          cp "$deb" "$deb_output"
-          cp "${{ runner.temp }}/deb-package-manifest.json" "${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-deb-manifest.json"
-          uos_deb="${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
-          uos_deb_output="${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
-          cp "$uos_deb" "$uos_deb_output"
-          cp "${{ runner.temp }}/uos20-deb-package-manifest.json" "${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20-deb-manifest.json"
-          cp apps/desktop/src-tauri/resources/linux/runtime/wheelhouse-lock.json "${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-wheelhouse-lock.json"
-          (cd "${{ runner.temp }}/linux-assets" && sha256sum "$(basename "$output")" >"$(basename "$output").sha256")
-          (cd "${{ runner.temp }}/linux-assets" && sha256sum "$(basename "$deb_output")" >"$(basename "$deb_output").sha256")
-          (cd "${{ runner.temp }}/linux-assets" && sha256sum "$(basename "$uos_deb_output")" >"$(basename "$uos_deb_output").sha256")
+          assets="${{ runner.temp }}/linux-assets"
+          mapfile -t files < <(find "$assets" -maxdepth 1 -type f -print | sort)
+          test "${#files[@]}" -eq 9
+          (
+            cd "$assets"
+            sha256sum --check "drpa-next-${DRPA_VERSION}-linux-x86_64.AppImage.sha256"
+            sha256sum --check "drpa-next-${DRPA_VERSION}-linux-x86_64.deb.sha256"
+            sha256sum --check "drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb.sha256"
+          )
       - uses: actions/upload-artifact@v4
         with:
           name: drpa-next-linux-x86_64
