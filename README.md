@@ -28,7 +28,7 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 | Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 构建；Ubuntu 22.04 与 Debian 10/glibc 2.28 安装、离线运行和 X11 门禁 | `1.0.0` AppImage、现代 deb 与 UOS 20 专用 deb |
 | macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
 
-Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage 与 deb，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录。现代 deb `1.0.0-2` 把 WebKitGTK 4.1、JavaScriptCoreGTK、GTK、GStreamer 和 helper process 私有安装到 `/opt/drpa-next`，适用于 glibc 2.35+。`drpa-next-1.0.0-linux-x86_64-uos20.deb` 面向 UOS Desktop 20 Professional（eagle）/glibc 2.28：固定安装到 `/opt/drpa-next-uos20`，额外内置 glibc 2.35 动态加载器、libstdc++ 与 libgcc，递归补齐 X11、音频、字体等非驱动 ELF 依赖，并固定所有应用 ELF 的解释器和传递型 RPATH；CI 在 Debian 10/glibc 2.28 容器中完成安装、离线 Python/Jupyter 原生扩展、Chrome、X11、卸载与数据保留测试。两种 deb 都不依赖系统 `libwebkit2gtk-4.1-0`；EGL/GL/GBM/DRM 仍由目标机提供以匹配显卡驱动。Linux 暂不支持 `.drpa-update`。接手 Linux 端请从 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md) 开始。
+Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage 与 deb，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录。现代 deb `1.0.0-2` 把 WebKitGTK 4.1、JavaScriptCoreGTK、GTK、GStreamer 和 helper process 私有安装到 `/opt/drpa-next`，适用于 glibc 2.35+。`drpa-next-1.0.0-linux-x86_64-uos20.deb` 面向 UOS Desktop 20 Professional（eagle）/glibc 2.28：固定安装到 `/opt/drpa-next-uos20`，额外内置 glibc 2.35 动态加载器、libstdc++、libgcc、NSS 动态模块与兼容 WebKitGTK 的 GBM，递归补齐 X11、音频、字体等非驱动 ELF 依赖，并固定所有应用 ELF 的解释器和传递型 RPATH；CI 在 Debian 10/glibc 2.28 容器中完成安装、离线 Python/Jupyter 原生扩展、Chrome、X11、卸载与数据保留测试。两种 deb 都不依赖系统 `libwebkit2gtk-4.1-0`；UOS 包只让 EGL/GL/DRM 由目标机提供以匹配显卡驱动。Linux 暂不支持 `.drpa-update`。接手 Linux 端请从 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md) 开始。
 
 ## 架构边界
 
@@ -101,7 +101,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 
 ## 当前限制
 
-- 当前稳定 Release 发布 Windows x64 Setup，以及 Linux x86_64 runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++ 运行层。两者仍需要内核、图形会话以及与显卡驱动匹配的 EGL/GL/GBM；真实 UOS 20、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
+- 当前稳定 Release 发布 Windows x64 Setup，以及 Linux x86_64 runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/GBM 运行层。两者仍需要内核、图形会话以及与显卡驱动匹配的 EGL/GL/DRM；真实 UOS 20、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
 - 当前更新入口使用本地 `.drpa-update`，已支持逐文件差量；尚未实现在线更新源、签名信任链和大文件块级差分。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
 - AI Agent 当前是单 Agent MVP，尚未提供流式输出、diff/checkpoint、会话导出或运行日志工具；自动调度、浏览器录制器、包签名和私有仓库仍处于路线阶段。

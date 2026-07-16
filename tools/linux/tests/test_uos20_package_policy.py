@@ -21,8 +21,8 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertNotIn("libwebkit2gtk", dependencies)
         self.assertNotIn("libgcc-s1", dependencies)
         self.assertNotIn("libstdc++6", dependencies)
+        self.assertNotIn("libgbm1", dependencies)
         self.assertIn("libegl1", dependencies)
-        self.assertIn("libgbm1", dependencies)
 
     def test_launcher_does_not_poison_system_child_processes(self) -> None:
         source = launcher_source()
@@ -105,7 +105,7 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertNotIn("libfontconfig1", dependencies)
         self.assertIn("libegl1", dependencies)
         self.assertIn("libgl1", dependencies)
-        self.assertIn("libgbm1", dependencies)
+        self.assertNotIn("libgbm1", dependencies)
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@
 
 - 新增 `drpa-next-1.0.0-linux-x86_64-uos20.deb`，最低系统基线为 x86_64、glibc 2.28，覆盖 UOS Desktop 20 Professional（eagle）与同代 Debian 10 用户态。
 - UOS 包固定安装到 `/opt/drpa-next-uos20`，随包携带 glibc 2.35 动态加载器、libc/NSS、libstdc++ 与 libgcc；构建器为桌面 Host、WebKit helper、Python、uv、Chrome 等全部动态 ELF 写入私有解释器和传递型 `DT_RPATH`，解决现代 WebKitGTK 的 `GLIBC_2.35`、`GLIBCXX_3.4.30` 与 `CXXABI` 缺口。
-- 启动器不全局导出 `LD_LIBRARY_PATH`，避免私有 libc 污染 `xdg-open` 等 UOS 系统程序；Mesa/GLVND 的 EGL/GL/GBM 继续由目标系统提供，以匹配真实显卡驱动。
-- 新增机器可读 UOS deb manifest、私有运行库来源/散列库存和 ELF 解释器/RPATH 校验。构建器递归解析 `DT_NEEDED`，把 Fribidi、X11/XCB、ALSA、字体等非驱动用户态依赖补入私有层；包的 `Depends` 不含系统 WebKitGTK、libstdc++6 或 `libgcc-s1`，只保留 glibc 2.28 基线、`xdg-utils` 和 EGL/GL/GBM/DRM 图形驱动 ABI 边界。
+- 启动器不全局导出 `LD_LIBRARY_PATH`，避免私有 libc 污染 `xdg-open` 等 UOS 系统程序；WebKitGTK 所需的 GBM 进入私有层，Mesa/GLVND 的 EGL/GL/DRM 继续由目标系统提供，以匹配真实显卡驱动。
+- 新增机器可读 UOS deb manifest、私有运行库来源/散列库存和 ELF 解释器/RPATH 校验。构建器递归解析 `DT_NEEDED`，把 Fribidi、X11/XCB、ALSA、字体、NSS 动态模块和 GBM 等非驱动用户态依赖补入私有层；包的 `Depends` 不含系统 WebKitGTK、libstdc++6、`libgcc-s1` 或 `libgbm1`，只保留 glibc 2.28 基线、`xdg-utils` 和 EGL/GL/DRM 图形驱动 ABI 边界。
 - Linux 发布门禁新增 Debian 10/glibc 2.28 容器：真实安装 UOS deb，在未安装 `libwebkit2gtk-4.1-0` 的条件下完成离线 runtime bootstrap、Jupyter/NumPy/Pandas/debugpy 等原生扩展导入、Chrome headless、X11 GUI 持续运行、卸载和用户数据保留验证。
 
 ## [1.0.0] - 2026-07-15
@@ -17,7 +17,7 @@
 ### Linux x86_64 发布
 
 - deb 包修订为 `1.0.0-2`：不再使用 Tauri 默认的系统 WebKitGTK 依赖布局，而是从已验证 AppImage AppDir 生成 `/opt/drpa-next` 私有运行时，内含 WebKitGTK 4.1、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 与 WebKit helper process。
-- Linux 发布门禁会在打包后卸载 Runner 的 `libwebkit2gtk-4.1-0`，确认 deb 的 `Depends` 只保留 glibc/libgcc/libstdc++ 与驱动相关 EGL/GL/GBM 基础运行库、安装不会重新拉取 WebKitGTK，并在该状态下完成 X11 启动与卸载数据保留测试。
+- 现代 Linux deb 的发布门禁会在打包后卸载 Runner 的 `libwebkit2gtk-4.1-0`，确认 `Depends` 只保留 glibc/libgcc/libstdc++ 与驱动相关 EGL/GL/GBM 基础运行库、安装不会重新拉取 WebKitGTK，并在该状态下完成 X11 启动与卸载数据保留测试；UOS 专用 deb 另行验证私有 GBM。
 - 新增 Ubuntu 22.04 原生离线桌面流水线：构建 CPython 3.11 sealed runtime，将 Jupyter、DrissionPage 和 Chrome for Testing 作为 Tauri resource 内嵌 AppImage 与 deb，并上传两种包、SHA-256、deb manifest 与 wheelhouse lock。
 - Host 通过 Tauri `resource_dir` 定位 AppImage 内的只读 runtime；生成环境、缓存、项目和日志继续写入 XDG 本地数据目录。
 - 新增平台能力协议；Linux 设置页隐藏 Windows `.drpa-update`，运行环境和目录打开文案使用 Linux/XDG 语义。

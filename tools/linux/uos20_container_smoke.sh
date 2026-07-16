@@ -24,6 +24,8 @@ grep -Fq "$app_root/uos-runtime/libc.so.6" /tmp/drpa-desktop-loader-list.txt
 grep -Fq "$app_root/uos-runtime/libstdc++.so.6" /tmp/drpa-desktop-loader-list.txt
 grep -Fq "$app_root/uos-runtime/libX11.so.6" /tmp/drpa-desktop-loader-list.txt
 grep -Fq "$app_root/uos-runtime/libfribidi.so.0" /tmp/drpa-desktop-loader-list.txt
+grep -Fq "$app_root/uos-runtime/libgbm.so.1" /tmp/drpa-desktop-loader-list.txt
+grep -aFq gbm_bo_create_with_modifiers2 "$app_root/uos-runtime/libgbm.so.1"
 
 runtime_manifest="$(find "$app_root" -type f -path '*/runtime/manifest.json' -print -quit)"
 test -n "$runtime_manifest"

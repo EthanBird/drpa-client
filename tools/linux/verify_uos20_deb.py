@@ -38,6 +38,7 @@ FORBIDDEN_DEPENDENCIES = {
     "libwebkit2gtk-4.1-0",
     "libjavascriptcoregtk-4.1-0",
     "libgtk-3-0",
+    "libgbm1",
 }
 REQUIRED_PRIVATE_RUNTIME_FILES = {
     "ld-linux-x86-64.so.2",
@@ -60,6 +61,7 @@ REQUIRED_PRIVATE_RUNTIME_FILES = {
     "libnssdbm3.chk",
     "libsoftokn3.so",
     "libsoftokn3.chk",
+    "libgbm.so.1",
     "libX11.so.6",
     "libasound.so.2",
     "libfontconfig.so.1",
@@ -117,6 +119,12 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
     missing_private = sorted(REQUIRED_PRIVATE_RUNTIME_FILES - private_names)
     if missing_private:
         errors.append(f"private UOS runtime is incomplete: {', '.join(missing_private)}")
+    private_gbm = private_root / "libgbm.so.1"
+    if (
+        private_gbm.is_file()
+        and b"gbm_bo_create_with_modifiers2" not in private_gbm.read_bytes()
+    ):
+        errors.append("private libgbm.so.1 lacks gbm_bo_create_with_modifiers2")
 
     provenance_path = app_root / "uos-runtime-manifest.json"
     if not provenance_path.is_file():
