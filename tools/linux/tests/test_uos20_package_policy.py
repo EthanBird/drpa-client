@@ -51,7 +51,7 @@ class Uos20PackagePolicyTests(unittest.TestCase):
             cxx = root / "usr/lib/x86_64-linux-gnu"
             runtime.mkdir(parents=True)
             cxx.mkdir(parents=True)
-            filenames = (
+            runtime_filenames = (
                 "ld-linux-x86-64.so.2",
                 "libc.so.6",
                 "libm.so.6",
@@ -66,8 +66,21 @@ class Uos20PackagePolicyTests(unittest.TestCase):
                 "libnss_dns.so.2",
                 "libnss_files.so.2",
             )
-            for filename in filenames:
+            nss_filenames = (
+                "libfreebl3.so",
+                "libfreebl3.chk",
+                "libfreeblpriv3.so",
+                "libfreeblpriv3.chk",
+                "libnssckbi.so",
+                "libnssdbm3.so",
+                "libnssdbm3.chk",
+                "libsoftokn3.so",
+                "libsoftokn3.chk",
+            )
+            for filename in runtime_filenames:
                 (runtime / filename).write_bytes(filename.encode("utf-8"))
+            for filename in nss_filenames:
+                (cxx / filename).write_bytes(filename.encode("utf-8"))
             (cxx / "libstdc++.so.6").write_bytes(b"GLIBCXX_3.4.30")
 
             inventory = copy_private_runtime(root, root / "output")
@@ -75,6 +88,9 @@ class Uos20PackagePolicyTests(unittest.TestCase):
             copied = {entry["path"] for entry in inventory}
             self.assertIn("libnss_dns.so.2", copied)
             self.assertIn("libnss_files.so.2", copied)
+            self.assertIn("libsoftokn3.so", copied)
+            self.assertIn("libfreeblpriv3.so", copied)
+            self.assertIn("libnssckbi.so", copied)
             self.assertIn("libstdc++.so.6", copied)
 
     def test_only_graphics_driver_abi_packages_remain_system_dependencies(self) -> None:
