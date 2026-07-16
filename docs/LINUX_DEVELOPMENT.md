@@ -4,7 +4,7 @@
 
 ## 1. 当前结论
 
-DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage 与 deb，与 Windows Setup 共用 `desktop-v1.0.0` Release。Ubuntu 22.04 workflow 负责构建 sealed runtime、两种格式打包、解包验证、断网 bootstrap、deb 安装卸载和 X11 启动后上传；Ubuntu 24.04、Wayland 和人工 GUI 验收仍是持续回归项，不能因首次发布而删除这些门禁。
+DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb，与 Windows Setup 共用 `desktop-v1.0.0` Release。Ubuntu 22.04 workflow 负责构建 sealed runtime、三种格式打包、解包验证、断网 bootstrap、deb 安装卸载和 X11 启动后上传；UOS 包还必须在 Debian 10/glibc 2.28 容器中通过完整安装与运行门禁。Ubuntu 24.04、真实 UOS 20、Wayland 和人工 GUI 验收仍是持续回归项，不能因容器测试通过而删除这些门禁。
 
 | 能力 | Linux 当前状态 | 证据或入口 |
 | --- | --- | --- |
@@ -18,6 +18,7 @@ DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage 与 deb
 | Linux sealed runtime CI | 已接入 | `.github/workflows/linux-desktop.yml` 的 Ubuntu 22.04 原生构建与 air-gap smoke |
 | AppImage 最终布局 | 已实现并发布，跨发行版回归持续进行 | `tauri.linux.conf.json` 把 runtime 放入只读 resource，Host 使用 `resource_dir` 定位 |
 | deb 最终布局 | 已实现并发布 | AppImage AppDir→`/opt/drpa-next` 私有桌面运行时、`dpkg-deb` manifest、无系统 WebKitGTK 安装/启动/卸载检查 |
+| UOS 20 deb | 已接入发布门禁 | `/opt/drpa-next-uos20` 私有 glibc/C++ 层、ELF 固定解释器/RPATH、Debian 10/glibc 2.28 运行验证 |
 | Linux 文件级热更新 | 未实现 | 当前命令、协议与独立 Worker 只接受 `windows-x86_64` |
 | Linux GUI、浏览器、Jupyter 端到端 | CI 已覆盖首层 | AppImage 解包 bootstrap、Chrome/Jupyter smoke 与 Xvfb 启动；Wayland/人工验收待完成 |
 | Linux 任务取消 | 已实现 | Python worker/Studio Kernel 独立 process group，`SIGTERM` 后超时 `SIGKILL` |
@@ -29,8 +30,8 @@ DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage 与 deb
 第一阶段只处理 **Linux x86_64 + glibc**：
 
 - 构建基线：Ubuntu 22.04；它能提供 WebKitGTK 4.1，也能降低 AppImage 的 glibc 最低版本。
-- 验证系统：至少 Ubuntu 22.04 和 Ubuntu 24.04 的干净虚拟机。
-- 发行格式：AppImage 适合免安装分发；deb 适合 Ubuntu/Debian 包管理器安装，两者共用只读 runtime 与 XDG 数据合同。
+- 验证系统：现代包至少覆盖 Ubuntu 22.04 和 Ubuntu 24.04；UOS 包的自动最低基线为 Debian 10/glibc 2.28，并继续在真实 UOS Desktop 20 Professional（eagle）机器人工回归。
+- 发行格式：AppImage 适合 glibc 2.35+ 免安装分发；现代 deb 适合 Ubuntu 22.04+；文件名带 `uos20` 的 deb 面向 UOS 20/glibc 2.28。三者共用只读 runtime 与 XDG 数据合同。
 - Python：CPython `3.11.9`。
 - Node.js：`24`，以 root `package.json` 和 CI 为准。
 - Rust：stable，最低 Rust 版本以 workspace `Cargo.toml` 为准。
@@ -79,7 +80,7 @@ sudo apt install -y \
   xvfb
 ```
 
-依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 只属于源码构建环境。AppImage 封装桌面运行库；deb `1.0.0-2` 直接复用同一 AppDir，把 WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 和 helper process 放入 `/opt/drpa-next`，`Depends` 不得再出现 `libwebkit2gtk-4.1-0` 等 WebKit/GTK 桌面包。glibc 2.35+、libgcc、libstdc++ 以及 Mesa/GLVND 的 EGL/GL/GBM 仍由系统提供，后者必须匹配目标机显卡驱动，不应强行内置。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
+依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 只属于源码构建环境。AppImage 封装桌面运行库；现代 deb `1.0.0-2` 直接复用同一 AppDir，把 WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 和 helper process 放入 `/opt/drpa-next`，`Depends` 不得再出现 `libwebkit2gtk-4.1-0` 等 WebKit/GTK 桌面包。现代包的 glibc 2.35+、libgcc 与 libstdc++ 由系统提供；UOS deb 则私有携带这三类 ABI 运行库。两者的 Mesa/GLVND EGL/GL/GBM 都必须来自目标机以匹配显卡驱动，不应强行内置。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
 
 随后安装 Node.js 24、Rust stable 与 Python 3.11.9。建议用版本管理器安装，不要修改仓库中的版本约束来迁就本机旧工具。
 
@@ -286,6 +287,52 @@ sudo apt install ./drpa-next-1.0.0-linux-x86_64.deb
 sudo apt remove drpa-next
 ```
 
+### 7.1 UOS Desktop 20 / glibc 2.28 专用包
+
+Ubuntu 22.04 生成的普通 AppImage 和现代 deb 不能在 UOS 20 上直接运行。原因不只是 Debian `Depends`：桌面 Host 需要 `GLIBC_2.34`，随包 WebKitGTK/JavaScriptCoreGTK 需要 `GLIBC_2.35`、`GLIBCXX_3.4.30` 和比 GCC 8 系统库更高的 C++ ABI。禁止通过删除版本约束或伪造 control 文件宣称兼容。
+
+`tools/linux/build_uos20_deb.py` 从同一个已验证 AppDir 生成独立包：
+
+- 固定安装根为 `/opt/drpa-next-uos20`，Debian 包名仍为 `drpa-next`，可由包管理器正常升级或卸载；
+- 从 Ubuntu 22.04 原生 runner 复制 glibc 2.35 动态加载器、libc/NSS、libstdc++ 和 libgcc，并保存文件散列与许可证；
+- 使用 `patchelf` 给 AppDir 中每个 x86_64 动态 ELF 写入 `/opt/drpa-next-uos20/uos-runtime/ld-linux-x86-64.so.2`；
+- 给每个动态 ELF 写入传递型 `DT_RPATH`，覆盖桌面 Host、WebKit 子进程、Python/uv、生成 venv、Python 原生扩展和 Chrome；
+- 启动器只设置 GTK/AppDir 环境，不导出全局 `LD_LIBRARY_PATH`，避免 UOS 自带的 `xdg-open`、文件管理器或 shell 错误加载私有 libc；
+- WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup、Python/Jupyter、uv 和 Chrome 全部来自应用包，不安装系统 `libwebkit2gtk-4.1-0`；
+- EGL、GL、GBM 与其 DRM 驱动栈仍来自 UOS，因为把构建机 Mesa 强塞给目标机反而会破坏显卡 ABI。
+
+专用包只能在 glibc 2.35 的 Ubuntu 22.04 runner 组装，不能在开发者当前发行版随意生成：
+
+```bash
+python tools/linux/build_uos20_deb.py \
+  --appdir "$extract_root/squashfs-root" \
+  --package-version '1.0.0-2+uos20.1' \
+  --output drpa-next-1.0.0-linux-x86_64-uos20.deb \
+  --work-dir "$extract_root/uos20-deb-work"
+
+python tools/linux/verify_uos20_deb.py \
+  --deb drpa-next-1.0.0-linux-x86_64-uos20.deb \
+  --expected-version '1.0.0-2+uos20.1' \
+  --extract-root "$extract_root/uos20-verify" \
+  --manifest-output drpa-next-1.0.0-linux-x86_64-uos20-deb-manifest.json
+```
+
+正式 workflow 随后使用 `tools/linux/uos20-smoke.Dockerfile` 在 Debian 10 的真实 glibc 2.28 用户态中安装包，确认系统没有 WebKitGTK 4.1，再执行：
+
+1. 私有加载器解析桌面 Host，并确认 libc 与 libstdc++ 来自 `/opt/drpa-next-uos20/uos-runtime`；
+2. 断网创建运行环境，导入 Jupyter、ZMQ、debugpy、lxml、NumPy、Pandas、psutil、rpds 和 tornado 等原生 wheel；
+3. 用内置 Chrome 完成 headless 页面测试；
+4. 使用普通用户、Xvfb 和 X11 启动桌面 Host 20 秒，拒绝早退；
+5. 卸载 `drpa-next` 并确认 XDG 用户数据哨兵仍存在。
+
+安装时必须选择文件名带 `uos20` 的资产：
+
+```bash
+sudo apt install ./drpa-next-1.0.0-linux-x86_64-uos20.deb
+```
+
+自动化容器能证明 glibc 2.28 用户态兼容，但共享 GitHub runner 的宿主内核不是 4.19。因此每次改变 Chrome、glibc 私有层、WebKitGTK 或图形依赖后，还要在用户给出的 UOS 20 / kernel 4.19 / GCC 8.3 物理机或虚拟机完成一次人工启动、RPAZ、Jupyter 和浏览器回归，并把结果记录到 Release 或 PR。
+
 ## 8. 本地验证命令
 
 ### 8.1 前端
@@ -356,14 +403,14 @@ cargo test -p drpa-desktop
 
 Linux 发布流水线必须满足自动化条目；标注为人工覆盖的跨发行版与 Wayland 条目应在后续回归中持续补齐并记录：
 
-1. 干净系统无需安装 WebKitGTK、Python、Node、Rust 或 Chrome 即可启动并运行 RPAZ；glibc 2.35+、基础 C/C++ 运行库和与显卡驱动匹配的 EGL/GL/GBM 仍由系统提供。
+1. 干净系统无需安装 WebKitGTK、Python、Node、Rust 或 Chrome 即可启动并运行 RPAZ；现代包要求系统 glibc 2.35+ 与 C/C++ 运行库，UOS 包只要求系统 glibc 2.28 并使用私有 glibc/C++ 层；两者的 EGL/GL/GBM 仍由系统提供。
 2. 首次运行断网可完成 runtime 初始化，后续运行也不触发 pip/uv 网络请求。
 3. AppImage 或 deb 能稳定定位与自身匹配的 `linux-x86_64` runtime manifest。
 4. UI 使用 WebKitGTK，自动化使用内置 Chrome，两者升级边界清晰。
 5. 数据写入 XDG 目录；应用目录保持只读仍可正常运行。
 6. Studio 源码、RPAZ 导出、Bing 示例、Jupyter 两单元和产物目录打开均通过。
 7. 长任务日志实时输出，取消后完整进程树退出。
-8. 最终包在 Ubuntu 22.04 与 24.04 通过安装、启动、移动、升级和卸载回归。
+8. 现代包在 Ubuntu 22.04 与 24.04 通过安装、启动、移动、升级和卸载回归；UOS 包先通过 Debian 10/glibc 2.28 自动门禁，再在 UOS 20/kernel 4.19 机器完成发布后人工回归。
 9. CI 保存 runtime 构建证明、最终包和机器可读安装库存。
 10. README、Release notes 和应用设置页不再把未实现的 Windows 更新能力显示为 Linux 可用。
 
@@ -378,7 +425,7 @@ pkg-config --modversion webkit2gtk-4.1
 cargo check -p drpa-desktop
 ```
 
-正式 `drpa-next-1.0.0-linux-x86_64.deb` 不应要求该系统包。若 `apt` 仍提示安装 `libwebkit2gtk-4.1-0`，先用 `dpkg-deb -f <包> Version Depends` 检查：正确包版本为 `1.0.0-2`，`Depends` 只包含 glibc/libgcc/libstdc++ 和 EGL/GL/GBM 基础包；出现 `1.0.0` 说明仍在使用已被 Release 覆盖的旧 deb。
+正式 deb 都不应要求该系统包。若 `apt` 仍提示安装 `libwebkit2gtk-4.1-0`，先用 `dpkg-deb -f <包> Version Depends` 检查：现代包版本为 `1.0.0-2`，UOS 包版本为 `1.0.0-2+uos20.1`；UOS 用户还必须确认文件名包含 `uos20`。出现 `1.0.0` 说明仍在使用已被 Release 覆盖的旧 deb。
 
 ### 运行环境页面提示找不到封装运行时
 
@@ -408,8 +455,8 @@ Linux GUI 应用不保证继承 `.bashrc`、`.profile` 等 shell 初始化文件
 - 主开发分支：`codex/drpa-next-platform`。
 - 当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。
 - Windows 稳定基线：`desktop-v1.0.0`，提交 `5e6c793`。
-- Linux 第一优先级：保持 `Build and publish Linux x86_64 offline desktop` workflow 全绿，处理真实 Rust/Clippy/Tauri/AppImage/deb 日志。
-- Linux 第二优先级：在 Ubuntu 22.04/24.04 干净虚拟机分别完成 X11/Wayland、断网首次启动、RPAZ、Notebook、Agent 工具、取消进程树和中文路径人工验收。
+- Linux 第一优先级：保持 `Build and publish Linux x86_64 offline desktop` workflow 全绿，处理真实 Rust/Clippy/Tauri/AppImage、现代 deb 与 UOS deb 日志。
+- Linux 第二优先级：在 UOS 20/kernel 4.19 真机完成专用 deb 回归，并在 Ubuntu 22.04/24.04 干净虚拟机分别完成 X11/Wayland、断网首次启动、RPAZ、Notebook、Agent 工具、取消进程树和中文路径人工验收。
 
 开始编码前请先阅读：
 

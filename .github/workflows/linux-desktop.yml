@@ -40,6 +40,7 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       DRPA_VERSION: 1.0.0
       DRPA_DEB_VERSION: 1.0.0-2
+      DRPA_UOS20_DEB_VERSION: 1.0.0-2+uos20.1
       DRPA_RELEASE_TAG: desktop-v1.0.0
     steps:
       - uses: actions/checkout@v4
@@ -140,6 +141,15 @@ jobs:
             --package-version "$DRPA_DEB_VERSION" \
             --output "${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64.deb" \
             --work-dir "${{ runner.temp }}/bundled-deb-work"
+      - name: Build fixed-runtime UOS Desktop 20 Debian package
+        shell: bash
+        run: |
+          test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.35"
+          python tools/linux/build_uos20_deb.py \
+            --appdir "${{ runner.temp }}/appimage-extract/squashfs-root" \
+            --package-version "$DRPA_UOS20_DEB_VERSION" \
+            --output "${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb" \
+            --work-dir "${{ runner.temp }}/uos20-deb-work"
       - name: Launch AppImage in an isolated X11 session
         shell: bash
         run: |
@@ -208,6 +218,30 @@ jobs:
           fi
           sudo apt-get remove -y "$package"
           test -f "$deb_data/user-data-sentinel"
+      - name: Verify UOS package metadata and private ELF runtime
+        shell: bash
+        run: |
+          uos_deb="${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          python tools/linux/verify_uos20_deb.py \
+            --deb "$uos_deb" \
+            --expected-version "$DRPA_UOS20_DEB_VERSION" \
+            --extract-root "${{ runner.temp }}/uos20-deb-extract" \
+            --manifest-output "${{ runner.temp }}/uos20-deb-package-manifest.json"
+      - name: Install and run UOS package on glibc 2.28
+        shell: bash
+        run: |
+          context="${{ runner.temp }}/uos20-container-context"
+          mkdir -p "$context"
+          uos_deb="${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          cp "$uos_deb" "$context/$(basename "$uos_deb")"
+          cp tools/linux/uos20_container_smoke.sh "$context/uos20_container_smoke.sh"
+          docker build \
+            --progress=plain \
+            --build-arg "DEB_FILENAME=$(basename "$uos_deb")" \
+            --file tools/linux/uos20-smoke.Dockerfile \
+            --tag drpa-next-uos20-smoke \
+            "$context"
+          docker run --rm drpa-next-uos20-smoke
       - name: Collect Linux desktop assets
         shell: bash
         run: |
@@ -219,9 +253,14 @@ jobs:
           deb_output="${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64.deb"
           cp "$deb" "$deb_output"
           cp "${{ runner.temp }}/deb-package-manifest.json" "${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-deb-manifest.json"
+          uos_deb="${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          uos_deb_output="${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          cp "$uos_deb" "$uos_deb_output"
+          cp "${{ runner.temp }}/uos20-deb-package-manifest.json" "${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20-deb-manifest.json"
           cp apps/desktop/src-tauri/resources/linux/runtime/wheelhouse-lock.json "${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-wheelhouse-lock.json"
           (cd "${{ runner.temp }}/linux-assets" && sha256sum "$(basename "$output")" >"$(basename "$output").sha256")
           (cd "${{ runner.temp }}/linux-assets" && sha256sum "$(basename "$deb_output")" >"$(basename "$deb_output").sha256")
+          (cd "${{ runner.temp }}/linux-assets" && sha256sum "$(basename "$uos_deb_output")" >"$(basename "$uos_deb_output").sha256")
       - uses: actions/upload-artifact@v4
         with:
           name: drpa-next-linux-x86_64
@@ -238,13 +277,13 @@ jobs:
           DRPA_RELEASE_NOTES: |
             DRPA Next 1.0.0 Windows x64 与 Linux x86_64 全量离线桌面版。
 
-            Windows 提供免注册表 Setup、封装 Python 3.11/Chrome、Fixed Version WebView2、安装库存和 Bing 每日一图示例。Linux 提供 runtime-complete AppImage 和自包含 deb、SHA-256、deb manifest 与 wheelhouse lock，内含 WebKitGTK 4.1/JavaScriptCoreGTK/GTK、Python 3.11、Jupyter、DrissionPage 和 Chrome for Testing；用户数据写入 XDG 本地数据目录。
+            Windows 提供免注册表 Setup、封装 Python 3.11/Chrome、Fixed Version WebView2、安装库存和 Bing 每日一图示例。Linux 提供 runtime-complete AppImage、现代发行版 deb 和 UOS Desktop 20 专用 deb、SHA-256、deb manifest 与 wheelhouse lock，内含 WebKitGTK 4.1/JavaScriptCoreGTK/GTK、Python 3.11、Jupyter、DrissionPage 和 Chrome for Testing；用户数据写入 XDG 本地数据目录。
 
-            Linux AppImage 与 deb 已在 Ubuntu 22.04 原生 runner 完成密封运行时 air-gap 构建、解包后离线 bootstrap、DrissionPage/Jupyter/ZMQ 导入和 X11 启动测试；deb 修订号为 1.0.0-2，安装测试会先卸载系统 libwebkit2gtk-4.1-0，再验证安装不会拉取该包且 GUI 可持续运行。Mesa/GLVND 的 EGL/GL/GBM 仍由目标系统提供，以匹配显卡驱动。Linux 暂不支持 Windows `.drpa-update`，升级时替换 AppImage 或通过包管理器安装新版 deb；Wayland 与 Ubuntu 24.04 人工 GUI 回归仍在持续补充。
+            Linux AppImage 与现代 deb 已在 Ubuntu 22.04 原生 runner 完成密封运行时 air-gap 构建、解包后离线 bootstrap、DrissionPage/Jupyter/ZMQ 导入和 X11 启动测试；现代 deb 修订号为 1.0.0-2。UOS 专用 deb 修订号为 1.0.0-2+uos20.1，固定安装到 /opt/drpa-next-uos20，内置私有 glibc 2.35、动态加载器、libstdc++/libgcc 并固定全部 ELF 解释器与传递型 RPATH；它还会在 Debian 10/glibc 2.28 容器中完成真实安装、离线 Python/Jupyter 原生扩展导入、Chrome headless、X11 GUI 启动、卸载和数据保留测试，且不安装系统 libwebkit2gtk-4.1-0。Mesa/GLVND 的 EGL/GL/GBM 仍由目标系统提供，以匹配显卡驱动。Linux 暂不支持 Windows `.drpa-update`，升级时替换 AppImage 或通过包管理器安装新版 deb；真实 UOS 20 与 Wayland 人工 GUI 回归仍需持续补充。
         shell: bash
         run: |
           mapfile -t assets < <(find "${{ runner.temp }}/linux-assets" -maxdepth 1 -type f -print | sort)
-          test "${#assets[@]}" -eq 6
+          test "${#assets[@]}" -eq 9
           gh release view "$DRPA_RELEASE_TAG" >/dev/null
           gh release upload "$DRPA_RELEASE_TAG" "${assets[@]}" --clobber
           gh release edit "$DRPA_RELEASE_TAG" \

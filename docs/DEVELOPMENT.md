@@ -4,7 +4,7 @@
 
 ## 1. 产品状态
 
-当前正式交付包括 **Windows x64 Setup**，以及 **Linux x86_64 AppImage 与 deb**。以下能力是两端共享的离线桌面基座，安装和更新策略按平台分离：
+当前正式交付包括 **Windows x64 Setup**，以及 **Linux x86_64 AppImage、现代 deb 与 UOS 20 专用 deb**。以下能力是两端共享的离线桌面基座，安装和更新策略按平台分离：
 
 - 前端：React 19、TypeScript、Vite、Monaco。
 - 桌面壳：Tauri 2。
@@ -15,7 +15,7 @@
 - 安装：无管理员权限、无应用注册表写入的 NSIS 引导安装器。
 - 更新：本地 `.drpa-update` 文件级更新。
 
-Linux x86_64 已完成第一轮发行适配：Rust core/Tauri Host、XDG 数据目录、`xdg-open`、平台能力协议、sealed runtime、AppImage/deb 内嵌资源定位和 Linux 进程组取消均有实现；`.github/workflows/linux-desktop.yml` 在 Ubuntu 22.04 构建 runtime-complete AppImage，再由已验证 AppDir 生成 `/opt/drpa-next` 自包含 deb。门禁会卸载 Runner 的系统 WebKitGTK，验证 deb 不会重新拉取该包并在 X11 启动。普通 push 只上传 Actions artifact；显式发布会把两种包、SHA-256、deb manifest 和 wheelhouse lock 写入 `desktop-v1.0.0`。Ubuntu 24.04、Wayland 与人工 GUI 验收仍是持续回归项。Windows Release workflow 保持独立。
+Linux x86_64 已完成第一轮发行适配：Rust core/Tauri Host、XDG 数据目录、`xdg-open`、平台能力协议、sealed runtime、AppImage/deb 内嵌资源定位和 Linux 进程组取消均有实现；`.github/workflows/linux-desktop.yml` 在 Ubuntu 22.04 构建 runtime-complete AppImage，再由已验证 AppDir 生成 `/opt/drpa-next` 现代 deb 和 `/opt/drpa-next-uos20` UOS 兼容 deb。现代包门禁会卸载 Runner 的系统 WebKitGTK；UOS 包还会内置固定 glibc/C++ 运行层并在 Debian 10/glibc 2.28 容器中验证 Python/Jupyter 原生扩展、Chrome 和 X11。普通 push 只上传 Actions artifact；显式发布会把三种包、SHA-256、两个 deb manifest 和 wheelhouse lock 写入 `desktop-v1.0.0`。Ubuntu 24.04、真实 UOS 20、Wayland 与人工 GUI 验收仍是持续回归项。Windows Release workflow 保持独立。
 
 ## 2. 仓库结构与所有权
 
@@ -35,7 +35,7 @@ offline/
   requirements/runtime.txt  完整精确依赖集合
   bootstrap/                 离线环境初始化
 tools/offline/               sealed runtime 构建和依赖政策检查
-tools/linux/                 AppDir→自包含 deb 构建、Linux 布局与发布验证
+tools/linux/                 现代/UOS deb 构建、私有 ELF 运行层、Linux 布局与发布验证
 tools/windows/               .drpa-update 构建
 installer/windows/           NSIS 安装脚本
 examples/                    示例项目与已构建 RPAZ
@@ -229,7 +229,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 4. 跑通普通 RPAZ、Bing 示例、两个 Notebook 单元、知识文档和目录打开；
 5. 再切换到 `DRPA_RUNTIME_ROOT` 验证 `linux-x86_64` sealed runtime。
 
-源码联调通过不等于 Linux 包可发布。当前 AppImage 与 deb 都把 runtime 放入只读 resource，并由 CI 验证断网初始化；deb 还必须证明 WebKitGTK/JavaScriptCoreGTK/GTK 私有闭包完整、`Depends` 不含系统 WebKitGTK，并在卸载系统 `libwebkit2gtk-4.1-0` 后通过真实安装、启动、卸载和用户数据保留检查。跨发行版、断网、只读应用目录、X11 与 Wayland 条件仍需持续验收。
+源码联调通过不等于 Linux 包可发布。当前 AppImage 与两种 deb 都把 runtime 放入只读 resource，并由 CI 验证断网初始化；deb 还必须证明 WebKitGTK/JavaScriptCoreGTK/GTK 私有闭包完整、`Depends` 不含系统 WebKitGTK，并通过真实安装、启动、卸载和用户数据保留检查。UOS 包还必须验证私有加载器、glibc/C++ 库、全部 ELF 的解释器/RPATH，并在 glibc 2.28 用户态运行 Python/Jupyter、Chrome 和 GUI。跨发行版、断网、只读应用目录、X11 与 Wayland 条件仍需持续验收。
 
 ### 9.5 必须在 Windows runner 验证的内容
 
@@ -246,7 +246,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 - `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查；Ubuntu 目前只做到 Host 编译，没有 GUI/runtime 最终包验收。
 - `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
 - `.github/workflows/desktop-release.yml`：push 默认发布两个轻量 update 资产；手工选择 `full` 时才组合 runtime、WebView2、Host、更新器、示例和安装器。
-- `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage 与 deb `1.0.0-2`，验证 sealed runtime、私有 WebKitGTK 闭包、无系统 WebKitGTK 安装启动、卸载和发布资产。
+- `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `1.0.0-2` 与 UOS deb `1.0.0-2+uos20.1`，验证 sealed runtime、私有 WebKitGTK 闭包、glibc 2.28 兼容层、无系统 WebKitGTK 安装启动、卸载和发布资产。
 
 发布前检查：
 
@@ -280,7 +280,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 5. 在 Studio 新建中文名称项目，运行源码、Markdown 单元和两个 Python notebook 单元。
 6. 阅读 `apps/desktop/src/infra/gateway.ts` 与 `apps/desktop/src-tauri/src/lib.rs` 的对应 command，确认参数在 Host 重新验证。
 7. 运行第 9 节全部本地检查，并对目标平台执行原生 GUI/runtime 测试。
-8. 查看最新 Windows/Linux Actions 与 `desktop-v1.0.0` Release，确认 Setup、AppImage、自包含 deb、wheelhouse lock 和对应清单均来自成功的原生 runner；deb manifest 的版本应为 `1.0.0-2`，且 `depends` 不含 `libwebkit2gtk-4.1-0`。
+8. 查看最新 Windows/Linux Actions 与 `desktop-v1.0.0` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 deb manifest 版本应分别为 `1.0.0-2` 与 `1.0.0-2+uos20.1`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
 9. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
 
 当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `1.0.0` 发布基线提交为 `5e6c793`；Linux `1.0.0` 由专用 Ubuntu 22.04 workflow 构建并发布，后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。
