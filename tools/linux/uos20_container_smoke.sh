@@ -45,12 +45,19 @@ env \
 browser="$(find "$runtime_root/browser" -type f -name chrome -perm /111 -print -quit)"
 test -n "$browser"
 useradd --create-home --shell /bin/sh drpa-smoke
+set +e
 runuser -u drpa-smoke -- "$browser" \
   --headless \
   --disable-gpu \
   --no-sandbox \
   --dump-dom 'data:text/html,<title>DRPA_UOS20_CHROME_OK</title>' \
   > /tmp/drpa-uos20-chrome.log 2>&1
+browser_status=$?
+set -e
+if [ "$browser_status" -ne 0 ]; then
+  cat /tmp/drpa-uos20-chrome.log
+  exit "$browser_status"
+fi
 grep -Fq DRPA_UOS20_CHROME_OK /tmp/drpa-uos20-chrome.log
 
 install -d -o drpa-smoke -g drpa-smoke /tmp/drpa-uos20-data
