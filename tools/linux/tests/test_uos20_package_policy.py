@@ -31,8 +31,8 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn(f"/{INSTALL_ROOT.as_posix()}/usr/bin/drpa-desktop", source)
         self.assertIn(f"/{PRIVATE_LOADER.as_posix()}", source)
         self.assertIn("GDK_BACKEND=x11", source)
-        self.assertIn("WEBKIT_EXEC_PATH", source)
-        self.assertIn("WEBKIT_INJECTED_BUNDLE_PATH", source)
+        self.assertIn('cd "$APPDIR/usr"', source)
+        self.assertNotIn("WEBKIT_EXEC_PATH", source)
         self.assertIn("WEBKIT_DISABLE_DMABUF_RENDERER=1", source)
 
     def test_x86_64_elf_detection_rejects_other_files(self) -> None:
