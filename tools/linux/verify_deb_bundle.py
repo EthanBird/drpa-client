@@ -11,13 +11,34 @@ except ModuleNotFoundError:
     from verify_runtime_layout import sha256, verify_runtime_layout
 
 
-REQUIRED_DEPENDENCIES = {
-    "libwebkit2gtk-4.1-0",
-    "libgtk-3-0",
+REQUIRED_BASE_DEPENDENCIES = {
+    "libc6",
+    "libgcc-s1",
+    "libstdc++6",
+    "libegl1",
+    "libgl1",
     "libgbm1",
-    "libnss3",
-    "xdg-utils",
 }
+FORBIDDEN_DESKTOP_DEPENDENCIES = {
+    "libwebkit2gtk-4.1-0",
+    "libjavascriptcoregtk-4.1-0",
+    "libgtk-3-0",
+    "libnss3",
+}
+REQUIRED_BUNDLED_PATHS = (
+    "opt/drpa-next/AppRun",
+    "opt/drpa-next/AppRun.wrapped",
+    "opt/drpa-next/usr/lib/libwebkit2gtk-4.1.so.0",
+    "opt/drpa-next/usr/lib/libjavascriptcoregtk-4.1.so.0",
+    "opt/drpa-next/usr/lib/libgtk-3.so.0",
+    "opt/drpa-next/usr/lib/libgdk-3.so.0",
+    "opt/drpa-next/usr/lib/libgstreamer-1.0.so.0",
+    "opt/drpa-next/usr/lib/libnss3.so",
+    "opt/drpa-next/usr/lib/libsoup-3.0.so.0",
+    "opt/drpa-next/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess",
+    "opt/drpa-next/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess",
+    "opt/drpa-next/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/injected-bundle/libwebkit2gtkinjectedbundle.so",
+)
 
 
 def deb_field(deb: Path, field: str) -> str:
@@ -56,11 +77,25 @@ def verify_deb_bundle(deb: Path, expected_version: str, extract_root: Path) -> d
         errors.append(f"deb version must be {expected_version}, got {version}")
     if architecture != "amd64":
         errors.append(f"deb architecture must be amd64, got {architecture}")
-    missing_dependencies = sorted(REQUIRED_DEPENDENCIES - dependency_names(depends))
+    dependency_set = dependency_names(depends)
+    missing_dependencies = sorted(REQUIRED_BASE_DEPENDENCIES - dependency_set)
     if missing_dependencies:
-        errors.append(f"deb dependencies are incomplete: {', '.join(missing_dependencies)}")
+        errors.append(f"deb base dependencies are incomplete: {', '.join(missing_dependencies)}")
+    forbidden_dependencies = sorted(FORBIDDEN_DESKTOP_DEPENDENCIES & dependency_set)
+    if forbidden_dependencies:
+        errors.append(
+            "deb must not depend on system desktop libraries: "
+            + ", ".join(forbidden_dependencies)
+        )
 
     subprocess.run(["dpkg-deb", "-x", str(deb), str(extract_root)], check=True)
+    missing_bundled_paths = [
+        relative for relative in REQUIRED_BUNDLED_PATHS if not (extract_root / relative).exists()
+    ]
+    if missing_bundled_paths:
+        errors.append(
+            "deb private desktop runtime is incomplete: " + ", ".join(missing_bundled_paths)
+        )
     runtime_manifests = [
         path
         for path in extract_root.rglob("manifest.json")
@@ -73,6 +108,11 @@ def verify_deb_bundle(deb: Path, expected_version: str, extract_root: Path) -> d
         runtime_manifest = runtime_manifests[0]
         errors.extend(verify_runtime_layout(runtime_manifest.parent))
 
+    launcher = extract_root / "usr/bin/drpa-next"
+    if not launcher.is_file() or not launcher.stat().st_mode & 0o111:
+        errors.append("deb does not install executable /usr/bin/drpa-next")
+    elif "/opt/drpa-next/AppRun" not in launcher.read_text(encoding="utf-8"):
+        errors.append("deb launcher does not execute the private AppDir")
     binary_root = extract_root / "usr" / "bin"
     binaries = sorted(path for path in binary_root.glob("*") if path.is_file() or path.is_symlink())
     if not binaries:
@@ -105,6 +145,7 @@ def verify_deb_bundle(deb: Path, expected_version: str, extract_root: Path) -> d
         },
         "runtimeManifestPath": f"/{relative_runtime_manifest}",
         "binaryPaths": [f"/{path.relative_to(extract_root).as_posix()}" for path in binaries],
+        "bundledDesktopRuntimePaths": [f"/{path}" for path in REQUIRED_BUNDLED_PATHS],
     }
 
 

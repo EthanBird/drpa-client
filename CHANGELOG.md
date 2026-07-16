@@ -8,6 +8,8 @@
 
 ### Linux x86_64 发布
 
+- deb 包修订为 `1.0.0-2`：不再使用 Tauri 默认的系统 WebKitGTK 依赖布局，而是从已验证 AppImage AppDir 生成 `/opt/drpa-next` 私有运行时，内含 WebKitGTK 4.1、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 与 WebKit helper process。
+- Linux 发布门禁会在打包后卸载 Runner 的 `libwebkit2gtk-4.1-0`，确认 deb 的 `Depends` 只保留 glibc/libgcc/libstdc++ 与驱动相关 EGL/GL/GBM 基础运行库、安装不会重新拉取 WebKitGTK，并在该状态下完成 X11 启动与卸载数据保留测试。
 - 新增 Ubuntu 22.04 原生离线桌面流水线：构建 CPython 3.11 sealed runtime，将 Jupyter、DrissionPage 和 Chrome for Testing 作为 Tauri resource 内嵌 AppImage 与 deb，并上传两种包、SHA-256、deb manifest 与 wheelhouse lock。
 - Host 通过 Tauri `resource_dir` 定位 AppImage 内的只读 runtime；生成环境、缓存、项目和日志继续写入 XDG 本地数据目录。
 - 新增平台能力协议；Linux 设置页隐藏 Windows `.drpa-update`，运行环境和目录打开文案使用 Linux/XDG 语义。

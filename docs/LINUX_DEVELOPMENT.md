@@ -17,7 +17,7 @@ DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage 与 deb
 | Linux sealed runtime 构建器 | 已有通路 | `tools/offline/build_runtime_bundle.py` 支持 `linux-x86_64` |
 | Linux sealed runtime CI | 已接入 | `.github/workflows/linux-desktop.yml` 的 Ubuntu 22.04 原生构建与 air-gap smoke |
 | AppImage 最终布局 | 已实现并发布，跨发行版回归持续进行 | `tauri.linux.conf.json` 把 runtime 放入只读 resource，Host 使用 `resource_dir` 定位 |
-| deb 最终布局 | 已实现并发布 | Tauri `/usr` 布局、`dpkg-deb` manifest、真实安装/启动/卸载与用户数据保留检查 |
+| deb 最终布局 | 已实现并发布 | AppImage AppDir→`/opt/drpa-next` 私有桌面运行时、`dpkg-deb` manifest、无系统 WebKitGTK 安装/启动/卸载检查 |
 | Linux 文件级热更新 | 未实现 | 当前命令、协议与独立 Worker 只接受 `windows-x86_64` |
 | Linux GUI、浏览器、Jupyter 端到端 | CI 已覆盖首层 | AppImage 解包 bootstrap、Chrome/Jupyter smoke 与 Xvfb 启动；Wayland/人工验收待完成 |
 | Linux 任务取消 | 已实现 | Python worker/Studio Kernel 独立 process group，`SIGTERM` 后超时 `SIGKILL` |
@@ -35,7 +35,7 @@ DRPA Next `1.0.0` 已正式提供 Linux x86_64 runtime-complete AppImage 与 deb
 - Node.js：`24`，以 root `package.json` 和 CI 为准。
 - Rust：stable，最低 Rust 版本以 workspace `Cargo.toml` 为准。
 - uv：`0.11.28`，以 `offline/runtime-spec.json` 为准。
-- UI WebView：Linux 使用系统 WebKitGTK，不携带 Windows WebView2。
+- UI WebView：源码编译使用系统 WebKitGTK 开发包；正式 AppImage/deb 携带私有 WebKitGTK 4.1 闭包，不携带 Windows WebView2。
 - 自动化浏览器：平台 sealed runtime 中的 Chrome for Testing，不依赖用户系统 Chrome。
 
 Tauri 官方 Linux 前置要求与 AppImage 兼容性说明：
@@ -79,7 +79,7 @@ sudo apt install -y \
   xvfb
 ```
 
-依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 属于构建环境；AppImage 封装桌面运行库，deb 则显式依赖 `libwebkit2gtk-4.1-0`、`libgtk-3-0`、`libgbm1`、`libnss3` 和 `xdg-utils`。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
+依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 只属于源码构建环境。AppImage 封装桌面运行库；deb `1.0.0-2` 直接复用同一 AppDir，把 WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 和 helper process 放入 `/opt/drpa-next`，`Depends` 不得再出现 `libwebkit2gtk-4.1-0` 等 WebKit/GTK 桌面包。glibc 2.35+、libgcc、libstdc++ 以及 Mesa/GLVND 的 EGL/GL/GBM 仍由系统提供，后者必须匹配目标机显卡驱动，不应强行内置。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
 
 随后安装 Node.js 24、Rust stable 与 Python 3.11.9。建议用版本管理器安装，不要修改仓库中的版本约束来迁就本机旧工具。
 
@@ -240,7 +240,7 @@ python tools/linux/verify_runtime_layout.py --runtime-root /path/to/runtime
 
 ## 7. Tauri Linux 包
 
-AppImage 与 deb 构建使用 `apps/desktop/src-tauri/tauri.linux.conf.json`。它把构建阶段临时目录 `resources/linux/runtime/` 映射到两种包的 `$RESOURCES/runtime/`；该临时目录被 `.gitignore` 排除，禁止把几百 MB 二进制提交进 Git。deb 配置还固定运行依赖、`devel` section 和 `optional` priority。
+Tauri 使用 `apps/desktop/src-tauri/tauri.linux.conf.json` 生成 AppImage，并把构建阶段临时目录 `resources/linux/runtime/` 映射到 `$RESOURCES/runtime/`；该临时目录被 `.gitignore` 排除，禁止把几百 MB 二进制提交进 Git。deb 不再使用 Tauri 默认模板，因为该模板声明系统 WebKitGTK；`tools/linux/build_bundled_deb.py` 从验证后的 AppImage AppDir 生成 `/opt/drpa-next` 安装布局、`/usr/bin/drpa-next` 启动器、桌面文件和基础 `Depends`。
 
 本地完整构建顺序：
 
@@ -253,6 +253,20 @@ python tools/linux/verify_runtime_layout.py --runtime-root apps/desktop/src-taur
 npm run tauri:build --workspace @drpa/desktop -- --bundles appimage
 ```
 
+解包 AppImage 后可生成与正式流水线相同的 deb（Debian 修订号用于覆盖升级旧的 `1.0.0` 包）：
+
+```bash
+appimage="$(find target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)"
+extract_root="$(mktemp -d)"
+chmod +x "$appimage"
+(cd "$extract_root" && "$OLDPWD/$appimage" --appimage-extract >/dev/null)
+python tools/linux/build_bundled_deb.py \
+  --appdir "$extract_root/squashfs-root" \
+  --package-version 1.0.0-2 \
+  --output drpa-next-1.0.0-linux-x86_64.deb \
+  --work-dir "$extract_root/deb-work"
+```
+
 Host 启动时把 `app.path().resource_dir()/runtime` 放在运行时候选列表中，优先级低于显式 `DRPA_RUNTIME_ROOT`、高于应用旁外置 runtime。AppImage 内 runtime 保持只读；`bootstrap_runtime.py` 在 XDG workspace 的 `runtime-environment/environment` 创建可写 venv。
 
 完整 AppImage 可直接联调：
@@ -263,7 +277,7 @@ DRPA_DATA_DIR="$PWD/.drpa-appimage-data" \
   path/to/DRPA-Next_1.0.0_amd64.AppImage
 ```
 
-CI 会用 `--appimage-extract` 找到 AppImage 的最终 `runtime/manifest.json`，对解包后的真实文件再次运行布局检查和离线 bootstrap，再用 `APPIMAGE_EXTRACT_AND_RUN=1 + Xvfb` 确认 GUI 不早退。对 deb，`tools/linux/verify_deb_bundle.py` 会检查 architecture/version/Depends、`/usr/bin` 入口、只读 runtime、wheel 散列并生成机器可读 manifest；随后用 `apt` 真实安装、Xvfb 启动和卸载，确认 XDG 用户数据不被删除。
+CI 会用 `--appimage-extract` 找到 AppImage 的最终 `runtime/manifest.json`，对解包后的真实文件再次运行布局检查和离线 bootstrap，再用 `APPIMAGE_EXTRACT_AND_RUN=1 + Xvfb` 确认 GUI 不早退。对 deb，`tools/linux/verify_deb_bundle.py` 会检查 architecture/version/Depends、`/usr/bin/drpa-next`、`/opt/drpa-next` 中的 WebKitGTK/JavaScriptCoreGTK/GTK/GStreamer/helper process、只读 runtime 与 wheel 散列，并生成机器可读 manifest。Runner 随后卸载系统 `libwebkit2gtk-4.1-0`，确认 `apt` 安装 deb 不会将其拉回，再完成 Xvfb 启动和卸载，确认 XDG 用户数据不被删除。
 
 deb 安装与卸载：
 
@@ -325,7 +339,7 @@ cargo test -p drpa-desktop
 ### 里程碑 C：最终包布局（AppImage 与 deb 已实现）
 
 - AppImage 使用 Tauri resource path 定位 runtime；不要改回外置同目录猜测。
-- deb 使用 Tauri `/usr` 只读安装布局；卸载只删除包管理文件，不删除 XDG 用户数据。
+- deb 使用 AppImage 派生的 `/opt/drpa-next` 私有只读布局；卸载只删除包管理文件，不删除 XDG 用户数据。
 - 最终包不依赖系统 Python、系统 Chrome、npm 或网络。
 - 数据目录遵守 XDG，应用移动或升级不损坏用户数据。
 
@@ -342,7 +356,7 @@ cargo test -p drpa-desktop
 
 Linux 发布流水线必须满足自动化条目；标注为人工覆盖的跨发行版与 Wayland 条目应在后续回归中持续补齐并记录：
 
-1. 干净系统无需安装 Python、Node、Rust 或 Chrome 即可启动并运行 RPAZ。
+1. 干净系统无需安装 WebKitGTK、Python、Node、Rust 或 Chrome 即可启动并运行 RPAZ；glibc 2.35+、基础 C/C++ 运行库和与显卡驱动匹配的 EGL/GL/GBM 仍由系统提供。
 2. 首次运行断网可完成 runtime 初始化，后续运行也不触发 pip/uv 网络请求。
 3. AppImage 或 deb 能稳定定位与自身匹配的 `linux-x86_64` runtime manifest。
 4. UI 使用 WebKitGTK，自动化使用内置 Chrome，两者升级边界清晰。
@@ -355,7 +369,7 @@ Linux 发布流水线必须满足自动化条目；标注为人工覆盖的跨�
 
 ## 11. 常见问题
 
-### `javascriptcoregtk` / `webkit2gtk` 找不到
+### 源码构建时报 `javascriptcoregtk` / `webkit2gtk` 找不到
 
 确认安装的是 WebKitGTK **4.1** 开发包，并执行：
 
@@ -363,6 +377,8 @@ Linux 发布流水线必须满足自动化条目；标注为人工覆盖的跨�
 pkg-config --modversion webkit2gtk-4.1
 cargo check -p drpa-desktop
 ```
+
+正式 `drpa-next-1.0.0-linux-x86_64.deb` 不应要求该系统包。若 `apt` 仍提示安装 `libwebkit2gtk-4.1-0`，先用 `dpkg-deb -f <包> Version Depends` 检查：正确包版本为 `1.0.0-2`，`Depends` 只包含 glibc/libgcc/libstdc++ 和 EGL/GL/GBM 基础包；出现 `1.0.0` 说明仍在使用已被 Release 覆盖的旧 deb。
 
 ### 运行环境页面提示找不到封装运行时
 
