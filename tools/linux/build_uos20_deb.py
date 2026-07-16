@@ -86,15 +86,43 @@ SYSTEM_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
     "libstdc++.so.6": ("usr/lib/x86_64-linux-gnu/libstdc++.so.6",),
     # NSS discovers these modules with dlopen(3), so they do not appear in the
     # browser's DT_NEEDED closure and must be included explicitly.
-    "libfreebl3.so": ("usr/lib/x86_64-linux-gnu/libfreebl3.so",),
-    "libfreebl3.chk": ("usr/lib/x86_64-linux-gnu/libfreebl3.chk",),
-    "libfreeblpriv3.so": ("usr/lib/x86_64-linux-gnu/libfreeblpriv3.so",),
-    "libfreeblpriv3.chk": ("usr/lib/x86_64-linux-gnu/libfreeblpriv3.chk",),
-    "libnssckbi.so": ("usr/lib/x86_64-linux-gnu/libnssckbi.so",),
-    "libnssdbm3.so": ("usr/lib/x86_64-linux-gnu/libnssdbm3.so",),
-    "libnssdbm3.chk": ("usr/lib/x86_64-linux-gnu/libnssdbm3.chk",),
-    "libsoftokn3.so": ("usr/lib/x86_64-linux-gnu/libsoftokn3.so",),
-    "libsoftokn3.chk": ("usr/lib/x86_64-linux-gnu/libsoftokn3.chk",),
+    "libfreebl3.so": (
+        "usr/lib/x86_64-linux-gnu/libfreebl3.so",
+        "usr/lib/x86_64-linux-gnu/nss/libfreebl3.so",
+    ),
+    "libfreebl3.chk": (
+        "usr/lib/x86_64-linux-gnu/libfreebl3.chk",
+        "usr/lib/x86_64-linux-gnu/nss/libfreebl3.chk",
+    ),
+    "libfreeblpriv3.so": (
+        "usr/lib/x86_64-linux-gnu/libfreeblpriv3.so",
+        "usr/lib/x86_64-linux-gnu/nss/libfreeblpriv3.so",
+    ),
+    "libfreeblpriv3.chk": (
+        "usr/lib/x86_64-linux-gnu/libfreeblpriv3.chk",
+        "usr/lib/x86_64-linux-gnu/nss/libfreeblpriv3.chk",
+    ),
+    "libnssckbi.so": (
+        "usr/lib/x86_64-linux-gnu/libnssckbi.so",
+        "usr/lib/x86_64-linux-gnu/nss/libnssckbi.so",
+        "usr/lib/x86_64-linux-gnu/pkcs11/p11-kit-trust.so",
+    ),
+    "libnssdbm3.so": (
+        "usr/lib/x86_64-linux-gnu/libnssdbm3.so",
+        "usr/lib/x86_64-linux-gnu/nss/libnssdbm3.so",
+    ),
+    "libnssdbm3.chk": (
+        "usr/lib/x86_64-linux-gnu/libnssdbm3.chk",
+        "usr/lib/x86_64-linux-gnu/nss/libnssdbm3.chk",
+    ),
+    "libsoftokn3.so": (
+        "usr/lib/x86_64-linux-gnu/libsoftokn3.so",
+        "usr/lib/x86_64-linux-gnu/nss/libsoftokn3.so",
+    ),
+    "libsoftokn3.chk": (
+        "usr/lib/x86_64-linux-gnu/libsoftokn3.chk",
+        "usr/lib/x86_64-linux-gnu/nss/libsoftokn3.chk",
+    ),
 }
 SYSTEM_RUNTIME_GLOBS = ("lib/x86_64-linux-gnu/libnss_*.so.2",)
 RUNTIME_COPYRIGHTS = {

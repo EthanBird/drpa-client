@@ -51,6 +51,8 @@ class Uos20PackagePolicyTests(unittest.TestCase):
             cxx = root / "usr/lib/x86_64-linux-gnu"
             runtime.mkdir(parents=True)
             cxx.mkdir(parents=True)
+            nss = cxx / "nss"
+            nss.mkdir()
             runtime_filenames = (
                 "ld-linux-x86-64.so.2",
                 "libc.so.6",
@@ -80,7 +82,10 @@ class Uos20PackagePolicyTests(unittest.TestCase):
             for filename in runtime_filenames:
                 (runtime / filename).write_bytes(filename.encode("utf-8"))
             for filename in nss_filenames:
-                (cxx / filename).write_bytes(filename.encode("utf-8"))
+                destination = (
+                    nss / filename if filename == "libnssckbi.so" else cxx / filename
+                )
+                destination.write_bytes(filename.encode("utf-8"))
             (cxx / "libstdc++.so.6").write_bytes(b"GLIBCXX_3.4.30")
 
             inventory = copy_private_runtime(root, root / "output")
