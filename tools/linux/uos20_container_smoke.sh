@@ -153,6 +153,7 @@ cp "$ui_ready" "$diagnostics/drpa-uos20-ui-ready.json"
 # Exercise the native GTK/WebKit input-method path with real X11 events. Opening
 # the command palette focuses an input; the explicit click and typing reproduce
 # the UOS freeze that only appeared after the first editable field received focus.
+export DISPLAY=:99
 window_id="$(xdotool search --onlyvisible --name '^DRPA Next$' | head -n 1)"
 test -n "$window_id"
 xdotool windowfocus --sync "$window_id"
