@@ -208,7 +208,7 @@ convert "$screenshot" -crop '1100x100+150+0' +repage "$header"
 header_dark_fraction="$(convert "$header" -colorspace Gray -threshold 30% -format '%[fx:1-mean]' info:)"
 header_components="$(convert "$header" -colorspace Gray -threshold 30% \
   -define connected-components:verbose=true -connected-components 8 null: 2>&1 | \
-  awk '$5 == "gray(0)" { count += 1; if ($4 > largest) largest = $4 } END { printf "%d %d", count, largest }')"
+  awk 'NR > 1 && $1 != "0:" { count += 1; area = $4 + 0; if (area > largest) largest = area } END { printf "%d %d", count, largest }')"
 set -- $header_components
 header_component_count="$1"
 header_largest_component="$2"
