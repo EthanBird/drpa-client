@@ -236,8 +236,7 @@ fn write_ui_test_marker(
             .ok_or_else(|| "无法定位 UI 就绪标记目录".to_owned())?;
         fs::create_dir_all(parent).map_err(|error| format!("创建 UI 就绪目录失败：{error}"))?;
         let temporary = parent.join(format!(".drpa-ui-ready-{}.tmp", Uuid::new_v4().simple()));
-        let payload = serde_json::to_vec_pretty(&payload)
-        .map_err(|error| error.to_string())?;
+        let payload = serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?;
         fs::write(&temporary, payload).map_err(|error| format!("写入 UI 就绪标记失败：{error}"))?;
         fs::rename(&temporary, &target)
             .map_err(|error| format!("提交 UI 就绪标记失败：{error}"))?;
