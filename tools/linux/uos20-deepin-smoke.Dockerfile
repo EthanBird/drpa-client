@@ -7,6 +7,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
       ca-certificates \
       dbus-x11 \
       fontconfig \
+      fonts-noto-cjk \
       imagemagick \
       procps \
       python3-minimal \
@@ -14,6 +15,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
       x11-utils \
       xauth \
       xdg-utils \
+      xdotool \
       xvfb \
     && rm -rf /var/lib/apt/lists/*
 

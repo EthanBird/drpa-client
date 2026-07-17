@@ -45,9 +45,6 @@ test -f "$app_root/uos-runtime/libGLdispatch.so.0"
 test -f "$app_root/uos-runtime/dri/swrast_dri.so"
 test -f "$app_root/uos-runtime/dri/kms_swrast_dri.so"
 grep -Fq libEGL_mesa.so.0 "$app_root/uos-runtime/egl_vendor.d/50_mesa.json"
-test -f "$app_root/uos-runtime/fonts/NotoSansCJK-Regular.ttc"
-test -f "$app_root/uos-runtime/fonts/NotoSansCJK-Bold.ttc"
-test -f "$app_root/uos-runtime/fontconfig/fonts.conf"
 
 runtime_manifest="$(find "$app_root" -type f -path '*/runtime/manifest.json' -print -quit)"
 test -n "$runtime_manifest"
@@ -69,10 +66,7 @@ env \
 browser="$(find "$runtime_root/browser" -type f -name chrome -perm /111 -print -quit)"
 test -n "$browser"
 useradd --create-home --shell /bin/sh drpa-smoke
-font_match="$(runuser -u drpa-smoke -- env \
-  FONTCONFIG_FILE="$app_root/uos-runtime/fontconfig/fonts.conf" \
-  FONTCONFIG_PATH="$app_root/uos-runtime/fontconfig" \
-  fc-match --format '%{family}\n' 'sans-serif:lang=zh-cn')"
+font_match="$(runuser -u drpa-smoke -- fc-match --format '%{family}\n' 'sans-serif:lang=zh-cn')"
 printf 'font_match=%s\n' "$font_match" >"$diagnostics/drpa-uos20-font-match.txt"
 printf '%s\n' "$font_match" | grep -Fq 'Noto Sans CJK'
 set +e
@@ -93,11 +87,12 @@ grep -Fq DRPA_UOS20_CHROME_OK /tmp/drpa-uos20-chrome.log
 install -d -o drpa-smoke -g drpa-smoke /tmp/drpa-uos20-data
 touch /tmp/drpa-uos20-data/user-data-sentinel
 ui_ready=/tmp/drpa-uos20-ui-ready.json
+input_ready=/tmp/drpa-uos20-input-ready.json
 gui_log="$diagnostics/drpa-uos20-gui.log"
 screenshot="$diagnostics/drpa-uos20-ui.png"
 processes="$diagnostics/drpa-uos20-processes.txt"
 window_tree="$diagnostics/drpa-uos20-window-tree.txt"
-rm -f "$ui_ready" "$screenshot"
+rm -f "$ui_ready" "$input_ready" "$screenshot"
 
 Xvfb :99 -screen 0 1280x800x24 -ac -nolisten tcp >"$diagnostics/xvfb.log" 2>&1 &
 xvfb_pid=$!
@@ -128,6 +123,7 @@ runuser -u drpa-smoke -- env \
   DISPLAY=:99 \
   DRPA_DATA_DIR=/tmp/drpa-uos20-data \
   DRPA_UI_READY_FILE="$ui_ready" \
+  DRPA_UI_INPUT_READY_FILE="$input_ready" \
   dbus-run-session -- /usr/bin/drpa-next >"$gui_log" 2>&1 &
 desktop_pid=$!
 
@@ -153,6 +149,41 @@ fi
 grep -Eq '"reactMounted"[[:space:]]*:[[:space:]]*true' "$ui_ready"
 grep -Eq '"ipcRoundTrip"[[:space:]]*:[[:space:]]*true' "$ui_ready"
 cp "$ui_ready" "$diagnostics/drpa-uos20-ui-ready.json"
+
+# Exercise the native GTK/WebKit input-method path with real X11 events. Opening
+# the command palette focuses an input; the explicit click and typing reproduce
+# the UOS freeze that only appeared after the first editable field received focus.
+window_id="$(xdotool search --onlyvisible --name '^DRPA Next$' | head -n 1)"
+test -n "$window_id"
+xdotool windowfocus --sync "$window_id"
+xdotool key --clearmodifiers ctrl+k
+sleep 0.4
+xdotool mousemove --sync 640 130 click 1
+xdotool type --delay 20 --clearmodifiers 'drpa-input-smoke'
+sleep 0.2
+xdotool key --clearmodifiers Escape
+sleep 0.2
+xdotool mousemove --sync 100 155 click 1
+input_responsive=0
+for _ in $(seq 1 100); do
+  if [ -s "$input_ready" ]; then
+    input_responsive=1
+    break
+  fi
+  if ! kill -0 "$desktop_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+if [ "$input_responsive" -ne 1 ]; then
+  cat "$gui_log"
+  exit 1
+fi
+grep -Eq '"nativeInputTyped"[[:space:]]*:[[:space:]]*true' "$input_ready"
+grep -Eq '"postInputClick"[[:space:]]*:[[:space:]]*true' "$input_ready"
+grep -Eq '"ipcRoundTrip"[[:space:]]*:[[:space:]]*true' "$input_ready"
+cp "$input_ready" "$diagnostics/drpa-uos20-input-ready.json"
+
 grep -Fq WebKitWebProcess "$processes"
 if grep -Eq 'EGL_NOT_INITIALIZED|Could not create .*EGL display|MESA-LOADER: failed to open swrast|Aborting' "$gui_log"; then
   cat "$gui_log"

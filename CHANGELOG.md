@@ -6,8 +6,9 @@
 
 ### Linux UOS Desktop 20 兼容包
 
-- 修复 Deepin/UOS 最小用户态中页面布局和图表已经绘制、但所有中英文文字完全不可见的问题。UOS 包修订提升为 `1.0.0-2+uos20.3`，随包携带 Noto Sans CJK Regular/Bold 与独立 fontconfig；launcher 固定字体配置，不再依赖目标机恰好安装了可用字体。
-- 撤销“run 29551221688 的 Deepin 截图已证明 UI 可读”的结论：该图顶部文字区深色像素比例为 `0`，只能证明 React/WebKit 绘制了无文字的页面结构。新门禁除颜色数和方差外，还要求 `fc-match` 命中包内 Noto CJK，并验证顶部文字区的深色像素比例、组件数量和最大组件面积，拒绝无字页面与大块异常色块。
+- 修复 UOS 中首次聚焦任意输入框后 WebView 页面完全失去点击响应的问题。UOS 包修订提升为 `1.0.0-2+uos20.3`，launcher 固定 GTK 使用 XIM 桥，避免私有 Ubuntu GTK 在 UOS 上自动连接不匹配的 IBus/Fcitx D-Bus IM 模块；继续继承系统 `XMODIFIERS` 以使用 DDE/Fcitx 的中文输入服务。
+- 新增真实输入交互门禁：Xvfb 中由 `xdotool` 打开命令面板、物理点击输入框、逐键输入 sentinel、关闭面板并点击侧栏按钮；前端只有在输入事件与后续按钮事件均完成、延迟计时器仍运行且 Tauri IPC 往返成功后才写出 marker。
+- 撤销“run 29551221688 的 Deepin 截图已证明 UI 可读”的结论：该图顶部文字区深色像素比例为 `0`，只能证明 React/WebKit 绘制了无文字的页面结构。字体已在真实 UOS 上由用户确认正常，因此不增加包内字体；两个最小测试镜像显式安装 Noto CJK，并用顶部文字像素/组件门禁拒绝无字截图。
 - 修复 UOS/Fantasy II-M 上 `WebKitWebProcess` 因 `MESA-LOADER: failed to open swrast`、`EGL_NOT_INITIALIZED` 退出后主窗口永久白屏的问题。UOS 包修订提升为 `1.0.0-2+uos20.2`，私有携带 GLVND、Mesa EGL、GLX、glapi、swrast/kms_swrast 与 llvmpipe 的完整 `DT_NEEDED` 闭包，并强制 WebKitGTK 使用隔离的软件渲染路径。
 - 原“Xvfb 运行 20 秒不退出”门禁被认定不足并替换：前端必须在 workspace snapshot 成功后完成两帧绘制并通过 Tauri IPC 写入就绪标记；Debian 10 与 Deepin 20.8 用户态还会检查 `WebKitWebProcess` 持续存在、扫描 EGL/swrast 致命日志并验证实际截图至少包含 32 种颜色且灰度标准差不低于 0.03。截图、进程树、窗口树和日志始终作为 Actions 诊断资产保存。
 - 新增 `drpa-next-1.0.0-linux-x86_64-uos20.deb`，最低系统基线为 x86_64、glibc 2.28，覆盖 UOS Desktop 20 Professional（eagle）与同代 Debian 10 用户态。

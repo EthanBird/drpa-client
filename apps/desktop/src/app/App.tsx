@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 
 import { desktopGateway } from "../infra/gateway";
 import { AppShell } from "../components/AppShell";
@@ -26,6 +26,7 @@ function waitForTwoPaints(): Promise<void> {
 }
 
 export function App() {
+  const inputSmokeArmed = useRef(false);
   const activeNavigation = useAppStore((state) => state.activeNavigation);
   const commandOpen = useAppStore((state) => state.commandOpen);
   const theme = useAppStore((state) => state.theme);
@@ -76,6 +77,29 @@ export function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [commandOpen, setCommandOpen]);
+
+  useEffect(() => {
+    const handleInput = (event: Event) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement
+        && target.value === "drpa-input-smoke"
+      ) inputSmokeArmed.current = true;
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!inputSmokeArmed.current) return;
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest("button")) return;
+      inputSmokeArmed.current = false;
+      window.setTimeout(() => { void desktopGateway.reportUiInputReady(); }, 300);
+    };
+    document.addEventListener("input", handleInput);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => {
+      document.removeEventListener("input", handleInput);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;

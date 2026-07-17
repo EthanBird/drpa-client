@@ -221,31 +221,57 @@ fn get_workspace_snapshot(state: State<'_, HostState>) -> WorkspaceSnapshot {
     state.snapshot()
 }
 
-#[tauri::command]
-fn report_ui_ready() -> Result<(), String> {
+fn write_ui_test_marker(
+    environment_variable: &str,
+    payload: serde_json::Value,
+) -> Result<(), String> {
     #[cfg(target_os = "linux")]
-    if let Some(marker) = std::env::var_os("DRPA_UI_READY_FILE") {
+    if let Some(marker) = std::env::var_os(environment_variable) {
         let target = PathBuf::from(marker);
         if !target.is_absolute() {
-            return Err("DRPA_UI_READY_FILE 必须是绝对路径".to_owned());
+            return Err(format!("{environment_variable} 必须是绝对路径"));
         }
         let parent = target
             .parent()
             .ok_or_else(|| "无法定位 UI 就绪标记目录".to_owned())?;
         fs::create_dir_all(parent).map_err(|error| format!("创建 UI 就绪目录失败：{error}"))?;
         let temporary = parent.join(format!(".drpa-ui-ready-{}.tmp", Uuid::new_v4().simple()));
-        let payload = serde_json::to_vec_pretty(&serde_json::json!({
-            "schemaVersion": 1,
-            "reactMounted": true,
-            "ipcRoundTrip": true,
-            "pid": std::process::id(),
-        }))
+        let payload = serde_json::to_vec_pretty(&payload)
         .map_err(|error| error.to_string())?;
         fs::write(&temporary, payload).map_err(|error| format!("写入 UI 就绪标记失败：{error}"))?;
         fs::rename(&temporary, &target)
             .map_err(|error| format!("提交 UI 就绪标记失败：{error}"))?;
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (environment_variable, payload);
     Ok(())
+}
+
+#[tauri::command]
+fn report_ui_ready() -> Result<(), String> {
+    write_ui_test_marker(
+        "DRPA_UI_READY_FILE",
+        serde_json::json!({
+            "schemaVersion": 1,
+            "reactMounted": true,
+            "ipcRoundTrip": true,
+            "pid": std::process::id(),
+        }),
+    )
+}
+
+#[tauri::command]
+fn report_ui_input_ready() -> Result<(), String> {
+    write_ui_test_marker(
+        "DRPA_UI_INPUT_READY_FILE",
+        serde_json::json!({
+            "schemaVersion": 1,
+            "nativeInputTyped": true,
+            "postInputClick": true,
+            "ipcRoundTrip": true,
+            "pid": std::process::id(),
+        }),
+    )
 }
 
 #[tauri::command]
@@ -2074,6 +2100,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_workspace_snapshot,
             report_ui_ready,
+            report_ui_input_ready,
             install_package,
             uninstall_package,
             start_run,

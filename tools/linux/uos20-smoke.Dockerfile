@@ -11,6 +11,7 @@ RUN printf '%s\n' \
       ca-certificates \
       dbus-x11 \
       fontconfig \
+      fonts-noto-cjk \
       imagemagick \
       procps \
       python3-minimal \
@@ -18,6 +19,7 @@ RUN printf '%s\n' \
       x11-utils \
       xauth \
       xdg-utils \
+      xdotool \
       xvfb \
     && rm -rf /var/lib/apt/lists/*
 

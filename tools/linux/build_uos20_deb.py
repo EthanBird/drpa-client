@@ -30,8 +30,6 @@ PRIVATE_RUNTIME = INSTALL_ROOT / "uos-runtime"
 PRIVATE_LOADER = PRIVATE_RUNTIME / "ld-linux-x86-64.so.2"
 PRIVATE_DRI = PRIVATE_RUNTIME / "dri"
 PRIVATE_EGL_VENDOR = PRIVATE_RUNTIME / "egl_vendor.d/50_mesa.json"
-PRIVATE_FONTS = PRIVATE_RUNTIME / "fonts"
-PRIVATE_FONTCONFIG = PRIVATE_RUNTIME / "fontconfig/fonts.conf"
 PRIVATE_LIBRARY_PATHS = (
     f"/{PRIVATE_RUNTIME.as_posix()}",
     f"/{(INSTALL_ROOT / 'usr/lib').as_posix()}",
@@ -137,20 +135,11 @@ SOFTWARE_RENDERER_FILES: dict[str, tuple[str, ...]] = {
         "usr/share/egl/egl_external_platform.d/50_mesa.json",
     ),
 }
-PRIVATE_FONT_FILES: dict[str, tuple[str, ...]] = {
-    "fonts/NotoSansCJK-Regular.ttc": (
-        "usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    ),
-    "fonts/NotoSansCJK-Bold.ttc": (
-        "usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-    ),
-}
 SYSTEM_RUNTIME_GLOBS = ("lib/x86_64-linux-gnu/libnss_*.so.2",)
 RUNTIME_COPYRIGHTS = {
     "libc6-copyright": "usr/share/doc/libc6/copyright",
     "libgcc-s1-copyright": "usr/share/doc/libgcc-s1/copyright",
     "libstdc++6-copyright": "usr/share/doc/libstdc++6/copyright",
-    "fonts-noto-cjk-copyright": "usr/share/doc/fonts-noto-cjk/copyright",
 }
 
 
@@ -221,19 +210,6 @@ def copy_private_runtime(
         copy(resolved_source(system_root, candidates), name)
     for name, candidates in SOFTWARE_RENDERER_FILES.items():
         copy(resolved_source(system_root, candidates), name)
-    for name, candidates in PRIVATE_FONT_FILES.items():
-        copy(resolved_source(system_root, candidates), name)
-    fontconfig = target / "fontconfig/fonts.conf"
-    fontconfig.parent.mkdir(parents=True, exist_ok=True)
-    fontconfig.write_text(private_fontconfig_source(), encoding="utf-8")
-    inventory.append(
-        {
-            "path": "fontconfig/fonts.conf",
-            "source": "generated:private-fontconfig",
-            "bytes": fontconfig.stat().st_size,
-            "sha256": sha256(fontconfig),
-        }
-    )
     for pattern in SYSTEM_RUNTIME_GLOBS:
         for source in sorted(system_root.glob(pattern)):
             if source.exists():
@@ -365,10 +341,9 @@ export GSETTINGS_SCHEMA_DIR="$APPDIR/usr/share/glib-2.0/schemas"
 export GTK_EXE_PREFIX="$APPDIR/usr"
 export GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0:/usr/lib/x86_64-linux-gnu/gtk-3.0"
 export GTK_IM_MODULE_FILE="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache"
+export GTK_IM_MODULE=xim
 export GDK_PIXBUF_MODULE_FILE="$APPDIR/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 export GIO_EXTRA_MODULES="$APPDIR/usr/lib/x86_64-linux-gnu/gio/modules"
-export FONTCONFIG_FILE="$APPDIR/uos-runtime/fontconfig/fonts.conf"
-export FONTCONFIG_PATH="$APPDIR/uos-runtime/fontconfig"
 export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0:$APPDIR/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
 export WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1
@@ -381,34 +356,6 @@ export __EGL_VENDOR_LIBRARY_FILENAMES="$APPDIR/uos-runtime/egl_vendor.d/50_mesa.
 export PATH="$APPDIR/usr/bin${{PATH:+:$PATH}}"
 cd "$APPDIR/usr"
 exec {app}/usr/bin/drpa-desktop "$@"
-"""
-
-
-def private_fontconfig_source() -> str:
-    fonts = f"/{PRIVATE_FONTS.as_posix()}"
-    return f"""<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
-<fontconfig>
-  <dir>{fonts}</dir>
-  <dir>/usr/local/share/fonts</dir>
-  <dir>/usr/share/fonts</dir>
-  <cachedir prefix="xdg">fontconfig</cachedir>
-  <alias>
-    <family>sans-serif</family>
-    <prefer><family>Noto Sans CJK SC</family></prefer>
-  </alias>
-  <alias>
-    <family>system-ui</family>
-    <prefer><family>Noto Sans CJK SC</family></prefer>
-  </alias>
-  <match target="pattern">
-    <test qual="any" name="lang"><string>zh</string></test>
-    <edit name="family" mode="prepend" binding="strong">
-      <string>Noto Sans CJK SC</string>
-    </edit>
-  </match>
-  <config><rescan><int>30</int></rescan></config>
-</fontconfig>
 """
 
 
@@ -471,9 +418,7 @@ def build_uos20_deb(
         "/opt/drpa-next-uos20/uos-runtime and pins every bundled ELF to that runtime.\n"
         "WebKitGTK, GTK, Python/Jupyter and Chrome remain private application files.\n"
         "GBM, generic libdrm, GLVND, Mesa EGL and the swrast/llvmpipe DRI driver are\n"
-        "private. Noto Sans CJK and its fontconfig are also private so Chinese and\n"
-        "Latin text stay readable without target-system fonts. The launcher forces\n"
-        "software rendering so unsupported UOS graphics\n"
+        "private. The launcher forces software rendering so unsupported UOS graphics\n"
         "hardware cannot crash WebKitWebProcess during EGL initialization. The kernel\n"
         "and X11 server stay system-owned. User data remains in the XDG local\n"
         "data directory.\n",
@@ -490,9 +435,6 @@ def build_uos20_deb(
         "renderingMode": "private-mesa-llvmpipe",
         "privateDriPath": f"/{PRIVATE_DRI.as_posix()}",
         "privateEglVendorManifest": f"/{PRIVATE_EGL_VENDOR.as_posix()}",
-        "privateFontDirectory": f"/{PRIVATE_FONTS.as_posix()}",
-        "privateFontconfig": f"/{PRIVATE_FONTCONFIG.as_posix()}",
-        "fontFamilies": ["Noto Sans CJK SC"],
         "patchedElfCount": len(patched),
         "interpreterElfCount": len(interpreters),
         "patchedElfs": patched,
