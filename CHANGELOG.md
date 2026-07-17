@@ -8,9 +8,9 @@
 
 - 修复 UOS 中首次聚焦任意输入框后 WebView 页面完全失去点击响应的问题。UOS 包修订提升为 `1.0.0-2+uos20.3`，launcher 固定 GTK 使用 XIM 桥，避免私有 Ubuntu GTK 在 UOS 上自动连接不匹配的 IBus/Fcitx D-Bus IM 模块；继续继承系统 `XMODIFIERS` 以使用 DDE/Fcitx 的中文输入服务。
 - 新增真实输入交互门禁：Xvfb 中由 `xdotool` 打开命令面板、物理点击输入框、逐键输入 sentinel、关闭面板并点击侧栏按钮；前端只有在输入事件与后续按钮事件均完成、延迟计时器仍运行且 Tauri IPC 往返成功后才写出 marker。
-- 撤销“run 29551221688 的 Deepin 截图已证明 UI 可读”的结论：该图顶部文字区深色像素比例为 `0`，只能证明 React/WebKit 绘制了无文字的页面结构。字体已在真实 UOS 上由用户确认正常，因此不增加包内字体；两个最小测试镜像显式安装 Noto CJK，并用顶部文字像素/组件门禁拒绝无字截图。
+- 撤销“run 29551221688 的 Deepin 截图已证明 UI 可读”的结论：该图顶部文字区深色像素比例为 `0`，只能证明 React/WebKit 绘制了无文字的页面结构。字体已在真实 UOS 上由用户确认正常，因此不增加包内字体；Debian 10 测试必须通过 Noto CJK 可见文字与顶部连通组件门禁，固定 Deepin 20.8 镜像若没有可用系统字体，则单独要求非白屏布局和真实输入/后续页面响应，并在指标中记录 `font_available=0`。
 - 修复 UOS/Fantasy II-M 上 `WebKitWebProcess` 因 `MESA-LOADER: failed to open swrast`、`EGL_NOT_INITIALIZED` 退出后主窗口永久白屏的问题。UOS 包修订提升为 `1.0.0-2+uos20.2`，私有携带 GLVND、Mesa EGL、GLX、glapi、swrast/kms_swrast 与 llvmpipe 的完整 `DT_NEEDED` 闭包，并强制 WebKitGTK 使用隔离的软件渲染路径。
-- 原“Xvfb 运行 20 秒不退出”门禁被认定不足并替换：前端必须在 workspace snapshot 成功后完成两帧绘制并通过 Tauri IPC 写入就绪标记；Debian 10 与 Deepin 20.8 用户态还会检查 `WebKitWebProcess` 持续存在、扫描 EGL/swrast 致命日志并验证实际截图至少包含 32 种颜色且灰度标准差不低于 0.03。截图、进程树、窗口树和日志始终作为 Actions 诊断资产保存。
+- 原“Xvfb 运行 20 秒不退出”门禁被认定不足并替换：前端必须在 workspace snapshot 成功后完成两帧绘制并通过 Tauri IPC 写入就绪标记；Debian 10 与 Deepin 20.8 用户态还会检查 `WebKitWebProcess` 持续存在、扫描 EGL/swrast 致命日志并验证实际截图。存在系统字体时要求灰度标准差不低于 0.03 并检查文字区组件；无字体的最小镜像仍要求至少 32 色、灰度标准差不低于 0.01，以及输入后页面与 IPC 继续响应。截图、进程树、窗口树和日志始终作为 Actions 诊断资产保存。
 - 新增 `drpa-next-1.0.0-linux-x86_64-uos20.deb`，最低系统基线为 x86_64、glibc 2.28，覆盖 UOS Desktop 20 Professional（eagle）与同代 Debian 10 用户态。
 - UOS 包固定安装到 `/opt/drpa-next-uos20`，随包携带 glibc 2.35 动态加载器、libc/NSS、libstdc++ 与 libgcc；构建器为桌面 Host、WebKit helper、Python、uv、Chrome 等全部动态 ELF 写入私有解释器和传递型 `DT_RPATH`，解决现代 WebKitGTK 的 `GLIBC_2.35`、`GLIBCXX_3.4.30` 与 `CXXABI` 缺口。
 - 启动器不全局导出 `LD_LIBRARY_PATH`，避免私有 libc 污染 `xdg-open` 等 UOS 系统程序；WebKitGTK 所需的 GBM、通用 libdrm、GLVND、Mesa EGL/GL 与软件 DRI 进入私有层，只有内核与 X11 server 继续由目标系统提供。
@@ -18,6 +18,7 @@
 - UOS 固定根启动器按 AppImage `AppRun` 语义切换到包内 `usr/` 工作目录，使生产版 WebKitGTK 重定位后的 Network/Web helper 与 injected bundle 相对路径正确解析，并禁用旧 Mesa 不可靠的 DMABUF renderer；helper 仍使用包内解释器和传递型私有 RPATH。
 - Linux 发布门禁新增 Debian 10 与 Deepin 20.8/glibc 2.28 容器：真实安装 UOS deb，在 Debian 基线未安装 `libwebkit2gtk-4.1-0`、并在启动前屏蔽系统 Mesa DRI 路径的条件下完成离线 runtime bootstrap、Jupyter/NumPy/Pandas/debugpy 等原生扩展导入、Chrome headless、React/IPC/像素级 UI、卸载和用户数据保留验证。
 - run `29551221688` 证明了私有 Mesa 修复白屏和 WebKitWebProcess 退出，但其 Deepin 20.8 PNG 没有任何文字，不能作为完整 UI 验收；对应 `uos20.2` 包及 SHA-256 仅保留为历史诊断记录，不再视为当前可用发布。
+- 最终 `uos20.3` 由 [Linux run 29564213354](https://github.com/EthanBird/drpa-client/actions/runs/29564213354) 构建并发布：Debian 10 截图为 2103 色、标准差 `0.0480815`、12 个标题字形组件；Debian 与 Deepin 的 `nativeInputTyped`、`postInputClick`、`ipcRoundTrip` 均为 `true`。UOS deb 为 340,090,572 字节，SHA-256 `ecefbe51b1375bab2f89e567c1eab121bcf5c3fba98da5f4ab30d8d4c380e59c`。
 - 新增 `docs/UOS20_PACKAGING.md`，集中记录目标系统、依赖分层、私有 ELF 运行层、可复现构建、静态/容器门禁、已解决故障和 UOS 4.19 实体机回归清单。
 
 ## [1.0.0] - 2026-07-15

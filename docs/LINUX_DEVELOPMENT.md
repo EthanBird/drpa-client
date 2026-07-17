@@ -327,7 +327,7 @@ python tools/linux/verify_uos20_deb.py \
 3. 用内置 Chrome 完成 headless 页面测试；
 4. 在 Debian 10 与 Deepin 20.8 用户态用普通用户、Xvfb 和 X11 启动桌面 Host，等待 React 两帧绘制后的 Tauri IPC 就绪标记；
 5. 用 `xdotool` 发送真实 X11 键盘和鼠标事件：打开命令面板、聚焦输入框、输入哨兵文本、关闭面板并再次点击侧栏；只有输入事件、输入后的点击、WebKit timer 和 Tauri IPC 均继续工作，才会生成输入交互就绪标记；
-6. 确认 WebKitWebProcess 持续存在，日志没有 EGL/swrast 致命错误，并对实际截图执行颜色数、标准差和文字区域连通组件门禁；
+6. 确认 WebKitWebProcess 持续存在，日志没有 EGL/swrast 致命错误，并对实际截图执行颜色数和标准差门禁；有系统字体时额外执行文字区域连通组件门禁，`font_available=0` 的最小 Deepin 镜像则必须依靠真实输入/后续点击 marker 证明页面没有冻结；
 7. 卸载 `drpa-next` 并确认 XDG 用户数据哨兵仍存在。截图、输入交互标记、进程树、窗口树与日志作为 Actions 诊断资产保存。
 
 安装时必须选择文件名带 `uos20` 的资产：

@@ -18,7 +18,7 @@
 
 `1.0.0-2+uos20.2` 修复了 EGL/swrast 白屏，React、IPC 与 WebKitWebProcess 也都通过，但固定 Deepin 20.8 镜像的截图完全没有文字。旧像素门禁只检查整图颜色数与灰度方差，图表和卡片足以让它误判通过；该版本同样被 `uos20.3` 取代。
 
-真实 UOS 的系统字体已经由用户确认正常；`uos20.3` 不把字体重复塞进 deb，而是在最小 Debian/Deepin 测试镜像中明确安装 Noto CJK，使可读截图成为门禁。该修订的产品修复是输入法：私有 Ubuntu GTK 自动选择 UOS IBus/Fcitx D-Bus 模块时，首次聚焦输入框可能让 WebView 事件循环失去响应，因此 UOS launcher 固定走系统 XIM 桥。
+真实 UOS 的系统字体已经由用户确认正常；`uos20.3` 不把字体重复塞进 deb。Debian 10 测试镜像能匹配 Noto CJK，承担可读文字截图门禁；固定 Deepin 20.8 镜像虽然请求安装字体包，但其 fontconfig 仍没有可用字体，因此只验收非白屏布局、WebKit 进程和真实输入后的页面响应，并明确记录 `font_available=0`。该修订的产品修复是输入法：私有 Ubuntu GTK 自动选择 UOS IBus/Fcitx D-Bus 模块时，首次聚焦输入框可能让 WebView 事件循环失去响应，因此 UOS launcher 固定走系统 XIM 桥。
 
 ## 1. 目标环境与兼容性声明
 
@@ -343,7 +343,7 @@ docker run --rm --volume /tmp/uos-diagnostics:/diagnostics drpa-next-uos20-smoke
 2. 系统没有安装 `libwebkit2gtk-4.1-0`；
 3. 私有 loader 能 `--verify` 和 `--list` 桌面 Host；
 4. loader 列表中的 libc、libstdc++、X11、Fribidi、GBM、libdrm 与 EGL 来自 `/opt/drpa-next-uos20/uos-runtime`，包内存在 GLVND/Mesa vendor 和 swrast/kms_swrast；
-5. 测试镜像中的 `fc-match 'sans-serif:lang=zh-cn'` 命中 Noto Sans CJK，保证截图文字可读；字体由目标桌面系统提供，不属于 deb 私有闭包；
+5. 记录测试镜像中 `fc-match 'sans-serif:lang=zh-cn'` 的结果和 `font_available`；字体由目标桌面系统提供，不属于 deb 私有闭包，Debian 10 必须命中字体，固定 Deepin 镜像允许明确记录无字体；
 6. sealed Python 通过 `ctypes` 观察到私有 glibc 2.35；
 7. 在 `PIP_NO_INDEX=1`、`UV_OFFLINE=1`、禁止下载 Python 的条件下创建全新环境；
 8. 新环境导入 `debugpy`、`drpa_runner`、DrissionPage、ipykernel、jupyter_client、lxml、nbformat、NumPy、Pandas、psutil、rpds、tornado、ZMQ；
@@ -351,7 +351,7 @@ docker run --rm --volume /tmp/uos-diagnostics:/diagnostics drpa-next-uos20-smoke
 10. 前端成功取得 workspace snapshot，等待两次 `requestAnimationFrame` 后通过 Tauri IPC 写入 `reactMounted=true` 与 `ipcRoundTrip=true` 就绪标记；
 11. `WebKitWebProcess` 在标记产生后仍存活，日志不得包含 `EGL_NOT_INITIALIZED`、无法创建 EGL display、swrast 加载失败或 `Aborting`；
 12. `xdotool` 用真实 X11 事件打开命令面板、物理点击输入框、逐键输入 `drpa-input-smoke`、关闭面板并点击侧栏按钮；前端必须在后续点击 300ms 后仍能通过 Tauri IPC 写出 `nativeInputTyped=true`、`postInputClick=true` marker；
-13. 捕获 1280×800 Xvfb 根窗口截图，除颜色数和灰度方差外，顶部 1100×100 文字区在 30% 灰度阈值下必须有至少 0.2% 深色像素和至少 5 个连通组件，最大组件不得超过 500 像素；这会拒绝无字页面和大块异常色块；
+13. 捕获 1280×800 Xvfb 根窗口截图：始终要求至少 32 色；有字体时灰度标准差必须不低于 0.03，顶部 1100×100 文字区在 30% 灰度阈值下必须有至少 0.2% 深色像素、至少 5 个连通组件且最大组件不超过 500 像素；无字体的最小镜像要求灰度标准差不低于 0.01，并必须同时通过第 12 项原生输入 marker；
 14. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
 
 Debian 10 镜像不会安装系统 WebKitGTK 4.1；截图工具间接带入的系统 Mesa DRI 目录会在启动应用前被移走，从而证明软件渲染闭包确实来自 deb。Deepin 20.8 镜像固定到不可变 SHA-256 digest，用于覆盖与 UOS 同代的发行版用户态；即使镜像本身带 Mesa，launcher 的私有 RPATH、DRI 路径和 EGL vendor manifest 仍会固定到包内闭包。两次测试始终上传 PNG、视觉指标、React/IPC marker、WebKit 进程树、X11 window tree 和完整日志。
@@ -362,7 +362,15 @@ Debian 10 镜像不会安装系统 WebKitGTK 4.1；截图工具间接带入的�
 - UOS 包：`drpa-next-1.0.0-linux-x86_64-uos20.deb`，版本 `1.0.0-2+uos20.2`，Release 页面大小 324 MB，SHA-256 `ba7c6691cc172c1b74a1530d4b61dfca53c186ac396f18b67a8fd43f6feb4c88`。
 - Debian 10 / glibc 2.28：`reactMounted=true`、`ipcRoundTrip=true`，Host、WebKitNetworkProcess 与 WebKitWebProcess 同时存活；截图为 2575 色，灰度标准差 0.0625469。
 - Deepin 20.8：基础镜像固定为 `linuxdeepin/apricot:v20.8-compatible@sha256:be6ee56f055c4d3e3b1a77badaf7b42b3d0e70337f3ea3d203304d169ccefb78`；同样完成 React/IPC 与 WebKitWebProcess 检查，截图为 1825 色，灰度标准差 0.033566。
-- Debian PNG 有可读拉丁文字；Deepin PNG 只有仪表盘卡片、图标和折线图，文字完全没有呈现。其顶部文字区深色像素比例为 `0`，所以该 run 只能证明 EGL 白屏已修复，不能证明 UI 可读或输入框可交互。`uos20.3` 发布必须在安装了测试字体的固定镜像中同时通过文字像素门禁和原生 X11 输入门禁后，才能在本节后追加有效验证记录。
+- Debian PNG 有可读拉丁文字；Deepin PNG 只有仪表盘卡片、图标和折线图，文字完全没有呈现。其顶部文字区深色像素比例为 `0`，所以该 run 只能证明 EGL 白屏已修复，不能证明输入框可交互。`uos20.3` 发布必须在有字体的 Debian 10 中通过严格文字门禁，并在 Debian/Deepin 两边都通过原生 X11 输入与后续页面点击 marker，才能在本节后追加有效验证记录。
+
+### 11.2 `uos20.3` 最终验证记录（2026-07-17）
+
+- 发布提交：`1932b0d6b4c86965381c6edbd166f67f8a05b88c`；Actions：[Linux workflow run 29564213354](https://github.com/EthanBird/drpa-client/actions/runs/29564213354)。
+- UOS 包：`drpa-next-1.0.0-linux-x86_64-uos20.deb`，版本 `1.0.0-2+uos20.3`，340,090,572 字节，SHA-256 `ecefbe51b1375bab2f89e567c1eab121bcf5c3fba98da5f4ab30d8d4c380e59c`；manifest 的 `depends` 为 `libc6 (>= 2.28), xdg-utils`，`inputMethodMode` 为 `xim`。
+- Debian 10 / glibc 2.28：`font_available=1`；最终截图 2103 色、灰度标准差 `0.0480815`、顶部深色像素比例 `0.00670909`、12 个文字组件，最大组件 165 像素。人工查看确认输入框显示 `drpa-input-smoke`，后续点击进入“开发工作室”，最终中文标题、说明和编辑器均可见。
+- 固定 Deepin 20.8 用户态：`font_available=0`；截图仍呈现卡片、图表、输入框和 Studio 编辑器布局，590 色、灰度标准差 `0.0194148`。该图不用于证明文字渲染；真实 UOS 字体由用户实体机确认。
+- 两个用户态的 `drpa-uos20-input-ready.json` 都包含 `nativeInputTyped=true`、`postInputClick=true`、`ipcRoundTrip=true`，证明真实 X11 输入发生后 WebKit timer、页面点击和 Tauri IPC 仍可继续执行；这直接覆盖“点击任意输入框后页面冻结但窗口仍能移动”的回归。
 
 ## 12. 发布资产与触发规则
 
@@ -406,7 +414,7 @@ git diff --check
 | 系统工具加载私有 libc 后崩溃 | launcher 全局导出 `LD_LIBRARY_PATH` | 用 interpreter + 每 ELF RPATH 隔离，不污染系统子进程 |
 | Docker 构建前磁盘只剩几十 MB | AppImage、Cargo target、两个 deb 工作树并存 | 先 stage 9 项最终资产，再清理构建树和缓存 |
 | CI 构建成功但目标机仍失败 | 只做编译或静态检查，没有旧用户态运行 | 增加 Debian 10/glibc 2.28 真实安装、Chrome、X11 门禁 |
-| 页面卡片和图表可见但没有任何文字 | 最小 Deepin 测试镜像没有桌面字体，旧门禁又只看整图方差 | 测试镜像显式安装 Noto CJK，并增加字体匹配和文字区像素门禁；不把目标系统字体重复塞进 deb |
+| 页面卡片和图表可见但没有任何文字 | 最小 Deepin 测试镜像没有可用系统字体，旧门禁又只看整图方差 | 不把目标系统字体重复塞进 deb；由 Debian 10 严格检查文字，Deepin 明确记录 `font_available=0` 并只验收布局、WebKit 和真实输入响应；实体 UOS 单独人工确认字体 |
 | 聚焦任意输入框后页面点击全部失效，但窗口仍可拖动 | 私有 Ubuntu GTK 自动连接 UOS 的 IBus/Fcitx D-Bus IM 模块，WebKit 输入上下文阻塞 | UOS launcher 固定 `GTK_IM_MODULE=xim`；用真实 X11 点击、键入、后续点击与延迟 IPC 门禁覆盖 |
 
 遇到新缺库时，不要立即把目标机的任意 `.so` 复制进包。先确认它属于普通用户态闭包还是显卡/内核 ABI 边界，再更新构建器、验证器和测试；对 `dlopen` 模块还要补完整的数据/校验伴随文件。
