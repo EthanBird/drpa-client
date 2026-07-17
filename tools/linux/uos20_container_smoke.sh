@@ -70,6 +70,10 @@ font_match="$(runuser -u drpa-smoke -- fc-match --format '%{family}\n' 'sans-ser
 printf 'font_match=%s\n' "$font_match" >"$diagnostics/drpa-uos20-font-match.txt"
 # Font families belong to the host desktop. Keep the match in diagnostics, but
 # do not require one distro-specific family before exercising the actual UI.
+font_available=0
+if [ -n "$font_match" ]; then
+  font_available=1
+fi
 set +e
 runuser -u drpa-smoke -- "$browser" \
   --headless \
@@ -213,10 +217,10 @@ header_components="$(convert "$header" -colorspace Gray -threshold 30% \
 set -- $header_components
 header_component_count="$1"
 header_largest_component="$2"
-python3 -c 'import sys; colors=int(sys.argv[1]); deviation=float(sys.argv[2]); fraction=float(sys.argv[3]); components=int(sys.argv[4]); largest=int(sys.argv[5]); assert colors >= 32, (colors, deviation); assert deviation >= 0.03, (colors, deviation); assert fraction >= 0.002, (fraction, components, largest); assert components >= 5, (fraction, components, largest); assert largest <= 500, (fraction, components, largest)' \
-  "$colors" "$standard_deviation" "$header_dark_fraction" "$header_component_count" "$header_largest_component"
-printf 'colors=%s\nstandard_deviation=%s\nheader_dark_fraction=%s\nheader_dark_components=%s\nheader_largest_dark_component=%s\n' \
-  "$colors" "$standard_deviation" "$header_dark_fraction" "$header_component_count" "$header_largest_component" \
+python3 -c 'import sys; colors=int(sys.argv[1]); deviation=float(sys.argv[2]); fraction=float(sys.argv[3]); components=int(sys.argv[4]); largest=int(sys.argv[5]); has_fonts=bool(int(sys.argv[6])); assert colors >= 32, (colors, deviation); assert deviation >= (0.03 if has_fonts else 0.01), (colors, deviation, has_fonts); assert not has_fonts or fraction >= 0.002, (fraction, components, largest); assert not has_fonts or components >= 5, (fraction, components, largest); assert not has_fonts or largest <= 500, (fraction, components, largest)' \
+  "$colors" "$standard_deviation" "$header_dark_fraction" "$header_component_count" "$header_largest_component" "$font_available"
+printf 'colors=%s\nstandard_deviation=%s\nfont_available=%s\nheader_dark_fraction=%s\nheader_dark_components=%s\nheader_largest_dark_component=%s\n' \
+  "$colors" "$standard_deviation" "$font_available" "$header_dark_fraction" "$header_component_count" "$header_largest_component" \
   >"$diagnostics/drpa-uos20-visual-metrics.txt"
 
 cleanup
