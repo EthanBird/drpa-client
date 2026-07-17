@@ -82,14 +82,13 @@ export function App() {
     const handleInput = (event: Event) => {
       const target = event.target;
       if (
-        target instanceof HTMLInputElement
-        && target.value === "drpa-input-smoke"
+        event.isTrusted
+        && target instanceof HTMLInputElement
+        && target.value.length > 0
       ) inputSmokeArmed.current = true;
     };
     const handlePointerDown = (event: PointerEvent) => {
-      if (!inputSmokeArmed.current) return;
-      const target = event.target;
-      if (!(target instanceof Element) || !target.closest("button")) return;
+      if (!event.isTrusted || !inputSmokeArmed.current) return;
       inputSmokeArmed.current = false;
       window.setTimeout(() => { void desktopGateway.reportUiInputReady(); }, 300);
     };

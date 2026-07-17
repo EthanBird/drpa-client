@@ -121,6 +121,7 @@ fi
 
 runuser -u drpa-smoke -- env \
   DISPLAY=:99 \
+  XMODIFIERS=@im=fcitx \
   DRPA_DATA_DIR=/tmp/drpa-uos20-data \
   DRPA_UI_READY_FILE="$ui_ready" \
   DRPA_UI_INPUT_READY_FILE="$input_ready" \
@@ -162,9 +163,13 @@ sleep 0.4
 xdotool mousemove --sync 640 130 click 1
 xdotool type --delay 20 --clearmodifiers 'drpa-input-smoke'
 sleep 0.2
+xwd -display :99 -root -silent -out /tmp/drpa-uos20-input-stage.xwd
+convert /tmp/drpa-uos20-input-stage.xwd "$diagnostics/drpa-uos20-input-stage.png"
 xdotool key --clearmodifiers Escape
 sleep 0.2
 xdotool mousemove --sync 100 155 click 1
+xwd -display :99 -root -silent -out /tmp/drpa-uos20-post-input-click.xwd
+convert /tmp/drpa-uos20-post-input-click.xwd "$diagnostics/drpa-uos20-post-input-click.png"
 input_responsive=0
 for _ in $(seq 1 100); do
   if [ -s "$input_ready" ]; then
