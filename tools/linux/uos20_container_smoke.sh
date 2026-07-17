@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -eux
 
 diagnostics="${DRPA_DIAGNOSTICS_DIR:-/diagnostics}"
 mkdir -p "$diagnostics"
@@ -14,10 +14,13 @@ if dpkg-query -W -f='${Status}' libwebkit2gtk-4.1-0 2>/dev/null | grep -Fq 'inst
   echo "system libwebkit2gtk-4.1-0 must not be installed" >&2
   exit 1
 fi
-if [ "${DRPA_ALLOW_SYSTEM_MESA_DRI:-0}" != "1" ] \
-  && dpkg-query -W -f='${Status}' libgl1-mesa-dri 2>/dev/null | grep -Fq 'install ok installed'; then
-  echo "system libgl1-mesa-dri must not be installed" >&2
-  exit 1
+system_dri=/usr/lib/x86_64-linux-gnu/dri
+if [ "${DRPA_ALLOW_SYSTEM_MESA_DRI:-0}" != "1" ] && [ -d "$system_dri" ]; then
+  mv "$system_dri" /tmp/drpa-disabled-system-dri
+  echo "disabled system Mesa DRI modules for the private-runtime rendering test"
+fi
+if [ "${DRPA_ALLOW_SYSTEM_MESA_DRI:-0}" != "1" ]; then
+  test ! -e "$system_dri"
 fi
 
 app_root=/opt/drpa-next-uos20
