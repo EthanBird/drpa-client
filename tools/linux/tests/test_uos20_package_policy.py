@@ -11,6 +11,7 @@ from tools.linux.build_uos20_deb import (
     copy_private_runtime,
     is_x86_64_elf,
     launcher_source,
+    private_fontconfig_source,
 )
 
 
@@ -39,6 +40,13 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn("LIBGL_ALWAYS_SOFTWARE=1", source)
         self.assertIn('LIBGL_DRIVERS_PATH="$APPDIR/uos-runtime/dri"', source)
         self.assertIn("__EGL_VENDOR_LIBRARY_FILENAMES=", source)
+        self.assertIn('FONTCONFIG_FILE="$APPDIR/uos-runtime/fontconfig/fonts.conf"', source)
+        self.assertIn('FONTCONFIG_PATH="$APPDIR/uos-runtime/fontconfig"', source)
+
+    def test_private_fontconfig_prefers_bundled_cjk_font(self) -> None:
+        source = private_fontconfig_source()
+        self.assertIn("/opt/drpa-next-uos20/uos-runtime/fonts", source)
+        self.assertIn("Noto Sans CJK SC", source)
 
     def test_x86_64_elf_detection_rejects_other_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -66,6 +74,8 @@ class Uos20PackagePolicyTests(unittest.TestCase):
             dri.mkdir()
             egl_vendor = root / "usr/share/glvnd/egl_vendor.d"
             egl_vendor.mkdir(parents=True)
+            fonts = root / "usr/share/fonts/opentype/noto"
+            fonts.mkdir(parents=True)
             runtime_filenames = (
                 "ld-linux-x86-64.so.2",
                 "libc.so.6",
@@ -116,6 +126,8 @@ class Uos20PackagePolicyTests(unittest.TestCase):
                 '{"ICD":{"library_path":"libEGL_mesa.so.0"}}', encoding="utf-8"
             )
             (cxx / "libstdc++.so.6").write_bytes(b"GLIBCXX_3.4.30")
+            (fonts / "NotoSansCJK-Regular.ttc").write_bytes(b"noto-regular")
+            (fonts / "NotoSansCJK-Bold.ttc").write_bytes(b"noto-bold")
 
             inventory = copy_private_runtime(root, root / "output")
 
@@ -130,6 +142,9 @@ class Uos20PackagePolicyTests(unittest.TestCase):
             self.assertIn("dri/swrast_dri.so", copied)
             self.assertIn("dri/kms_swrast_dri.so", copied)
             self.assertIn("egl_vendor.d/50_mesa.json", copied)
+            self.assertIn("fonts/NotoSansCJK-Regular.ttc", copied)
+            self.assertIn("fonts/NotoSansCJK-Bold.ttc", copied)
+            self.assertIn("fontconfig/fonts.conf", copied)
 
     def test_graphics_userspace_is_not_a_system_dependency(self) -> None:
         dependencies = ", ".join(BASE_DEPENDENCIES)

@@ -246,7 +246,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 - `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查；Ubuntu 目前只做到 Host 编译，没有 GUI/runtime 最终包验收。
 - `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
 - `.github/workflows/desktop-release.yml`：push 默认发布两个轻量 update 资产；手工选择 `full` 时才组合 runtime、WebView2、Host、更新器、示例和安装器。
-- `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `1.0.0-2` 与 UOS deb `1.0.0-2+uos20.2`，验证 sealed runtime、私有 WebKitGTK/Mesa llvmpipe 闭包、Debian 10 与 Deepin 20.8/glibc 2.28 的 React/IPC/非白屏 UI、卸载和发布资产。
+- `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `1.0.0-2` 与 UOS deb `1.0.0-2+uos20.3`，验证 sealed runtime、私有 WebKitGTK/Mesa llvmpipe/Noto CJK 闭包、Debian 10 与 Deepin 20.8/glibc 2.28 的 React/IPC/可读文字 UI、卸载和发布资产。
 
 发布前检查：
 
@@ -280,7 +280,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 5. 在 Studio 新建中文名称项目，运行源码、Markdown 单元和两个 Python notebook 单元。
 6. 阅读 `apps/desktop/src/infra/gateway.ts` 与 `apps/desktop/src-tauri/src/lib.rs` 的对应 command，确认参数在 Host 重新验证。
 7. 运行第 9 节全部本地检查，并对目标平台执行原生 GUI/runtime 测试。
-8. 查看最新 Windows/Linux Actions 与 `desktop-v1.0.0` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 deb manifest 版本应分别为 `1.0.0-2` 与 `1.0.0-2+uos20.2`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
+8. 查看最新 Windows/Linux Actions 与 `desktop-v1.0.0` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 deb manifest 版本应分别为 `1.0.0-2` 与 `1.0.0-2+uos20.3`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
 9. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
 
 当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `1.0.0` 发布基线提交为 `5e6c793`；Linux `1.0.0` 由专用 Ubuntu 22.04 workflow 构建并发布，后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。

@@ -45,6 +45,9 @@ test -f "$app_root/uos-runtime/libGLdispatch.so.0"
 test -f "$app_root/uos-runtime/dri/swrast_dri.so"
 test -f "$app_root/uos-runtime/dri/kms_swrast_dri.so"
 grep -Fq libEGL_mesa.so.0 "$app_root/uos-runtime/egl_vendor.d/50_mesa.json"
+test -f "$app_root/uos-runtime/fonts/NotoSansCJK-Regular.ttc"
+test -f "$app_root/uos-runtime/fonts/NotoSansCJK-Bold.ttc"
+test -f "$app_root/uos-runtime/fontconfig/fonts.conf"
 
 runtime_manifest="$(find "$app_root" -type f -path '*/runtime/manifest.json' -print -quit)"
 test -n "$runtime_manifest"
@@ -66,6 +69,12 @@ env \
 browser="$(find "$runtime_root/browser" -type f -name chrome -perm /111 -print -quit)"
 test -n "$browser"
 useradd --create-home --shell /bin/sh drpa-smoke
+font_match="$(runuser -u drpa-smoke -- env \
+  FONTCONFIG_FILE="$app_root/uos-runtime/fontconfig/fonts.conf" \
+  FONTCONFIG_PATH="$app_root/uos-runtime/fontconfig" \
+  fc-match --format '%{family}\n' 'sans-serif:lang=zh-cn')"
+printf 'font_match=%s\n' "$font_match" >"$diagnostics/drpa-uos20-font-match.txt"
+printf '%s\n' "$font_match" | grep -Fq 'Noto Sans CJK'
 set +e
 runuser -u drpa-smoke -- "$browser" \
   --headless \
@@ -157,8 +166,20 @@ xwd -display :99 -root -silent -out /tmp/drpa-uos20-ui.xwd
 convert /tmp/drpa-uos20-ui.xwd "$screenshot"
 colors="$(identify -format '%k' "$screenshot")"
 standard_deviation="$(convert "$screenshot" -colorspace Gray -format '%[fx:standard_deviation]' info:)"
-python3 -c 'import sys; colors=int(sys.argv[1]); deviation=float(sys.argv[2]); assert colors >= 32, (colors, deviation); assert deviation >= 0.03, (colors, deviation)' "$colors" "$standard_deviation"
-printf 'colors=%s\nstandard_deviation=%s\n' "$colors" "$standard_deviation" >"$diagnostics/drpa-uos20-visual-metrics.txt"
+header=/tmp/drpa-uos20-header.png
+convert "$screenshot" -crop '1100x100+150+0' +repage "$header"
+header_dark_fraction="$(convert "$header" -colorspace Gray -threshold 30% -format '%[fx:1-mean]' info:)"
+header_components="$(convert "$header" -colorspace Gray -threshold 30% \
+  -define connected-components:verbose=true -connected-components 8 null: 2>&1 | \
+  awk '$5 == "gray(0)" { count += 1; if ($4 > largest) largest = $4 } END { printf "%d %d", count, largest }')"
+set -- $header_components
+header_component_count="$1"
+header_largest_component="$2"
+python3 -c 'import sys; colors=int(sys.argv[1]); deviation=float(sys.argv[2]); fraction=float(sys.argv[3]); components=int(sys.argv[4]); largest=int(sys.argv[5]); assert colors >= 32, (colors, deviation); assert deviation >= 0.03, (colors, deviation); assert fraction >= 0.002, (fraction, components, largest); assert components >= 5, (fraction, components, largest); assert largest <= 500, (fraction, components, largest)' \
+  "$colors" "$standard_deviation" "$header_dark_fraction" "$header_component_count" "$header_largest_component"
+printf 'colors=%s\nstandard_deviation=%s\nheader_dark_fraction=%s\nheader_dark_components=%s\nheader_largest_dark_component=%s\n' \
+  "$colors" "$standard_deviation" "$header_dark_fraction" "$header_component_count" "$header_largest_component" \
+  >"$diagnostics/drpa-uos20-visual-metrics.txt"
 
 cleanup
 trap - EXIT INT TERM

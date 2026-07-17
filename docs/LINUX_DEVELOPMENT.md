@@ -308,13 +308,13 @@ Ubuntu 22.04 生成的普通 AppImage 和现代 deb 不能在 UOS 20 上直接�
 ```bash
 python tools/linux/build_uos20_deb.py \
   --appdir "$extract_root/squashfs-root" \
-  --package-version '1.0.0-2+uos20.2' \
+  --package-version '1.0.0-2+uos20.3' \
   --output drpa-next-1.0.0-linux-x86_64-uos20.deb \
   --work-dir "$extract_root/uos20-deb-work"
 
 python tools/linux/verify_uos20_deb.py \
   --deb drpa-next-1.0.0-linux-x86_64-uos20.deb \
-  --expected-version '1.0.0-2+uos20.2' \
+  --expected-version '1.0.0-2+uos20.3' \
   --extract-root "$extract_root/uos20-verify" \
   --manifest-output drpa-next-1.0.0-linux-x86_64-uos20-deb-manifest.json
 ```
@@ -428,7 +428,7 @@ pkg-config --modversion webkit2gtk-4.1
 cargo check -p drpa-desktop
 ```
 
-正式 deb 都不应要求该系统包。若 `apt` 仍提示安装 `libwebkit2gtk-4.1-0`，先用 `dpkg-deb -f <包> Version Depends` 检查：现代包版本为 `1.0.0-2`，UOS 包版本为 `1.0.0-2+uos20.2`；UOS 用户还必须确认文件名包含 `uos20`。出现 `1.0.0` 或 `uos20.1` 说明仍在使用已被 Release 覆盖的旧 deb；`uos20.1` 的旧 GUI 门禁不能发现永久白屏。
+正式 deb 都不应要求该系统包。若 `apt` 仍提示安装 `libwebkit2gtk-4.1-0`，先用 `dpkg-deb -f <包> Version Depends` 检查：现代包版本为 `1.0.0-2`，UOS 包版本为 `1.0.0-2+uos20.3`；UOS 用户还必须确认文件名包含 `uos20`。出现 `1.0.0`、`uos20.1` 或 `uos20.2` 说明仍在使用已被 Release 覆盖的旧 deb；`uos20.1` 可能永久白屏，`uos20.2` 的 Deepin 验证截图没有任何文字。
 
 ### 运行环境页面提示找不到封装运行时
 

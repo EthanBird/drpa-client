@@ -6,7 +6,7 @@
 
 - 文件：`drpa-next-1.0.0-linux-x86_64-uos20.deb`
 - Debian 包名：`drpa-next`
-- Debian 版本：`1.0.0-2+uos20.2`
+- Debian 版本：`1.0.0-2+uos20.3`
 - 架构：`amd64`
 - 固定安装根：`/opt/drpa-next-uos20`
 - 最低系统用户态：glibc 2.28
@@ -15,6 +15,8 @@
 - 构建与散列：以 Release 中 `uos20.deb.sha256` 和 `uos20-deb-manifest.json` 为准
 
 `1.0.0-2+uos20.1` 虽能安装且 Host/NetworkProcess 持续运行，但在 Fantasy II-M（PCI `1ec8:9810`）上 WebKitWebProcess 因缺少可加载的 swrast 驱动与 `EGL_NOT_INITIALIZED` 退出，造成永久白屏；旧门禁只检查进程 20 秒未退出，无法发现该问题，已禁止继续作为可用版本。
+
+`1.0.0-2+uos20.2` 修复了 EGL/swrast 白屏，React、IPC 与 WebKitWebProcess 也都通过，但固定 Deepin 20.8 镜像的截图完全没有文字。旧像素门禁只检查整图颜色数与灰度方差，图表和卡片足以让它误判通过；该版本同样被 `uos20.3` 取代。
 
 ## 1. 目标环境与兼容性声明
 
@@ -111,6 +113,8 @@ UOS 包必须从同一轮已经验证的 AppDir 派生。不要绕过 AppImage r
     │   ├── libsoftokn3.so + .chk             # NSS dlopen 模块
     │   ├── libgbm.so.1
     │   ├── libdrm.so.2
+    │   ├── fonts/NotoSansCJK-{Regular,Bold}.ttc
+    │   ├── fontconfig/fonts.conf
     │   └── ...                                # 递归用户态依赖闭包
     ├── uos-runtime-manifest.json              # 来源、大小、散列、ELF 库存
     └── usr/
@@ -141,6 +145,7 @@ UOS 包必须从同一轮已经验证的 AppDir 派生。不要绕过 AppImage r
 - NSS/NSPR 的运行库及通过 `dlopen` 加载的 `libsoftokn3`、`libfreebl3`、`libnssdbm3`、`libnssckbi` 和匹配 `.chk`；
 - 满足现代 WebKitGTK 符号要求的 `libgbm.so.1` 和通用 `libdrm.so.2`；
 - 通过 `DT_NEEDED` 递归发现的 X11/XCB、ALSA、字体、Fribidi 等非驱动用户态库；
+- Noto Sans CJK Regular/Bold 字体、对应许可证与只指向包内字体优先级的 fontconfig；
 - sealed CPython 3.11.9、uv、完整离线 wheelhouse、Jupyter、DrissionPage、Chrome for Testing。
 
 ### 6.2 由系统提供
@@ -242,7 +247,7 @@ build-essential dbus-x11 dpkg-dev fakeroot file
 libayatana-appindicator3-dev libegl1 libegl-mesa0 libfuse2 libgbm1 libgl1
 libgl1-mesa-dri libglx-mesa0 libopengl0
 libnss3 librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev
-patchelf xauth xdg-utils xvfb
+fonts-noto-cjk patchelf xauth xdg-utils xvfb
 ```
 
 此外需要 Node.js 24、Rust stable、CPython 3.11.9 和精确版本的 runtime builder。完整版本与命令以 workflow、`package-lock.json`、`Cargo.lock`、`offline/runtime-spec.json` 和 `offline/requirements/runtime.txt` 为准。
@@ -262,7 +267,7 @@ cd /tmp/drpa-uos-build/appimage-extract
 ```bash
 python tools/linux/build_uos20_deb.py \
   --appdir /tmp/drpa-uos-build/appimage-extract/squashfs-root \
-  --package-version '1.0.0-2+uos20.2' \
+  --package-version '1.0.0-2+uos20.3' \
   --output /tmp/drpa-next-1.0.0-linux-x86_64-uos20.deb \
   --work-dir /tmp/drpa-uos-build/package-work
 ```
@@ -273,7 +278,7 @@ python tools/linux/build_uos20_deb.py \
 2. 复制 AppDir 到 `/opt/drpa-next-uos20` 对应的包根；
 3. 给应用 ELF 写入私有 interpreter 与传递型 RPATH；
 4. 复制固定 glibc/C++/NSS、GLVND/Mesa EGL、swrast/kms_swrast，并递归补齐 llvmpipe/LLVM 等 `DT_NEEDED`；
-5. 生成 launcher、desktop entry、图标和文档；
+5. 复制 Noto Sans CJK Regular/Bold、生成私有 fontconfig，再生成 launcher、desktop entry、图标和文档；
 6. 写入包内 `uos-runtime-manifest.json`；
 7. 生成 Debian control 和 `Installed-Size`；
 8. 使用 `dpkg-deb --root-owner-group -Zxz -z6` 压缩产物。
@@ -287,7 +292,7 @@ python tools/linux/build_uos20_deb.py \
 ```bash
 python tools/linux/verify_uos20_deb.py \
   --deb /tmp/drpa-next-1.0.0-linux-x86_64-uos20.deb \
-  --expected-version '1.0.0-2+uos20.2' \
+  --expected-version '1.0.0-2+uos20.3' \
   --extract-root /tmp/drpa-uos-build/verify-root \
   --manifest-output /tmp/drpa-next-1.0.0-linux-x86_64-uos20-deb-manifest.json
 ```
@@ -298,6 +303,7 @@ python tools/linux/verify_uos20_deb.py \
 - `Depends` 不得出现系统 WebKitGTK/JavaScriptCoreGTK/GTK、libstdc++6、`libgcc-s1`、`libgbm1`、`libdrm2`、`libegl1` 或 `libgl1`；
 - 私有 loader、glibc、C++、NSS、GBM、libdrm、X11、音频和字体关键文件存在；
 - 私有 GBM/libdrm 具备必需符号，GLVND/Mesa EGL、swrast/kms_swrast 与 vendor manifest 完整；
+- Noto Sans CJK Regular/Bold、私有 fontconfig、launcher 的 `FONTCONFIG_FILE`/`FONTCONFIG_PATH` 与 provenance 字段一致；
 - 所有应用动态 ELF 的 RPATH 完整且为 `DT_RPATH`；
 - 所有带 interpreter 的应用 ELF 指向固定私有 loader；
 - 实际 ELF 数量与包内 provenance manifest 一致；
@@ -326,24 +332,25 @@ docker run --rm --volume /tmp/uos-diagnostics:/diagnostics drpa-next-uos20-smoke
 2. 系统没有安装 `libwebkit2gtk-4.1-0`；
 3. 私有 loader 能 `--verify` 和 `--list` 桌面 Host；
 4. loader 列表中的 libc、libstdc++、X11、Fribidi、GBM、libdrm 与 EGL 来自 `/opt/drpa-next-uos20/uos-runtime`，包内存在 GLVND/Mesa vendor 和 swrast/kms_swrast；
-5. sealed Python 通过 `ctypes` 观察到私有 glibc 2.35；
-6. 在 `PIP_NO_INDEX=1`、`UV_OFFLINE=1`、禁止下载 Python 的条件下创建全新环境；
-7. 新环境导入 `debugpy`、`drpa_runner`、DrissionPage、ipykernel、jupyter_client、lxml、nbformat、NumPy、Pandas、psutil、rpds、tornado、ZMQ；
-8. 内置 Chrome 以普通用户完成 headless DOM 测试；
-9. 前端成功取得 workspace snapshot，等待两次 `requestAnimationFrame` 后通过 Tauri IPC 写入 `reactMounted=true` 与 `ipcRoundTrip=true` 就绪标记；
-10. `WebKitWebProcess` 在标记产生后仍存活，日志不得包含 `EGL_NOT_INITIALIZED`、无法创建 EGL display、swrast 加载失败或 `Aborting`；
-11. 捕获 1280×800 Xvfb 根窗口截图，要求至少 32 种颜色且灰度标准差不少于 0.03，拒绝纯白/纯色表面；
-12. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
+5. `fc-match 'sans-serif:lang=zh-cn'` 在 launcher 的私有 fontconfig 下命中包内 Noto Sans CJK；
+6. sealed Python 通过 `ctypes` 观察到私有 glibc 2.35；
+7. 在 `PIP_NO_INDEX=1`、`UV_OFFLINE=1`、禁止下载 Python 的条件下创建全新环境；
+8. 新环境导入 `debugpy`、`drpa_runner`、DrissionPage、ipykernel、jupyter_client、lxml、nbformat、NumPy、Pandas、psutil、rpds、tornado、ZMQ；
+9. 内置 Chrome 以普通用户完成 headless DOM 测试；
+10. 前端成功取得 workspace snapshot，等待两次 `requestAnimationFrame` 后通过 Tauri IPC 写入 `reactMounted=true` 与 `ipcRoundTrip=true` 就绪标记；
+11. `WebKitWebProcess` 在标记产生后仍存活，日志不得包含 `EGL_NOT_INITIALIZED`、无法创建 EGL display、swrast 加载失败或 `Aborting`；
+12. 捕获 1280×800 Xvfb 根窗口截图，除颜色数和灰度方差外，顶部 1100×100 文字区在 30% 灰度阈值下必须有至少 0.2% 深色像素和至少 5 个连通组件，最大组件不得超过 500 像素；这会拒绝无字页面和大块异常色块；
+13. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
 
 Debian 10 镜像不会安装系统 WebKitGTK 4.1；截图工具间接带入的系统 Mesa DRI 目录会在启动应用前被移走，从而证明软件渲染闭包确实来自 deb。Deepin 20.8 镜像固定到不可变 SHA-256 digest，用于覆盖与 UOS 同代的发行版用户态；即使镜像本身带 Mesa，launcher 的私有 RPATH、DRI 路径和 EGL vendor manifest 仍会固定到包内闭包。两次测试始终上传 PNG、视觉指标、React/IPC marker、WebKit 进程树、X11 window tree 和完整日志。
 
-### 11.1 最终发布验证记录（2026-07-17）
+### 11.1 已撤销的 `uos20.2` 验证记录（2026-07-17）
 
 - 发布提交：`75a6c4386aa58aa1a12bedf5ee7caa479cf12004`；Actions：[Linux workflow run 29551221688](https://github.com/EthanBird/drpa-client/actions/runs/29551221688)。
 - UOS 包：`drpa-next-1.0.0-linux-x86_64-uos20.deb`，版本 `1.0.0-2+uos20.2`，Release 页面大小 324 MB，SHA-256 `ba7c6691cc172c1b74a1530d4b61dfca53c186ac396f18b67a8fd43f6feb4c88`。
 - Debian 10 / glibc 2.28：`reactMounted=true`、`ipcRoundTrip=true`，Host、WebKitNetworkProcess 与 WebKitWebProcess 同时存活；截图为 2575 色，灰度标准差 0.0625469。
 - Deepin 20.8：基础镜像固定为 `linuxdeepin/apricot:v20.8-compatible@sha256:be6ee56f055c4d3e3b1a77badaf7b42b3d0e70337f3ea3d203304d169ccefb78`；同样完成 React/IPC 与 WebKitWebProcess 检查，截图为 1825 色，灰度标准差 0.033566。
-- 两张 PNG 均经人工查看，仪表盘卡片、状态区与折线图已经实际绘制，不是纯白表面。最小容器没有完整桌面字体，Deepin 截图的文字可能显示缺字块；这不替代真实 UOS 20 / DDE / kernel 4.19 / Fantasy II-M 实体机回归。
+- Debian PNG 有可读拉丁文字；Deepin PNG 只有仪表盘卡片、图标和折线图，文字完全没有呈现。其顶部文字区深色像素比例为 `0`，所以该 run 只能证明 EGL 白屏已修复，不能证明 UI 可读。`uos20.3` 发布必须通过新增的私有字体匹配与文字像素门禁后，才能在本节后追加有效验证记录。
 
 ## 12. 发布资产与触发规则
 
@@ -387,6 +394,7 @@ git diff --check
 | 系统工具加载私有 libc 后崩溃 | launcher 全局导出 `LD_LIBRARY_PATH` | 用 interpreter + 每 ELF RPATH 隔离，不污染系统子进程 |
 | Docker 构建前磁盘只剩几十 MB | AppImage、Cargo target、两个 deb 工作树并存 | 先 stage 9 项最终资产，再清理构建树和缓存 |
 | CI 构建成功但目标机仍失败 | 只做编译或静态检查，没有旧用户态运行 | 增加 Debian 10/glibc 2.28 真实安装、Chrome、X11 门禁 |
+| 页面卡片和图表可见但没有任何文字 | 最小 Deepin/UOS 用户态没有可供私有 WebKit/Pango 使用的字体，旧门禁又只看整图方差 | 包内携带 Noto Sans CJK 与 fontconfig，并增加字体匹配和文字区像素门禁 |
 
 遇到新缺库时，不要立即把目标机的任意 `.so` 复制进包。先确认它属于普通用户态闭包还是显卡/内核 ABI 边界，再更新构建器、验证器和测试；对 `dlopen` 模块还要补完整的数据/校验伴随文件。
 

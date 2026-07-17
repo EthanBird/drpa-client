@@ -6,6 +6,8 @@
 
 ### Linux UOS Desktop 20 兼容包
 
+- 修复 Deepin/UOS 最小用户态中页面布局和图表已经绘制、但所有中英文文字完全不可见的问题。UOS 包修订提升为 `1.0.0-2+uos20.3`，随包携带 Noto Sans CJK Regular/Bold 与独立 fontconfig；launcher 固定字体配置，不再依赖目标机恰好安装了可用字体。
+- 撤销“run 29551221688 的 Deepin 截图已证明 UI 可读”的结论：该图顶部文字区深色像素比例为 `0`，只能证明 React/WebKit 绘制了无文字的页面结构。新门禁除颜色数和方差外，还要求 `fc-match` 命中包内 Noto CJK，并验证顶部文字区的深色像素比例、组件数量和最大组件面积，拒绝无字页面与大块异常色块。
 - 修复 UOS/Fantasy II-M 上 `WebKitWebProcess` 因 `MESA-LOADER: failed to open swrast`、`EGL_NOT_INITIALIZED` 退出后主窗口永久白屏的问题。UOS 包修订提升为 `1.0.0-2+uos20.2`，私有携带 GLVND、Mesa EGL、GLX、glapi、swrast/kms_swrast 与 llvmpipe 的完整 `DT_NEEDED` 闭包，并强制 WebKitGTK 使用隔离的软件渲染路径。
 - 原“Xvfb 运行 20 秒不退出”门禁被认定不足并替换：前端必须在 workspace snapshot 成功后完成两帧绘制并通过 Tauri IPC 写入就绪标记；Debian 10 与 Deepin 20.8 用户态还会检查 `WebKitWebProcess` 持续存在、扫描 EGL/swrast 致命日志并验证实际截图至少包含 32 种颜色且灰度标准差不低于 0.03。截图、进程树、窗口树和日志始终作为 Actions 诊断资产保存。
 - 新增 `drpa-next-1.0.0-linux-x86_64-uos20.deb`，最低系统基线为 x86_64、glibc 2.28，覆盖 UOS Desktop 20 Professional（eagle）与同代 Debian 10 用户态。
@@ -14,7 +16,7 @@
 - 新增机器可读 UOS deb manifest、私有运行库来源/散列库存和 ELF 解释器/RPATH 校验。构建器递归解析 `DT_NEEDED`，把 Fribidi、X11/XCB、ALSA、字体、NSS、Mesa/LLVM 等用户态依赖补入私有层；包的 `Depends` 不含系统 WebKitGTK、C++ runtime、GBM/libdrm、EGL 或 GL，只保留 glibc 2.28 基线与 `xdg-utils`。
 - UOS 固定根启动器按 AppImage `AppRun` 语义切换到包内 `usr/` 工作目录，使生产版 WebKitGTK 重定位后的 Network/Web helper 与 injected bundle 相对路径正确解析，并禁用旧 Mesa 不可靠的 DMABUF renderer；helper 仍使用包内解释器和传递型私有 RPATH。
 - Linux 发布门禁新增 Debian 10 与 Deepin 20.8/glibc 2.28 容器：真实安装 UOS deb，在 Debian 基线未安装 `libwebkit2gtk-4.1-0`、并在启动前屏蔽系统 Mesa DRI 路径的条件下完成离线 runtime bootstrap、Jupyter/NumPy/Pandas/debugpy 等原生扩展导入、Chrome headless、React/IPC/像素级 UI、卸载和用户数据保留验证。
-- 最终发布 run `29551221688` 的 Debian 10 与固定 digest Deepin 20.8 双重 UI 门禁均通过；两边都生成 React/IPC marker、持续存活的 WebKitWebProcess 和非白屏 PNG。UOS deb 的 SHA-256 为 `ba7c6691cc172c1b74a1530d4b61dfca53c186ac396f18b67a8fd43f6feb4c88`。
+- run `29551221688` 证明了私有 Mesa 修复白屏和 WebKitWebProcess 退出，但其 Deepin 20.8 PNG 没有任何文字，不能作为完整 UI 验收；对应 `uos20.2` 包及 SHA-256 仅保留为历史诊断记录，不再视为当前可用发布。
 - 新增 `docs/UOS20_PACKAGING.md`，集中记录目标系统、依赖分层、私有 ELF 运行层、可复现构建、静态/容器门禁、已解决故障和 UOS 4.19 实体机回归清单。
 
 ## [1.0.0] - 2026-07-15

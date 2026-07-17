@@ -10,6 +10,7 @@ RUN printf '%s\n' \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates \
       dbus-x11 \
+      fontconfig \
       imagemagick \
       procps \
       python3-minimal \

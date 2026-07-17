@@ -13,6 +13,8 @@ try:
         PRIVATE_LOADER,
         PRIVATE_DRI,
         PRIVATE_EGL_VENDOR,
+        PRIVATE_FONTS,
+        PRIVATE_FONTCONFIG,
         PRIVATE_RUNTIME,
         is_x86_64_elf,
         sha256,
@@ -27,6 +29,8 @@ except ModuleNotFoundError:
         PRIVATE_LOADER,
         PRIVATE_DRI,
         PRIVATE_EGL_VENDOR,
+        PRIVATE_FONTS,
+        PRIVATE_FONTCONFIG,
         PRIVATE_RUNTIME,
         is_x86_64_elf,
         sha256,
@@ -165,6 +169,19 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         errors.append("private Mesa EGL vendor manifest is missing")
     elif "libEGL_mesa.so.0" not in private_egl_vendor.read_text(encoding="utf-8"):
         errors.append("private Mesa EGL vendor manifest does not select libEGL_mesa.so.0")
+    private_fonts = extract_root / PRIVATE_FONTS
+    for font in ("NotoSansCJK-Regular.ttc", "NotoSansCJK-Bold.ttc"):
+        if not (private_fonts / font).is_file():
+            errors.append(f"private CJK UI font is missing: {font}")
+    private_fontconfig = extract_root / PRIVATE_FONTCONFIG
+    if not private_fontconfig.is_file():
+        errors.append("private fontconfig is missing")
+    else:
+        fontconfig_text = private_fontconfig.read_text(encoding="utf-8")
+        if f"/{PRIVATE_FONTS.as_posix()}" not in fontconfig_text:
+            errors.append("private fontconfig does not select the bundled font directory")
+        if "Noto Sans CJK SC" not in fontconfig_text:
+            errors.append("private fontconfig does not prefer Noto Sans CJK SC")
 
     provenance_path = app_root / "uos-runtime-manifest.json"
     if not provenance_path.is_file():
@@ -184,6 +201,10 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
             errors.append("UOS runtime private DRI path is invalid")
         if provenance.get("privateEglVendorManifest") != f"/{PRIVATE_EGL_VENDOR.as_posix()}":
             errors.append("UOS runtime private EGL vendor manifest is invalid")
+        if provenance.get("privateFontDirectory") != f"/{PRIVATE_FONTS.as_posix()}":
+            errors.append("UOS runtime private font directory is invalid")
+        if provenance.get("privateFontconfig") != f"/{PRIVATE_FONTCONFIG.as_posix()}":
+            errors.append("UOS runtime private fontconfig path is invalid")
 
     expected_interpreter = f"/{PRIVATE_LOADER.as_posix()}"
     patched_elfs = 0
@@ -248,6 +269,13 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         for setting in required_rendering_settings:
             if setting not in launcher_text:
                 errors.append(f"UOS launcher is missing software-rendering setting: {setting}")
+        required_font_settings = (
+            'FONTCONFIG_FILE="$APPDIR/uos-runtime/fontconfig/fonts.conf"',
+            'FONTCONFIG_PATH="$APPDIR/uos-runtime/fontconfig"',
+        )
+        for setting in required_font_settings:
+            if setting not in launcher_text:
+                errors.append(f"UOS launcher is missing private-font setting: {setting}")
 
     runtime_manifests = [
         path for path in app_root.rglob("manifest.json") if path.parent.name == "runtime"
@@ -271,6 +299,7 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         "minimumSystemGlibc": "2.28",
         "privateGlibcVersion": "2.35",
         "renderingMode": "private-mesa-llvmpipe",
+        "fontMode": "private-noto-cjk",
         "depends": depends,
         "deb": {
             "filename": deb.name,
