@@ -28,6 +28,8 @@ except ModuleNotFoundError:
 INSTALL_ROOT = Path("opt/drpa-next-uos20")
 PRIVATE_RUNTIME = INSTALL_ROOT / "uos-runtime"
 PRIVATE_LOADER = PRIVATE_RUNTIME / "ld-linux-x86-64.so.2"
+PRIVATE_DRI = PRIVATE_RUNTIME / "dri"
+PRIVATE_EGL_VENDOR = PRIVATE_RUNTIME / "egl_vendor.d/50_mesa.json"
 PRIVATE_LIBRARY_PATHS = (
     f"/{PRIVATE_RUNTIME.as_posix()}",
     f"/{(INSTALL_ROOT / 'usr/lib').as_posix()}",
@@ -36,24 +38,18 @@ PRIVATE_LIBRARY_PATHS = (
 PRIVATE_RPATH = ":".join(PRIVATE_LIBRARY_PATHS)
 TARGET_GLIBC_VERSION = "2.35"
 
-# These packages are ABI boundaries supplied by the target desktop or its graphics
-# driver. WebKitGTK, GTK, GStreamer, NSS, Soup, glibc and the C++ runtime are private.
+# The UOS build owns the complete userspace rendering path. Only the kernel, X11
+# server and xdg-open integration remain target-system responsibilities.
 BASE_DEPENDENCIES = (
     "libc6 (>= 2.28)",
-    "libegl1",
-    "libgl1",
     "xdg-utils",
 )
 
-# These sonames are coupled to the target system's Mesa/GLVND/DRM driver stack.
-# Every other missing DT_NEEDED entry is copied recursively into the private layer.
-SYSTEM_DRIVER_SONAMES = {
-    "libEGL.so.1",
-    "libGL.so.1",
-    "libGLX.so.0",
-    "libGLdispatch.so.0",
-    "libOpenGL.so.0",
-}
+# The package intentionally does not copy hardware-specific DRI modules. Instead it
+# ships GLVND, Mesa's EGL vendor and swrast/llvmpipe from the Ubuntu 22.04 build
+# root. This avoids trying to use a modern vendor driver with UOS' kernel 4.19 while
+# still making EGL deterministic on unsupported GPUs such as Fantasy II-M.
+SYSTEM_DRIVER_SONAMES: set[str] = set()
 SYSTEM_LIBRARY_DIRS = (
     "lib/x86_64-linux-gnu",
     "usr/lib/x86_64-linux-gnu",
@@ -80,6 +76,17 @@ SYSTEM_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
         "usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
     ),
     "libstdc++.so.6": ("usr/lib/x86_64-linux-gnu/libstdc++.so.6",),
+    # Private, software-only OpenGL/EGL closure. The GLVND dispatcher is private so
+    # it always selects the matching Mesa vendor library below rather than a stale
+    # UOS vendor module. Only swrast DRI is copied; hardware DRI modules stay out.
+    "libEGL.so.1": ("usr/lib/x86_64-linux-gnu/libEGL.so.1",),
+    "libGL.so.1": ("usr/lib/x86_64-linux-gnu/libGL.so.1",),
+    "libGLX.so.0": ("usr/lib/x86_64-linux-gnu/libGLX.so.0",),
+    "libGLdispatch.so.0": ("usr/lib/x86_64-linux-gnu/libGLdispatch.so.0",),
+    "libOpenGL.so.0": ("usr/lib/x86_64-linux-gnu/libOpenGL.so.0",),
+    "libEGL_mesa.so.0": ("usr/lib/x86_64-linux-gnu/libEGL_mesa.so.0",),
+    "libGLX_mesa.so.0": ("usr/lib/x86_64-linux-gnu/libGLX_mesa.so.0",),
+    "libglapi.so.0": ("usr/lib/x86_64-linux-gnu/libglapi.so.0",),
     # NSS discovers these modules with dlopen(3), so they do not appear in the
     # browser's DT_NEEDED closure and must be included explicitly.
     "libfreebl3.so": (
@@ -118,6 +125,14 @@ SYSTEM_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
     "libsoftokn3.chk": (
         "usr/lib/x86_64-linux-gnu/libsoftokn3.chk",
         "usr/lib/x86_64-linux-gnu/nss/libsoftokn3.chk",
+    ),
+}
+SOFTWARE_RENDERER_FILES: dict[str, tuple[str, ...]] = {
+    "dri/swrast_dri.so": ("usr/lib/x86_64-linux-gnu/dri/swrast_dri.so",),
+    "dri/kms_swrast_dri.so": ("usr/lib/x86_64-linux-gnu/dri/kms_swrast_dri.so",),
+    "egl_vendor.d/50_mesa.json": (
+        "usr/share/glvnd/egl_vendor.d/50_mesa.json",
+        "usr/share/egl/egl_external_platform.d/50_mesa.json",
     ),
 }
 SYSTEM_RUNTIME_GLOBS = ("lib/x86_64-linux-gnu/libnss_*.so.2",)
@@ -179,6 +194,7 @@ def copy_private_runtime(
         if name in copied_names:
             return
         destination = target / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source.resolve(), destination)
         copied_names.add(name)
         inventory.append(
@@ -191,6 +207,8 @@ def copy_private_runtime(
         )
 
     for name, candidates in SYSTEM_RUNTIME_FILES.items():
+        copy(resolved_source(system_root, candidates), name)
+    for name, candidates in SOFTWARE_RENDERER_FILES.items():
         copy(resolved_source(system_root, candidates), name)
     for pattern in SYSTEM_RUNTIME_GLOBS:
         for source in sorted(system_root.glob(pattern)):
@@ -208,7 +226,7 @@ def copy_private_runtime(
         existing_names = {
             path.name for path in app_root.rglob("*") if path.is_file() or path.is_symlink()
         }
-        existing_names.update(copied_names)
+        existing_names.update(Path(name).name for name in copied_names)
         queue = [path for path in app_root.rglob("*") if is_x86_64_elf(path)]
         queue.extend(path for path in target.rglob("*") if is_x86_64_elf(path))
         inspected: set[Path] = set()
@@ -327,6 +345,13 @@ export GDK_PIXBUF_MODULE_FILE="$APPDIR/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2
 export GIO_EXTRA_MODULES="$APPDIR/usr/lib/x86_64-linux-gnu/gio/modules"
 export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0:$APPDIR/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
+export WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1
+export WEBKIT_DISABLE_COMPOSITING_MODE=1
+export LIBGL_ALWAYS_SOFTWARE=1
+export LIBGL_DRI3_DISABLE=1
+export GALLIUM_DRIVER="${{DRPA_GALLIUM_DRIVER:-llvmpipe}}"
+export LIBGL_DRIVERS_PATH="$APPDIR/uos-runtime/dri"
+export __EGL_VENDOR_LIBRARY_FILENAMES="$APPDIR/uos-runtime/egl_vendor.d/50_mesa.json"
 export PATH="$APPDIR/usr/bin${{PATH:+:$PATH}}"
 cd "$APPDIR/usr"
 exec {app}/usr/bin/drpa-desktop "$@"
@@ -391,9 +416,10 @@ def build_uos20_deb(
         "It installs a private glibc 2.35 dynamic loader, libstdc++ and libgcc under\n"
         "/opt/drpa-next-uos20/uos-runtime and pins every bundled ELF to that runtime.\n"
         "WebKitGTK, GTK, Python/Jupyter and Chrome remain private application files.\n"
-        "GBM and generic libdrm are private because UOS-era Mesa lacks symbols required\n"
-        "by WebKitGTK. EGL, GL, kernel DRM and vendor DRI components stay system-owned\n"
-        "to match the installed graphics driver. User data remains in the XDG local\n"
+        "GBM, generic libdrm, GLVND, Mesa EGL and the swrast/llvmpipe DRI driver are\n"
+        "private. The launcher forces software rendering so unsupported UOS graphics\n"
+        "hardware cannot crash WebKitWebProcess during EGL initialization. The kernel\n"
+        "and X11 server stay system-owned. User data remains in the XDG local\n"
         "data directory.\n",
         encoding="utf-8",
     )
@@ -405,6 +431,9 @@ def build_uos20_deb(
         "privateInterpreter": f"/{PRIVATE_LOADER.as_posix()}",
         "privateRpath": PRIVATE_RPATH,
         "systemDriverSonames": sorted(SYSTEM_DRIVER_SONAMES),
+        "renderingMode": "private-mesa-llvmpipe",
+        "privateDriPath": f"/{PRIVATE_DRI.as_posix()}",
+        "privateEglVendorManifest": f"/{PRIVATE_EGL_VENDOR.as_posix()}",
         "patchedElfCount": len(patched),
         "interpreterElfCount": len(interpreters),
         "patchedElfs": patched,
@@ -433,7 +462,7 @@ def build_uos20_deb(
                 "Description: DRPA Next offline automation desktop for UOS 20",
                 " UOS Desktop 20 and Debian 10 compatibility package with a private",
                 " glibc/C++ runtime, WebKitGTK, Python/Jupyter and Chrome closure.",
-                " Graphics driver ABI libraries remain supplied by the target system.",
+                " A private Mesa llvmpipe stack provides deterministic software rendering.",
                 "",
             ]
         ),

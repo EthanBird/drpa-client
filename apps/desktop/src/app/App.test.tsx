@@ -60,11 +60,13 @@ describe("DRPA Next desktop shell", () => {
   });
 
   it("loads the browser-preview workspace and renders the selected task", async () => {
+    const reportUiReady = vi.spyOn(desktopGateway, "reportUiReady");
     render(<App />);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "月度结算", level: 1 })).toBeVisible());
     expect(screen.getByText("本地脚本包")).toBeVisible();
     expect(screen.getByRole("button", { name: "运行任务" })).toBeEnabled();
+    await waitFor(() => expect(reportUiReady).toHaveBeenCalledOnce());
   });
 
   it("opens the command palette with the platform shortcut", async () => {

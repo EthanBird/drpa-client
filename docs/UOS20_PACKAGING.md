@@ -6,16 +6,15 @@
 
 - 文件：`drpa-next-1.0.0-linux-x86_64-uos20.deb`
 - Debian 包名：`drpa-next`
-- Debian 版本：`1.0.0-2+uos20.1`
+- Debian 版本：`1.0.0-2+uos20.2`
 - 架构：`amd64`
 - 固定安装根：`/opt/drpa-next-uos20`
 - 最低系统用户态：glibc 2.28
 - 构建运行层：Ubuntu 22.04 / glibc 2.35
 - Release：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v1.0.0>
-- 成功构建：<https://github.com/EthanBird/drpa-client/actions/runs/29509379676>
-- 发布提交：`5246ca1c0ddde5b95a2434572a1852cc5708a868`
-- 发布包大小：`300890584` bytes
-- SHA-256：`e2fa614e6617e2a89d5924db2f8720a77afc9a4603a83f8137dad0d7565eb69c`
+- 构建与散列：以 Release 中 `uos20.deb.sha256` 和 `uos20-deb-manifest.json` 为准
+
+`1.0.0-2+uos20.1` 虽能安装且 Host/NetworkProcess 持续运行，但在 Fantasy II-M（PCI `1ec8:9810`）上 WebKitWebProcess 因缺少可加载的 swrast 驱动与 `EGL_NOT_INITIALIZED` 退出，造成永久白屏；旧门禁只检查进程 20 秒未退出，无法发现该问题，已禁止继续作为可用版本。
 
 ## 1. 目标环境与兼容性声明
 
@@ -30,7 +29,7 @@
 | 系统 GCC/C++ 时代 | GCC 8.3 |
 | 已知缺包 | `libwebkit2gtk-4.1-0:amd64` |
 
-自动化门禁使用 Debian 10 `debian:10-slim` 提供真实 glibc 2.28 用户态，并明确拒绝安装系统 `libwebkit2gtk-4.1-0`。这能验证最关键的用户态 ABI、离线 Python/Jupyter、Chrome 和 X11 GUI 启动链路，但 Docker 共享 GitHub Runner 的宿主内核，因此不能把它表述为“已经在 UOS 4.19 实体机完整验证”。每次改变 Chrome、WebKitGTK、glibc 私有层或图形依赖后，仍须在真实 UOS 20 / kernel 4.19 / DDE 与实际显卡上完成一次人工回归。
+自动化门禁分别使用 Debian 10 `debian:10-slim` 与 Deepin 20.8 `linuxdeepin/apricot:v20.8-compatible` 提供真实 glibc 2.28/同代桌面用户态。Debian 基线明确不安装系统 `libwebkit2gtk-4.1-0` 或 Mesa DRI；两层都会验证用户态 ABI、离线 Python/Jupyter、Chrome、React 挂载、Tauri IPC 与实际非白屏截图。Docker 仍共享 GitHub Runner 的宿主内核和虚拟 X11，不能表述为“已经在 UOS 4.19/Fantasy II-M 实体机完整验证”；每次改变 Chrome、WebKitGTK、glibc 或软件渲染闭包后，仍须在真实 UOS 20 / kernel 4.19 / DDE 与实际显卡上人工回归。
 
 兼容范围只包含 Linux x86_64 + glibc。ARM、musl、32 位 x86、非 Debian 包管理系统不属于此产物的承诺范围。
 
@@ -149,12 +148,12 @@ UOS 包必须从同一轮已经验证的 AppDir 派生。不要绕过 AppImage r
 当前 control 只声明：
 
 ```text
-libc6 (>= 2.28), libegl1, libgl1, xdg-utils
+libc6 (>= 2.28), xdg-utils
 ```
 
-其中 `libc6` 表示最低目标用户态与 Debian 包管理基线；应用 ELF 实际使用包内 loader/libc。EGL、GL、GLX、GLdispatch、OpenGL、内核 DRM 接口和厂商 DRI 驱动与目标机器的内核、Mesa/GLVND、显卡驱动紧密耦合，必须由目标系统提供。强行把这些组件从 Ubuntu 22.04 打进包，可能造成软件渲染、黑屏、GPU 进程崩溃，甚至错误加载与内核不匹配的驱动。
+其中 `libc6` 表示最低目标用户态与 Debian 包管理基线；应用 ELF 实际使用包内 loader/libc。`xdg-utils` 用于从 GUI 打开工作区与产物目录。EGL/GL/GLX/GLdispatch、Mesa EGL vendor、swrast/kms_swrast 与 llvmpipe 现在作为一套隔离、固定版本的软件渲染闭包随包携带；不复制任何硬件 DRI 模块，因此不会把 Ubuntu 厂商驱动绑定到 UOS 4.19 内核。
 
-`xdg-utils` 用于从 GUI 打开工作区与产物目录。UOS 桌面通常已经具备 EGL/GL 和 `xdg-open`；若缺失，`apt install ./包.deb` 会从配置的软件源补齐这些基础包。
+目标系统只负责内核、X11 server/DDE 会话和 `xdg-open` 集成。软件渲染会降低重型 WebGL 的性能，但 DRPA 主界面与 Monaco/Notebook 的可靠显示优先于不可用的硬件 EGL 路径。
 
 ### 6.3 仅构建环境需要
 
@@ -218,7 +217,7 @@ UOS 时代的系统 GBM 和 libdrm 缺少现代 WebKitGTK 使用的符号。构�
 - `gbm_bo_create_with_modifiers2`；
 - `drmGetFormatModifierName`。
 
-EGL/GL、厂商 DRI 和内核 DRM 不随包复制。launcher 还设置 `WEBKIT_DISABLE_DMABUF_RENDERER=1`，避开老 Mesa/驱动上不稳定的 WebKit DMABUF renderer；这不替代实体机图形测试。
+launcher 固定 `LIBGL_ALWAYS_SOFTWARE=1`，把 `LIBGL_DRIVERS_PATH` 与 `__EGL_VENDOR_LIBRARY_FILENAMES` 指向包内 Mesa，并设置 `GALLIUM_DRIVER=llvmpipe`、禁用 DMABUF/GBM 与 WebKit compositing 路径。包中只含 swrast/kms_swrast，不含厂商硬件 DRI；这能避开 Fantasy II-M 的 EGL 初始化失败，但仍不替代实体机图形测试。
 
 ### 8.3 X11 基线
 
@@ -240,7 +239,8 @@ getconf GNU_LIBC_VERSION
 
 ```text
 build-essential dbus-x11 dpkg-dev fakeroot file
-libayatana-appindicator3-dev libegl1 libfuse2 libgbm1 libgl1
+libayatana-appindicator3-dev libegl1 libegl-mesa0 libfuse2 libgbm1 libgl1
+libgl1-mesa-dri libglx-mesa0 libopengl0
 libnss3 librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev
 patchelf xauth xdg-utils xvfb
 ```
@@ -262,7 +262,7 @@ cd /tmp/drpa-uos-build/appimage-extract
 ```bash
 python tools/linux/build_uos20_deb.py \
   --appdir /tmp/drpa-uos-build/appimage-extract/squashfs-root \
-  --package-version '1.0.0-2+uos20.1' \
+  --package-version '1.0.0-2+uos20.2' \
   --output /tmp/drpa-next-1.0.0-linux-x86_64-uos20.deb \
   --work-dir /tmp/drpa-uos-build/package-work
 ```
@@ -272,7 +272,7 @@ python tools/linux/build_uos20_deb.py \
 1. 验证输入 AppDir 具备完整桌面布局；
 2. 复制 AppDir 到 `/opt/drpa-next-uos20` 对应的包根；
 3. 给应用 ELF 写入私有 interpreter 与传递型 RPATH；
-4. 复制固定 glibc/C++/NSS 文件并递归补齐非驱动 `DT_NEEDED`；
+4. 复制固定 glibc/C++/NSS、GLVND/Mesa EGL、swrast/kms_swrast，并递归补齐 llvmpipe/LLVM 等 `DT_NEEDED`；
 5. 生成 launcher、desktop entry、图标和文档；
 6. 写入包内 `uos-runtime-manifest.json`；
 7. 生成 Debian control 和 `Installed-Size`；
@@ -287,7 +287,7 @@ python tools/linux/build_uos20_deb.py \
 ```bash
 python tools/linux/verify_uos20_deb.py \
   --deb /tmp/drpa-next-1.0.0-linux-x86_64-uos20.deb \
-  --expected-version '1.0.0-2+uos20.1' \
+  --expected-version '1.0.0-2+uos20.2' \
   --extract-root /tmp/drpa-uos-build/verify-root \
   --manifest-output /tmp/drpa-next-1.0.0-linux-x86_64-uos20-deb-manifest.json
 ```
@@ -295,9 +295,9 @@ python tools/linux/verify_uos20_deb.py \
 验证器覆盖：
 
 - 包名、版本、`amd64` 架构和 `libc6 (>= 2.28)`；
-- `Depends` 不得出现系统 WebKitGTK/JavaScriptCoreGTK/GTK、libstdc++6、`libgcc-s1`、`libgbm1` 或 `libdrm2`；
+- `Depends` 不得出现系统 WebKitGTK/JavaScriptCoreGTK/GTK、libstdc++6、`libgcc-s1`、`libgbm1`、`libdrm2`、`libegl1` 或 `libgl1`；
 - 私有 loader、glibc、C++、NSS、GBM、libdrm、X11、音频和字体关键文件存在；
-- 私有 GBM/libdrm 具备必需符号；
+- 私有 GBM/libdrm 具备必需符号，GLVND/Mesa EGL、swrast/kms_swrast 与 vendor manifest 完整；
 - 所有应用动态 ELF 的 RPATH 完整且为 `DT_RPATH`；
 - 所有带 interpreter 的应用 ELF 指向固定私有 loader；
 - 实际 ELF 数量与包内 provenance manifest 一致；
@@ -306,9 +306,9 @@ python tools/linux/verify_uos20_deb.py \
 
 发布 manifest 是对最终 deb 的机器可读摘要；包内 provenance manifest 进一步记录每个私有运行库的来源、字节数、SHA-256、修补 ELF 清单和许可证文件。
 
-## 11. glibc 2.28 容器门禁
+## 11. glibc 2.28 与可视 UI 容器门禁
 
-静态检查无法证明应用真的能启动。workflow 在回收构建磁盘后，用 `tools/linux/uos20-smoke.Dockerfile` 创建 Debian 10 测试镜像并真实安装最终 deb：
+静态检查无法证明应用真的显示内容。workflow 在回收构建磁盘后，先用 `tools/linux/uos20-smoke.Dockerfile` 创建不含系统 Mesa DRI 的 Debian 10 测试镜像，再用 `tools/linux/uos20-deepin-smoke.Dockerfile` 在 Deepin 20.8 同代用户态重复真实安装与可视测试：
 
 ```bash
 docker build \
@@ -317,7 +317,7 @@ docker build \
   --tag drpa-next-uos20-smoke \
   <包含 deb 与 uos20_container_smoke.sh 的临时 context>
 
-docker run --rm drpa-next-uos20-smoke
+docker run --rm --volume /tmp/uos-diagnostics:/diagnostics drpa-next-uos20-smoke
 ```
 
 容器测试必须全部满足：
@@ -325,15 +325,17 @@ docker run --rm drpa-next-uos20-smoke
 1. `getconf GNU_LIBC_VERSION` 精确返回 `glibc 2.28`；
 2. 系统没有安装 `libwebkit2gtk-4.1-0`；
 3. 私有 loader 能 `--verify` 和 `--list` 桌面 Host；
-4. loader 列表中的 libc、libstdc++、X11、Fribidi、GBM、libdrm 来自 `/opt/drpa-next-uos20/uos-runtime`；
+4. loader 列表中的 libc、libstdc++、X11、Fribidi、GBM、libdrm 与 EGL 来自 `/opt/drpa-next-uos20/uos-runtime`，包内存在 GLVND/Mesa vendor 和 swrast/kms_swrast；
 5. sealed Python 通过 `ctypes` 观察到私有 glibc 2.35；
 6. 在 `PIP_NO_INDEX=1`、`UV_OFFLINE=1`、禁止下载 Python 的条件下创建全新环境；
 7. 新环境导入 `debugpy`、`drpa_runner`、DrissionPage、ipykernel、jupyter_client、lxml、nbformat、NumPy、Pandas、psutil、rpds、tornado、ZMQ；
 8. 内置 Chrome 以普通用户完成 headless DOM 测试；
-9. `/usr/bin/drpa-next` 在 Xvfb/X11 中持续运行 20 秒，预期由 `timeout` 返回 124，任何提前退出都失败；
-10. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
+9. 前端成功取得 workspace snapshot，等待两次 `requestAnimationFrame` 后通过 Tauri IPC 写入 `reactMounted=true` 与 `ipcRoundTrip=true` 就绪标记；
+10. `WebKitWebProcess` 在标记产生后仍存活，日志不得包含 `EGL_NOT_INITIALIZED`、无法创建 EGL display、swrast 加载失败或 `Aborting`；
+11. 捕获 1280×800 Xvfb 根窗口截图，要求至少 32 种颜色且灰度标准差不少于 0.03，拒绝纯白/纯色表面；
+12. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
 
-Dockerfile 会安装 Debian 10 自身的 EGL/GL/GBM/libdrm 等桌面/驱动基础包来模拟目标系统，但不会安装 WebKitGTK 4.1；运行时断言确保应用实际解析到包内 GBM/libdrm，而不是容器的旧版本。
+Debian 10 镜像不会安装系统 WebKitGTK 4.1 或 `libgl1-mesa-dri`，从而证明软件渲染闭包确实来自 deb。Deepin 20.8 镜像用于覆盖与 UOS 同代的发行版用户态；即使镜像本身带 Mesa，launcher 的私有 RPATH、DRI 路径和 EGL vendor manifest 仍会固定到包内闭包。两次测试始终上传 PNG、视觉指标、React/IPC marker、WebKit 进程树、X11 window tree 和完整日志。
 
 ## 12. 发布资产与触发规则
 
@@ -440,7 +442,7 @@ sudo apt remove drpa-next
 - 卸载后 XDG 用户数据仍保留；
 - 至少记录显卡型号、驱动/Mesa 版本、内核、会话类型和测试日志。
 
-若实体机只在 GPU/WebKit 路径失败，可临时收集软件渲染对照结果帮助定位，但不能把永久禁用所有 GPU 当作未经评估的默认修复。
+UOS 专用包从 `uos20.2` 起有意永久使用软件渲染，这是对已证实不兼容 GPU/EGL 路径的产品级兼容策略。人工回归要记录 CPU 占用、窗口交互和 Monaco/Notebook 性能；未来若恢复硬件加速，必须增加显卡白名单、可回退启动和同等像素级门禁，不能直接移除软件 fallback。
 
 ## 16. 后续维护约束
 
@@ -448,7 +450,7 @@ sudo apt remove drpa-next
 
 - Rust toolchain、Tauri、WebKitGTK、GTK、GStreamer 或系统构建基线升级；
 - CPython、uv、Jupyter、原生 wheel 或 Chrome for Testing 升级；
-- 私有 glibc/libstdc++/libgcc、NSS、GBM、libdrm 清单变化；
+- 私有 glibc/libstdc++/libgcc、NSS、GBM、libdrm、GLVND/Mesa/swrast/LLVM 清单变化；
 - AppDir 或 WebKit helper 目录变化；
 - interpreter、RPATH、launcher、XDG 数据路径变化；
 - Debian control 依赖、包名、安装根、版本或升级策略变化。

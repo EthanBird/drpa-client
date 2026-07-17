@@ -222,6 +222,38 @@ fn get_workspace_snapshot(state: State<'_, HostState>) -> WorkspaceSnapshot {
 }
 
 #[tauri::command]
+fn report_ui_ready() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if let Some(marker) = std::env::var_os("DRPA_UI_READY_FILE") {
+        let target = PathBuf::from(marker);
+        if !target.is_absolute() {
+            return Err("DRPA_UI_READY_FILE 必须是绝对路径".to_owned());
+        }
+        let parent = target
+            .parent()
+            .ok_or_else(|| "无法定位 UI 就绪标记目录".to_owned())?;
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("创建 UI 就绪目录失败：{error}"))?;
+        let temporary = parent.join(format!(
+            ".drpa-ui-ready-{}.tmp",
+            Uuid::new_v4().simple()
+        ));
+        let payload = serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": 1,
+            "reactMounted": true,
+            "ipcRoundTrip": true,
+            "pid": std::process::id(),
+        }))
+        .map_err(|error| error.to_string())?;
+        fs::write(&temporary, payload)
+            .map_err(|error| format!("写入 UI 就绪标记失败：{error}"))?;
+        fs::rename(&temporary, &target)
+            .map_err(|error| format!("提交 UI 就绪标记失败：{error}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn install_package(
     archive_path: String,
     state: State<'_, HostState>,
@@ -2046,6 +2078,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_workspace_snapshot,
+            report_ui_ready,
             install_package,
             uninstall_package,
             start_run,

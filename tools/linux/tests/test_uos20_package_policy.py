@@ -23,7 +23,8 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertNotIn("libstdc++6", dependencies)
         self.assertNotIn("libgbm1", dependencies)
         self.assertNotIn("libdrm2", dependencies)
-        self.assertIn("libegl1", dependencies)
+        self.assertNotIn("libegl1", dependencies)
+        self.assertNotIn("libgl1", dependencies)
 
     def test_launcher_does_not_poison_system_child_processes(self) -> None:
         source = launcher_source()
@@ -34,6 +35,10 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn('cd "$APPDIR/usr"', source)
         self.assertNotIn("WEBKIT_EXEC_PATH", source)
         self.assertIn("WEBKIT_DISABLE_DMABUF_RENDERER=1", source)
+        self.assertIn("WEBKIT_DISABLE_COMPOSITING_MODE=1", source)
+        self.assertIn("LIBGL_ALWAYS_SOFTWARE=1", source)
+        self.assertIn('LIBGL_DRIVERS_PATH="$APPDIR/uos-runtime/dri"', source)
+        self.assertIn("__EGL_VENDOR_LIBRARY_FILENAMES=", source)
 
     def test_x86_64_elf_detection_rejects_other_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -57,6 +62,10 @@ class Uos20PackagePolicyTests(unittest.TestCase):
             cxx.mkdir(parents=True)
             nss = cxx / "nss"
             nss.mkdir()
+            dri = cxx / "dri"
+            dri.mkdir()
+            egl_vendor = root / "usr/share/glvnd/egl_vendor.d"
+            egl_vendor.mkdir(parents=True)
             runtime_filenames = (
                 "ld-linux-x86-64.so.2",
                 "libc.so.6",
@@ -90,6 +99,22 @@ class Uos20PackagePolicyTests(unittest.TestCase):
                     nss / filename if filename == "libnssckbi.so" else cxx / filename
                 )
                 destination.write_bytes(filename.encode("utf-8"))
+            for filename in (
+                "libEGL.so.1",
+                "libGL.so.1",
+                "libGLX.so.0",
+                "libGLdispatch.so.0",
+                "libOpenGL.so.0",
+                "libEGL_mesa.so.0",
+                "libGLX_mesa.so.0",
+                "libglapi.so.0",
+            ):
+                (cxx / filename).write_bytes(filename.encode("utf-8"))
+            (dri / "swrast_dri.so").write_bytes(b"swrast")
+            (dri / "kms_swrast_dri.so").write_bytes(b"kms_swrast")
+            (egl_vendor / "50_mesa.json").write_text(
+                '{"ICD":{"library_path":"libEGL_mesa.so.0"}}', encoding="utf-8"
+            )
             (cxx / "libstdc++.so.6").write_bytes(b"GLIBCXX_3.4.30")
 
             inventory = copy_private_runtime(root, root / "output")
@@ -101,14 +126,18 @@ class Uos20PackagePolicyTests(unittest.TestCase):
             self.assertIn("libfreeblpriv3.so", copied)
             self.assertIn("libnssckbi.so", copied)
             self.assertIn("libstdc++.so.6", copied)
+            self.assertIn("libEGL_mesa.so.0", copied)
+            self.assertIn("dri/swrast_dri.so", copied)
+            self.assertIn("dri/kms_swrast_dri.so", copied)
+            self.assertIn("egl_vendor.d/50_mesa.json", copied)
 
-    def test_only_graphics_driver_abi_packages_remain_system_dependencies(self) -> None:
+    def test_graphics_userspace_is_not_a_system_dependency(self) -> None:
         dependencies = ", ".join(BASE_DEPENDENCIES)
         self.assertNotIn("libx11-6", dependencies)
         self.assertNotIn("libasound2", dependencies)
         self.assertNotIn("libfontconfig1", dependencies)
-        self.assertIn("libegl1", dependencies)
-        self.assertIn("libgl1", dependencies)
+        self.assertNotIn("libegl1", dependencies)
+        self.assertNotIn("libgl1", dependencies)
         self.assertNotIn("libgbm1", dependencies)
         self.assertNotIn("libdrm2", dependencies)
 

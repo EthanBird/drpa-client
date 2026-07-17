@@ -21,6 +21,7 @@ import type {
 
 export interface DesktopGateway {
   getWorkspaceSnapshot(): Promise<WorkspaceSnapshot>;
+  reportUiReady(): Promise<void>;
   installPackage(archivePath: string): Promise<PackageSummary>;
   uninstallPackage(packageId: string): Promise<void>;
   startRun(packageId: string, profileId: string, parameters: Record<string, unknown>): Promise<string>;
@@ -127,6 +128,7 @@ const mockGateway: DesktopGateway = {
   async getWorkspaceSnapshot() {
     return structuredClone(mockSnapshot);
   },
+  async reportUiReady() {},
   async installPackage() {
     throw new Error("浏览器预览模式不能读取本地 rpaz，请在桌面应用中测试安装。 ");
   },
@@ -317,6 +319,7 @@ const mockGateway: DesktopGateway = {
 
 const tauriGateway: DesktopGateway = {
   getWorkspaceSnapshot: () => invoke<WorkspaceSnapshot>("get_workspace_snapshot"),
+  reportUiReady: () => invoke<void>("report_ui_ready"),
   installPackage: (archivePath) => invoke<PackageSummary>("install_package", { archivePath }),
   uninstallPackage: (packageId) => invoke<void>("uninstall_package", { packageId }),
   startRun: (packageId, profileId, parameters) => invoke<string>("start_run", { packageId, profileId, parameters }),

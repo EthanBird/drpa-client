@@ -80,7 +80,7 @@ sudo apt install -y \
   xvfb
 ```
 
-依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 只属于源码构建环境。AppImage 封装桌面运行库；现代 deb `1.0.0-2` 直接复用同一 AppDir，把 WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 和 helper process 放入 `/opt/drpa-next`，`Depends` 不得再出现 `libwebkit2gtk-4.1-0` 等 WebKit/GTK 桌面包。现代包的 glibc 2.35+、libgcc 与 libstdc++ 由系统提供；UOS deb 则私有携带这三类 ABI 运行库、NSS 动态加载模块和满足 WebKitGTK 符号要求的 GBM/通用 libdrm。EGL、GL、内核 DRM 与厂商 DRI 组件必须来自目标机以匹配显卡驱动，不应强行内置。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
+依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 只属于源码构建环境。AppImage 封装桌面运行库；现代 deb `1.0.0-2` 直接复用同一 AppDir，把 WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 和 helper process 放入 `/opt/drpa-next`，`Depends` 不得再出现 `libwebkit2gtk-4.1-0` 等 WebKit/GTK 桌面包。现代包的 glibc 2.35+、libgcc、libstdc++ 与图形用户态由系统提供；UOS deb 则私有携带 ABI 运行库、NSS、GBM/libdrm，以及固定版本的 GLVND + Mesa EGL + swrast/llvmpipe 软件渲染闭包，不加载目标机的厂商 DRI。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
 
 随后安装 Node.js 24、Rust stable 与 Python 3.11.9。建议用版本管理器安装，不要修改仓库中的版本约束来迁就本机旧工具。
 
@@ -301,20 +301,20 @@ Ubuntu 22.04 生成的普通 AppImage 和现代 deb 不能在 UOS 20 上直接�
 - 给每个动态 ELF 写入传递型 `DT_RPATH`，覆盖桌面 Host、WebKit 子进程、Python/uv、生成 venv、Python 原生扩展和 Chrome；
 - 启动器只设置 GTK/AppDir 环境，不导出全局 `LD_LIBRARY_PATH`，避免 UOS 自带的 `xdg-open`、文件管理器或 shell 错误加载私有 libc；
 - WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup、Python/Jupyter、uv 和 Chrome 全部来自应用包，不安装系统 `libwebkit2gtk-4.1-0`；
-- 只有 EGL、GL、内核 DRM 与厂商 DRI 组件仍来自 UOS；GBM 与通用 `libdrm.so.2` 必须私有携带，因为 UOS 时代的库分别缺少当前 WebKitGTK 要求的 `gbm_bo_create_with_modifiers2` 与 `drmGetFormatModifierName`。
+- UOS 专用包不再加载目标机的 EGL/GL/厂商 DRI：GBM、通用 `libdrm.so.2`、GLVND、Mesa EGL/GL、swrast/kms_swrast、llvmpipe 及其 LLVM 闭包均私有携带；launcher 强制软件渲染，只有内核与 X11 server 来自系统。这是针对 Fantasy II-M 上 WebKitWebProcess 因 swrast 缺失和 `EGL_NOT_INITIALIZED` 退出的兼容策略。
 
 专用包只能在 glibc 2.35 的 Ubuntu 22.04 runner 组装，不能在开发者当前发行版随意生成：
 
 ```bash
 python tools/linux/build_uos20_deb.py \
   --appdir "$extract_root/squashfs-root" \
-  --package-version '1.0.0-2+uos20.1' \
+  --package-version '1.0.0-2+uos20.2' \
   --output drpa-next-1.0.0-linux-x86_64-uos20.deb \
   --work-dir "$extract_root/uos20-deb-work"
 
 python tools/linux/verify_uos20_deb.py \
   --deb drpa-next-1.0.0-linux-x86_64-uos20.deb \
-  --expected-version '1.0.0-2+uos20.1' \
+  --expected-version '1.0.0-2+uos20.2' \
   --extract-root "$extract_root/uos20-verify" \
   --manifest-output drpa-next-1.0.0-linux-x86_64-uos20-deb-manifest.json
 ```
@@ -324,8 +324,9 @@ python tools/linux/verify_uos20_deb.py \
 1. 私有加载器解析桌面 Host，并确认 libc 与 libstdc++ 来自 `/opt/drpa-next-uos20/uos-runtime`；
 2. 断网创建运行环境，导入 Jupyter、ZMQ、debugpy、lxml、NumPy、Pandas、psutil、rpds 和 tornado 等原生 wheel；
 3. 用内置 Chrome 完成 headless 页面测试；
-4. 使用普通用户、Xvfb 和 X11 启动桌面 Host 20 秒，拒绝早退；
-5. 卸载 `drpa-next` 并确认 XDG 用户数据哨兵仍存在。
+4. 在 Debian 10 与 Deepin 20.8 用户态用普通用户、Xvfb 和 X11 启动桌面 Host，等待 React 两帧绘制后的 Tauri IPC 就绪标记；
+5. 确认 WebKitWebProcess 持续存在，日志没有 EGL/swrast 致命错误，并对实际截图执行颜色数与标准差门禁；
+6. 卸载 `drpa-next` 并确认 XDG 用户数据哨兵仍存在。截图、进程树、窗口树与日志作为 Actions 诊断资产保存。
 
 安装时必须选择文件名带 `uos20` 的资产：
 
@@ -405,14 +406,14 @@ cargo test -p drpa-desktop
 
 Linux 发布流水线必须满足自动化条目；标注为人工覆盖的跨发行版与 Wayland 条目应在后续回归中持续补齐并记录：
 
-1. 干净系统无需安装 WebKitGTK、Python、Node、Rust、Chrome 或新版 GBM/libdrm 即可启动并运行 RPAZ；现代包要求系统 glibc 2.35+ 与 C/C++ 运行库，UOS 包只要求系统 glibc 2.28 并使用私有 glibc/C++/GBM/libdrm 层；EGL/GL、内核 DRM 与厂商 DRI 组件仍由系统提供。
+1. 干净系统无需安装 WebKitGTK、Python、Node、Rust、Chrome 或新版图形用户态即可启动并运行 RPAZ；现代包要求系统 glibc 2.35+ 与 C/C++/图形运行库，UOS 包只要求系统 glibc 2.28、X11 server 与内核，并使用私有 glibc/C++/WebKitGTK/Mesa llvmpipe 层。
 2. 首次运行断网可完成 runtime 初始化，后续运行也不触发 pip/uv 网络请求。
 3. AppImage 或 deb 能稳定定位与自身匹配的 `linux-x86_64` runtime manifest。
 4. UI 使用 WebKitGTK，自动化使用内置 Chrome，两者升级边界清晰。
 5. 数据写入 XDG 目录；应用目录保持只读仍可正常运行。
 6. Studio 源码、RPAZ 导出、Bing 示例、Jupyter 两单元和产物目录打开均通过。
 7. 长任务日志实时输出，取消后完整进程树退出。
-8. 现代包在 Ubuntu 22.04 与 24.04 通过安装、启动、移动、升级和卸载回归；UOS 包先通过 Debian 10/glibc 2.28 自动门禁，再在 UOS 20/kernel 4.19 机器完成发布后人工回归。
+8. 现代包在 Ubuntu 22.04 与 24.04 通过安装、启动、移动、升级和卸载回归；UOS 包先通过 Debian 10 与 Deepin 20.8/glibc 2.28 的 React/IPC/截图自动门禁，再在 UOS 20/kernel 4.19/Fantasy II-M 机器完成发布后人工回归。
 9. CI 保存 runtime 构建证明、最终包和机器可读安装库存。
 10. README、Release notes 和应用设置页不再把未实现的 Windows 更新能力显示为 Linux 可用。
 
@@ -427,7 +428,7 @@ pkg-config --modversion webkit2gtk-4.1
 cargo check -p drpa-desktop
 ```
 
-正式 deb 都不应要求该系统包。若 `apt` 仍提示安装 `libwebkit2gtk-4.1-0`，先用 `dpkg-deb -f <包> Version Depends` 检查：现代包版本为 `1.0.0-2`，UOS 包版本为 `1.0.0-2+uos20.1`；UOS 用户还必须确认文件名包含 `uos20`。出现 `1.0.0` 说明仍在使用已被 Release 覆盖的旧 deb。
+正式 deb 都不应要求该系统包。若 `apt` 仍提示安装 `libwebkit2gtk-4.1-0`，先用 `dpkg-deb -f <包> Version Depends` 检查：现代包版本为 `1.0.0-2`，UOS 包版本为 `1.0.0-2+uos20.2`；UOS 用户还必须确认文件名包含 `uos20`。出现 `1.0.0` 或 `uos20.1` 说明仍在使用已被 Release 覆盖的旧 deb；`uos20.1` 的旧 GUI 门禁不能发现永久白屏。
 
 ### 运行环境页面提示找不到封装运行时
 

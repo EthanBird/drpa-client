@@ -17,6 +17,14 @@ import { useAppStore } from "./store";
 
 const StudioPage = lazy(() => import("../pages/StudioPage").then((module) => ({ default: module.StudioPage })));
 
+function waitForTwoPaints(): Promise<void> {
+  const schedule = (callback: FrameRequestCallback) => {
+    if (typeof window.requestAnimationFrame === "function") return window.requestAnimationFrame(callback);
+    return window.setTimeout(() => callback(performance.now()), 0);
+  };
+  return new Promise((resolve) => schedule(() => schedule(() => resolve())));
+}
+
 export function App() {
   const activeNavigation = useAppStore((state) => state.activeNavigation);
   const commandOpen = useAppStore((state) => state.commandOpen);
@@ -32,8 +40,19 @@ export function App() {
   const setSnapshot = useAppStore((state) => state.setSnapshot);
 
   useEffect(() => {
-    void desktopGateway.getWorkspaceSnapshot().then(setSnapshot);
-  }, [setSnapshot]);
+    let disposed = false;
+    void desktopGateway.getWorkspaceSnapshot()
+      .then(async (snapshot) => {
+        if (disposed) return;
+        setSnapshot(snapshot);
+        await waitForTwoPaints();
+        if (!disposed) await desktopGateway.reportUiReady();
+      })
+      .catch((error: unknown) => {
+        if (!disposed) setOperationNotice(`桌面初始化失败：${String(error)}`);
+      });
+    return () => { disposed = true; };
+  }, [setOperationNotice, setSnapshot]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;

@@ -11,6 +11,8 @@ try:
         INSTALL_ROOT,
         PRIVATE_LIBRARY_PATHS,
         PRIVATE_LOADER,
+        PRIVATE_DRI,
+        PRIVATE_EGL_VENDOR,
         PRIVATE_RUNTIME,
         is_x86_64_elf,
         sha256,
@@ -23,6 +25,8 @@ except ModuleNotFoundError:
         INSTALL_ROOT,
         PRIVATE_LIBRARY_PATHS,
         PRIVATE_LOADER,
+        PRIVATE_DRI,
+        PRIVATE_EGL_VENDOR,
         PRIVATE_RUNTIME,
         is_x86_64_elf,
         sha256,
@@ -40,6 +44,8 @@ FORBIDDEN_DEPENDENCIES = {
     "libgtk-3-0",
     "libgbm1",
     "libdrm2",
+    "libegl1",
+    "libgl1",
 }
 REQUIRED_PRIVATE_RUNTIME_FILES = {
     "ld-linux-x86-64.so.2",
@@ -70,6 +76,14 @@ REQUIRED_PRIVATE_RUNTIME_FILES = {
     "libfreetype.so.6",
     "libfribidi.so.0",
     "libxcb.so.1",
+    "libEGL.so.1",
+    "libGL.so.1",
+    "libGLX.so.0",
+    "libGLdispatch.so.0",
+    "libOpenGL.so.0",
+    "libEGL_mesa.so.0",
+    "libGLX_mesa.so.0",
+    "libglapi.so.0",
 }
 
 
@@ -117,7 +131,16 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
     subprocess.run(["dpkg-deb", "-x", str(deb), str(extract_root)], check=True)
     app_root = extract_root / INSTALL_ROOT
     private_root = extract_root / PRIVATE_RUNTIME
-    private_names = {path.name for path in private_root.iterdir()} if private_root.is_dir() else set()
+    private_files = (
+        sorted(
+            path.relative_to(private_root).as_posix()
+            for path in private_root.rglob("*")
+            if path.is_file()
+        )
+        if private_root.is_dir()
+        else []
+    )
+    private_names = {Path(path).name for path in private_files}
     missing_private = sorted(REQUIRED_PRIVATE_RUNTIME_FILES - private_names)
     if missing_private:
         errors.append(f"private UOS runtime is incomplete: {', '.join(missing_private)}")
@@ -133,6 +156,15 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         and b"drmGetFormatModifierName" not in private_drm.read_bytes()
     ):
         errors.append("private libdrm.so.2 lacks drmGetFormatModifierName")
+    private_dri = extract_root / PRIVATE_DRI
+    for driver in ("swrast_dri.so", "kms_swrast_dri.so"):
+        if not (private_dri / driver).is_file():
+            errors.append(f"private Mesa software driver is missing: {driver}")
+    private_egl_vendor = extract_root / PRIVATE_EGL_VENDOR
+    if not private_egl_vendor.is_file():
+        errors.append("private Mesa EGL vendor manifest is missing")
+    elif "libEGL_mesa.so.0" not in private_egl_vendor.read_text(encoding="utf-8"):
+        errors.append("private Mesa EGL vendor manifest does not select libEGL_mesa.so.0")
 
     provenance_path = app_root / "uos-runtime-manifest.json"
     if not provenance_path.is_file():
@@ -146,6 +178,12 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
             errors.append("UOS runtime provenance minimum glibc must be 2.28")
         if provenance.get("privateGlibcVersion") != "2.35":
             errors.append("UOS runtime provenance private glibc must be 2.35")
+        if provenance.get("renderingMode") != "private-mesa-llvmpipe":
+            errors.append("UOS runtime must declare the private Mesa llvmpipe renderer")
+        if provenance.get("privateDriPath") != f"/{PRIVATE_DRI.as_posix()}":
+            errors.append("UOS runtime private DRI path is invalid")
+        if provenance.get("privateEglVendorManifest") != f"/{PRIVATE_EGL_VENDOR.as_posix()}":
+            errors.append("UOS runtime private EGL vendor manifest is invalid")
 
     expected_interpreter = f"/{PRIVATE_LOADER.as_posix()}"
     patched_elfs = 0
@@ -199,6 +237,17 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
             errors.append("UOS launcher does not resolve relocated WebKit helper paths")
         if "WEBKIT_EXEC_PATH" in launcher_text:
             errors.append("production WebKitGTK ignores WEBKIT_EXEC_PATH")
+        required_rendering_settings = (
+            "WEBKIT_DISABLE_DMABUF_RENDERER=1",
+            "WEBKIT_DISABLE_COMPOSITING_MODE=1",
+            "LIBGL_ALWAYS_SOFTWARE=1",
+            "GALLIUM_DRIVER=",
+            'LIBGL_DRIVERS_PATH="$APPDIR/uos-runtime/dri"',
+            '__EGL_VENDOR_LIBRARY_FILENAMES="$APPDIR/uos-runtime/egl_vendor.d/50_mesa.json"',
+        )
+        for setting in required_rendering_settings:
+            if setting not in launcher_text:
+                errors.append(f"UOS launcher is missing software-rendering setting: {setting}")
 
     runtime_manifests = [
         path for path in app_root.rglob("manifest.json") if path.parent.name == "runtime"
@@ -221,6 +270,7 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         "architecture": architecture,
         "minimumSystemGlibc": "2.28",
         "privateGlibcVersion": "2.35",
+        "renderingMode": "private-mesa-llvmpipe",
         "depends": depends,
         "deb": {
             "filename": deb.name,
@@ -232,7 +282,7 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         "patchedElfCount": patched_elfs,
         "interpreterElfCount": interpreter_elfs,
         "runtimeManifestPath": f"/{runtime_manifest.relative_to(extract_root).as_posix()}",
-        "privateRuntimeFiles": sorted(private_names),
+        "privateRuntimeFiles": private_files,
     }
 
 

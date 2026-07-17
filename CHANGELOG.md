@@ -6,12 +6,14 @@
 
 ### Linux UOS Desktop 20 兼容包
 
+- 修复 UOS/Fantasy II-M 上 `WebKitWebProcess` 因 `MESA-LOADER: failed to open swrast`、`EGL_NOT_INITIALIZED` 退出后主窗口永久白屏的问题。UOS 包修订提升为 `1.0.0-2+uos20.2`，私有携带 GLVND、Mesa EGL、GLX、glapi、swrast/kms_swrast 与 llvmpipe 的完整 `DT_NEEDED` 闭包，并强制 WebKitGTK 使用隔离的软件渲染路径。
+- 原“Xvfb 运行 20 秒不退出”门禁被认定不足并替换：前端必须在 workspace snapshot 成功后完成两帧绘制并通过 Tauri IPC 写入就绪标记；Debian 10 与 Deepin 20.8 用户态还会检查 `WebKitWebProcess` 持续存在、扫描 EGL/swrast 致命日志并验证实际截图至少包含 32 种颜色且灰度标准差不低于 0.03。截图、进程树、窗口树和日志始终作为 Actions 诊断资产保存。
 - 新增 `drpa-next-1.0.0-linux-x86_64-uos20.deb`，最低系统基线为 x86_64、glibc 2.28，覆盖 UOS Desktop 20 Professional（eagle）与同代 Debian 10 用户态。
 - UOS 包固定安装到 `/opt/drpa-next-uos20`，随包携带 glibc 2.35 动态加载器、libc/NSS、libstdc++ 与 libgcc；构建器为桌面 Host、WebKit helper、Python、uv、Chrome 等全部动态 ELF 写入私有解释器和传递型 `DT_RPATH`，解决现代 WebKitGTK 的 `GLIBC_2.35`、`GLIBCXX_3.4.30` 与 `CXXABI` 缺口。
-- 启动器不全局导出 `LD_LIBRARY_PATH`，避免私有 libc 污染 `xdg-open` 等 UOS 系统程序；WebKitGTK 所需的 GBM 与通用 libdrm 进入私有层，Mesa/GLVND 的 EGL/GL、内核 DRM 与厂商 DRI 组件继续由目标系统提供，以匹配真实显卡驱动。
-- 新增机器可读 UOS deb manifest、私有运行库来源/散列库存和 ELF 解释器/RPATH 校验。构建器递归解析 `DT_NEEDED`，把 Fribidi、X11/XCB、ALSA、字体、NSS 动态模块、GBM 和通用 libdrm 等用户态依赖补入私有层；包的 `Depends` 不含系统 WebKitGTK、libstdc++6、`libgcc-s1`、`libgbm1` 或 `libdrm2`，只保留 glibc 2.28 基线、`xdg-utils` 和 EGL/GL 图形驱动 ABI 边界。
+- 启动器不全局导出 `LD_LIBRARY_PATH`，避免私有 libc 污染 `xdg-open` 等 UOS 系统程序；WebKitGTK 所需的 GBM、通用 libdrm、GLVND、Mesa EGL/GL 与软件 DRI 进入私有层，只有内核与 X11 server 继续由目标系统提供。
+- 新增机器可读 UOS deb manifest、私有运行库来源/散列库存和 ELF 解释器/RPATH 校验。构建器递归解析 `DT_NEEDED`，把 Fribidi、X11/XCB、ALSA、字体、NSS、Mesa/LLVM 等用户态依赖补入私有层；包的 `Depends` 不含系统 WebKitGTK、C++ runtime、GBM/libdrm、EGL 或 GL，只保留 glibc 2.28 基线与 `xdg-utils`。
 - UOS 固定根启动器按 AppImage `AppRun` 语义切换到包内 `usr/` 工作目录，使生产版 WebKitGTK 重定位后的 Network/Web helper 与 injected bundle 相对路径正确解析，并禁用旧 Mesa 不可靠的 DMABUF renderer；helper 仍使用包内解释器和传递型私有 RPATH。
-- Linux 发布门禁新增 Debian 10/glibc 2.28 容器：真实安装 UOS deb，在未安装 `libwebkit2gtk-4.1-0` 的条件下完成离线 runtime bootstrap、Jupyter/NumPy/Pandas/debugpy 等原生扩展导入、Chrome headless、X11 GUI 持续运行、卸载和用户数据保留验证。
+- Linux 发布门禁新增 Debian 10 与 Deepin 20.8/glibc 2.28 容器：真实安装 UOS deb，在 Debian 基线未安装 `libwebkit2gtk-4.1-0` 或系统 Mesa DRI 的条件下完成离线 runtime bootstrap、Jupyter/NumPy/Pandas/debugpy 等原生扩展导入、Chrome headless、React/IPC/像素级 UI、卸载和用户数据保留验证。
 - 新增 `docs/UOS20_PACKAGING.md`，集中记录目标系统、依赖分层、私有 ELF 运行层、可复现构建、静态/容器门禁、已解决故障和 UOS 4.19 实体机回归清单。
 
 ## [1.0.0] - 2026-07-15
