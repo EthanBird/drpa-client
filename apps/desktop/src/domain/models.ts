@@ -2,6 +2,7 @@ export type NavigationId =
   | "overview"
   | "library"
   | "studio"
+  | "data"
   | "workbench"
   | "runs"
   | "automations"
@@ -11,7 +12,7 @@ export type NavigationId =
   | "secrets"
   | "settings";
 
-export type RunStatus = "running" | "queued" | "success" | "failed" | "cancelled";
+export type RunStatus = "running" | "queued" | "success" | "failed" | "cancelled" | "interrupted";
 export type TrustLevel = "verified" | "local" | "untrusted";
 export type AutomationStatus = "enabled" | "paused" | "needsAttention";
 
@@ -57,6 +58,45 @@ export interface StudioCellResult {
   outputs: Array<Record<string, unknown>>;
   variables: StudioVariable[];
   durationMs: number;
+}
+
+export interface StudioCompletionResult {
+  matches: string[];
+  cursorStart: number;
+  cursorEnd: number;
+  metadata: unknown;
+  status: string;
+}
+
+export interface DatabaseInfo {
+  name: string;
+  engine: "SQLite" | string;
+  path: string;
+  sizeBytes: number;
+}
+
+export interface DatabaseTable {
+  name: string;
+  kind: "table" | "view" | string;
+  rowCount?: number;
+}
+
+export interface DatabaseColumn {
+  ordinal: number;
+  name: string;
+  dataType: string;
+  notNull: boolean;
+  defaultValue?: string;
+  primaryKey: boolean;
+}
+
+export interface DatabaseQueryResult {
+  columns: string[];
+  rows: unknown[][];
+  affectedRows: number;
+  durationMs: number;
+  truncated: boolean;
+  statementType: string;
 }
 
 export interface RuntimeStatus {
@@ -198,12 +238,51 @@ export interface TaskProfile {
 
 export interface RunSummary {
   id: string;
+  packageId?: string;
   packageName: string;
+  packageVersion?: string;
+  profileId?: string;
   profileName: string;
   status: RunStatus;
   startedAt: string;
+  finishedAt?: string;
   duration: string;
+  durationMs?: number;
   progress?: number;
+  exitCode?: number;
+}
+
+export interface RunEventRecord {
+  id: number;
+  runId: string;
+  sequence?: number;
+  recordedAt: string;
+  eventType: string;
+  level?: LogEntry["level"];
+  scope?: string;
+  message: string;
+  payload: unknown;
+}
+
+export interface RunArtifactRecord {
+  id: number;
+  runId: string;
+  sequence?: number;
+  label: string;
+  path: string;
+  mediaType?: string;
+  size?: number;
+  createdAt: string;
+}
+
+export interface RunDetail {
+  summary: RunSummary;
+  parameters: Record<string, unknown>;
+  outputDir: string;
+  errorMessage?: string;
+  errorTraceback?: string;
+  events: RunEventRecord[];
+  artifacts: RunArtifactRecord[];
 }
 
 export interface AutomationSummary {

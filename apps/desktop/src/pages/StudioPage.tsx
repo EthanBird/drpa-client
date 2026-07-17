@@ -37,6 +37,83 @@ import { desktopGateway } from "../infra/gateway";
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
+let pythonCompletionRegistered = false;
+
+function ensurePythonCompletionProvider() {
+  if (pythonCompletionRegistered || !monaco.languages?.registerCompletionItemProvider) return;
+  pythonCompletionRegistered = true;
+  monaco.languages.registerCompletionItemProvider("python", {
+    triggerCharacters: [".", "_"],
+    provideCompletionItems: async (model, position, context, token) => {
+      if (model.uri.scheme !== "drpa-python") return { suggestions: [] };
+      const projectId = decodeURIComponent(model.uri.path.split("/").filter(Boolean)[0] ?? "");
+      if (!projectId) return { suggestions: [] };
+      const code = model.getValue();
+      const utf16Cursor = model.getOffsetAt(position);
+      const cursorPos = Array.from(code.slice(0, utf16Cursor)).length;
+      try {
+        const result = await desktopGateway.completeStudioPython(projectId, code, cursorPos);
+        if (token.isCancellationRequested || result.status !== "ok") return { suggestions: [] };
+        const utf16Start = codePointOffsetToUtf16(code, result.cursorStart);
+        const utf16End = codePointOffsetToUtf16(code, result.cursorEnd);
+        const start = model.getPositionAt(utf16Start);
+        const end = model.getPositionAt(utf16End);
+        const range = new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column);
+        const typeMetadata = completionTypeMetadata(result.metadata);
+        const suggestions = [...new Set(result.matches)].slice(0, 400).map((match, index) => ({
+          label: match,
+          kind: completionKind(match, context.triggerCharacter, typeMetadata.get(match)?.type),
+          insertText: match,
+          range,
+          detail: typeMetadata.get(match)?.type,
+          documentation: typeMetadata.get(match)?.signature || undefined,
+          sortText: String(index).padStart(4, "0"),
+        }));
+        return { suggestions };
+      } catch {
+        return { suggestions: [] };
+      }
+    },
+  });
+}
+
+function codePointOffsetToUtf16(value: string, offset: number): number {
+  return Array.from(value).slice(0, Math.max(0, offset)).join("").length;
+}
+
+function completionKind(match: string, triggerCharacter?: string, typeName?: string): monaco.languages.CompletionItemKind {
+  const normalized = typeName?.toLowerCase();
+  if (normalized === "function" || normalized === "method") return monaco.languages.CompletionItemKind.Function;
+  if (normalized === "class" || normalized === "type") return monaco.languages.CompletionItemKind.Class;
+  if (normalized === "module") return monaco.languages.CompletionItemKind.Module;
+  if (normalized === "keyword") return monaco.languages.CompletionItemKind.Keyword;
+  if (normalized === "property" || normalized === "field" || normalized === "statement") return monaco.languages.CompletionItemKind.Property;
+  if (triggerCharacter === "." || /^[a-z_][a-zA-Z0-9_]*$/.test(match)) {
+    return monaco.languages.CompletionItemKind.Property;
+  }
+  return monaco.languages.CompletionItemKind.Variable;
+}
+
+function completionTypeMetadata(metadata: unknown): Map<string, { type: string; signature: string }> {
+  if (!metadata || typeof metadata !== "object") return new Map();
+  const raw = (metadata as Record<string, unknown>)._jupyter_types_experimental;
+  if (!Array.isArray(raw)) return new Map();
+  const entries = raw.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const value = item as Record<string, unknown>;
+    if (typeof value.text !== "string") return [];
+    return [[value.text, {
+      type: typeof value.type === "string" ? value.type : "",
+      signature: typeof value.signature === "string" ? value.signature : "",
+    }] as const];
+  });
+  return new Map(entries);
+}
+
+function pythonModelPath(projectId: string, filePath: string): string {
+  return `drpa-python://studio/${encodeURIComponent(projectId)}/${encodeURIComponent(filePath)}`;
+}
+
 interface NotebookCell {
   cell_type: "code" | "markdown";
   execution_count: number | null;
@@ -439,7 +516,7 @@ export function StudioPage() {
           {notebook ? (
             <NotebookWorkspace projectId={selectedId} content={content} onChange={setContent} onNotice={setNotice} theme={theme} />
           ) : (
-            <><div className="editor-tab"><FileCode2 size={14} /> {selectedFile || "未选择文件"}<span>{language}</span></div><Editor height="100%" language={language} value={content} onChange={(value) => setContent(value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 14, minimap: { enabled: false }, automaticLayout: true, tabSize: 4, wordWrap: "on" }} /></>
+            <><div className="editor-tab"><FileCode2 size={14} /> {selectedFile || "未选择文件"}<span>{language}</span></div><Editor beforeMount={ensurePythonCompletionProvider} path={language === "python" && selectedId ? pythonModelPath(selectedId, selectedFile) : undefined} height="100%" language={language} value={content} onChange={(value) => setContent(value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 14, minimap: { enabled: false }, automaticLayout: true, tabSize: 4, wordWrap: "on", quickSuggestions: { other: true, comments: false, strings: false }, suggestOnTriggerCharacters: true }} /></>
           )}
         </section>
         <footer className="studio-console"><TerminalSquare size={15} /><strong>任务输出</strong><span>{notice}</span></footer>
@@ -583,7 +660,7 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
             <div className="cell-gutter"><button type="button" aria-label={`运行单元格 ${index + 1}`} onClick={() => runCell(index)} disabled={executing !== null}><Play size={13} fill="currentColor" /></button><span>{cell.cell_type === "markdown" ? "MD" : `[${cell.execution_count ?? " "}]`}</span></div>
             <div className="cell-body">
               {cell.cell_type === "code" ? (
-                <Editor height={`${Math.min(420, Math.max(92, sourceText(cell.source).split("\n").length * 20 + 30))}px`} language="python" value={sourceText(cell.source)} onChange={(value) => updateSource(index, value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 13, minimap: { enabled: false }, automaticLayout: true, lineNumbers: "on", scrollBeyondLastLine: false, folding: false, scrollbar: { vertical: "auto", horizontal: "auto" } }} />
+                <Editor beforeMount={ensurePythonCompletionProvider} path={projectId ? pythonModelPath(projectId, `notebook.ipynb#cell-${index}`) : undefined} height={`${Math.min(420, Math.max(92, sourceText(cell.source).split("\n").length * 20 + 30))}px`} language="python" value={sourceText(cell.source)} onChange={(value) => updateSource(index, value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 13, minimap: { enabled: false }, automaticLayout: true, lineNumbers: "on", scrollBeyondLastLine: false, folding: false, quickSuggestions: { other: true, comments: false, strings: false }, suggestOnTriggerCharacters: true, scrollbar: { vertical: "auto", horizontal: "auto" } }} />
               ) : editingMarkdownCells.has(index) ? (
                 <textarea autoFocus className="markdown-cell" aria-label={`编辑 Markdown 单元格 ${index + 1}`} value={sourceText(cell.source)} onChange={(event) => updateSource(index, event.target.value)} placeholder="Markdown 说明…" />
               ) : (

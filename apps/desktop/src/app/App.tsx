@@ -16,6 +16,7 @@ import { WorkbenchPage } from "../pages/WorkbenchPage";
 import { useAppStore } from "./store";
 
 const StudioPage = lazy(() => import("../pages/StudioPage").then((module) => ({ default: module.StudioPage })));
+const DataPage = lazy(() => import("../pages/DataPage").then((module) => ({ default: module.DataPage })));
 
 function waitForTwoPaints(): Promise<void> {
   const schedule = (callback: FrameRequestCallback) => {
@@ -152,6 +153,7 @@ export function App() {
         {activeNavigation === "overview" && <OverviewPage />}
         {activeNavigation === "library" && <LibraryPage />}
         {activeNavigation === "studio" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载开发工作室…</h2></div></div>}><StudioPage /></Suspense>}
+        {activeNavigation === "data" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载数据工作台…</h2></div></div>}><DataPage /></Suspense>}
         {activeNavigation === "workbench" && <WorkbenchPage />}
         {activeNavigation === "runs" && <RunsPage />}
         {activeNavigation === "automations" && <AutomationsPage />}

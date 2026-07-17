@@ -1,4 +1,4 @@
-import { ArrowRight, Blocks, BookOpen, Bot, Code2, Command, Library, ListTodo, Play, Search, Settings, Zap } from "lucide-react";
+import { ArrowRight, Blocks, BookOpen, Bot, Code2, Command, Database, Library, ListTodo, Play, Search, Settings, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { NavigationId } from "../domain/models";
@@ -15,6 +15,7 @@ const commands: Array<{
   { id: "workbench", label: "配置任务参数", detail: "运行工作台", icon: Blocks, navigation: "workbench" },
   { id: "library", label: "安装脚本包", detail: "脚本包管理", icon: Library, navigation: "library" },
   { id: "studio", label: "新建 RPaz 项目", detail: "开发工作室", icon: Code2, navigation: "studio" },
+  { id: "data", label: "打开数据工作台", detail: "SQLite 与 SQL 查询", icon: Database, navigation: "data" },
   { id: "agent", label: "打开 AI Agent", detail: "RPAZ 开发助手", icon: Bot, navigation: "agent" },
   { id: "docs", label: "打开知识文档", detail: "本地 Markdown 知识库", icon: BookOpen, navigation: "docs" },
   { id: "runs", label: "打开运行记录", detail: "执行与审计", icon: ListTodo, navigation: "runs" },

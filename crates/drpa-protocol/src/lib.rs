@@ -96,12 +96,75 @@ pub struct TaskProfile {
 #[serde(rename_all = "camelCase")]
 pub struct RunSummary {
     pub id: String,
+    #[serde(default)]
+    pub package_id: String,
     pub package_name: String,
+    #[serde(default)]
+    pub package_version: String,
+    #[serde(default)]
+    pub profile_id: String,
     pub profile_name: String,
     pub status: RunStatus,
     pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
     pub duration: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     pub progress: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunEventRecord {
+    pub id: u64,
+    pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u64>,
+    pub recorded_at: String,
+    pub event_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<LogLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    pub message: String,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunArtifactRecord {
+    pub id: u64,
+    pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u64>,
+    pub label: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDetail {
+    pub summary: RunSummary,
+    #[serde(default)]
+    pub parameters: Value,
+    pub output_dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_traceback: Option<String>,
+    #[serde(default)]
+    pub events: Vec<RunEventRecord>,
+    #[serde(default)]
+    pub artifacts: Vec<RunArtifactRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,7 +193,7 @@ pub struct LogEntry {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RunStatus {
     Running,
@@ -138,6 +201,7 @@ pub enum RunStatus {
     Success,
     Failed,
     Cancelled,
+    Interrupted,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

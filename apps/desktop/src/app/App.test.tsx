@@ -25,6 +25,7 @@ vi.mock("monaco-editor/esm/vs/editor/editor.api.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/editor/editor.worker.js?worker", () => ({ default: class EditorWorker {} }));
 vi.mock("monaco-editor/esm/vs/basic-languages/python/python.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js", () => ({}));
+vi.mock("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js", () => ({}));
 
 
 describe("DRPA Next desktop shell", () => {
@@ -94,6 +95,26 @@ describe("DRPA Next desktop shell", () => {
 
     expect(await screen.findByRole("heading", { name: "脚本包" })).toBeVisible();
     expect(screen.getByText("发票中心")).toBeVisible();
+  });
+
+  it("opens the local data workbench and loads the SQLite schema", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "数据工作台" }));
+
+    expect(await screen.findByRole("heading", { name: "数据工作台" })).toBeVisible();
+    expect(await screen.findByText("example_tasks")).toBeVisible();
+    expect(screen.getByText(/workspace\.sqlite3/)).toBeVisible();
+  });
+
+  it("loads persisted run details when opening the run history", async () => {
+    const getRunDetail = vi.spyOn(desktopGateway, "getRunDetail");
+    useAppStore.setState({ activeNavigation: "runs" });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "运行记录" })).toBeVisible();
+    await waitFor(() => expect(getRunDetail).toHaveBeenCalled());
+    expect(await screen.findByRole("button", { name: /日志/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "输出目录" })).toBeVisible();
   });
 
   it("uses light theme by default and switches theme from settings", async () => {

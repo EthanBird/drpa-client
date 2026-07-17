@@ -10,6 +10,7 @@ from drpa_runner.events import EventWriter
 from drpa_runner.executor import ExecutionRequest, execute_request
 from drpa_runner.kernel import StudioKernel
 from drpa_runner.paths import PathPolicyError, resolve_child
+from drpa_runner.sql import SqlClient
 
 
 def test_resolve_child_rejects_escape(tmp_path: Path) -> None:
@@ -35,6 +36,8 @@ def test_execute_request_emits_versioned_events(tmp_path: Path) -> None:
         "    ctx.log.info('started safely')\n"
         "    result = ctx.output_file('nested/result.txt')\n"
         "    result.write_text('ok', encoding='utf-8')\n"
+        "    ctx.sql.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY)')\n"
+        "    ctx.sql.execute('INSERT INTO runs(id) VALUES (?)', (ctx.run_id,))\n"
         "    ctx.progress(100, 'done')\n"
         "    ctx.open_output_directory()\n",
         encoding="utf-8",
@@ -49,6 +52,7 @@ def test_execute_request_emits_versioned_events(tmp_path: Path) -> None:
         entrypoint="main.py",
         callable="main",
         parameters={},
+        database_path=tmp_path / "databases" / "workspace.sqlite3",
     )
 
     exit_code = execute_request(request, EventWriter(stream=stream))
@@ -58,6 +62,8 @@ def test_execute_request_emits_versioned_events(tmp_path: Path) -> None:
     assert [event["type"] for event in events] == ["ready", "log", "artifact", "progress", "open_directory", "completed"]
     assert events[-2]["path"] == str(output_dir.resolve())
     assert (output_dir / "nested" / "result.txt").read_text(encoding="utf-8") == "ok"
+    with SqlClient(tmp_path / "databases" / "workspace.sqlite3") as sql:
+        assert sql.scalar("SELECT id FROM runs") == "test-run"
     assert [event["sequence"] for event in events] == sorted(event["sequence"] for event in events)
 
 
@@ -90,3 +96,22 @@ def test_studio_kernel_preserves_state_and_reports_variables() -> None:
     assert second["result"] == "42"
     assert second["execution_count"] == 2
     assert any(variable["name"] == "value" for variable in second["variables"])
+
+
+def test_sql_client_queries_and_rolls_back_transactions(tmp_path: Path) -> None:
+    sql = SqlClient(tmp_path / "databases" / "workspace.sqlite3")
+    sql.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+    assert sql.executemany("INSERT INTO notes(title) VALUES (?)", [("one",), ("two",)]) == 2
+    assert sql.scalar("SELECT COUNT(*) FROM notes") == 2
+    assert sql.query("SELECT id, title FROM notes ORDER BY id") == [
+        {"id": 1, "title": "one"},
+        {"id": 2, "title": "two"},
+    ]
+
+    with pytest.raises(RuntimeError):
+        with sql.transaction():
+            sql.execute("INSERT INTO notes(title) VALUES (?)", ("rolled back",))
+            raise RuntimeError("stop")
+
+    assert sql.scalar("SELECT COUNT(*) FROM notes") == 2
+    sql.close()

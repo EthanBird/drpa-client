@@ -87,6 +87,7 @@ nav { margin-top: 14px; }
 .status-badge.success, .status-badge.running { border-color: rgba(87,214,160,.2); background: var(--success-soft); color: var(--success); }
 .status-badge.warning, .status-badge.queued { border-color: rgba(245,189,98,.2); background: var(--warning-soft); color: var(--warning); }
 .status-badge.failed { border-color: rgba(255,122,135,.2); background: var(--danger-soft); color: var(--danger); }
+.status-badge.interrupted { border-color: rgba(255,122,135,.2); background: var(--danger-soft); color: var(--danger); }
 .status-badge.neutral, .status-badge.cancelled { background: var(--surface-2); }
 .tabular { font-family: var(--font-mono); font-size: calc(10px * var(--font-scale)); font-variant-numeric: tabular-nums; }
 .spin { animation: spin 1s linear infinite; }

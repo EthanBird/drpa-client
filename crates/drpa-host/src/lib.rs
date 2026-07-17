@@ -15,6 +15,10 @@ use thiserror::Error;
 use uuid::Uuid;
 use zip::ZipArchive;
 
+mod run_store;
+
+use run_store::{RunStore, now_timestamp};
+
 #[derive(Debug, Error)]
 pub enum HostError {
     #[error("找不到脚本包：{0}")]
@@ -35,6 +39,8 @@ pub enum HostError {
     UnsafeArchivePath(String),
     #[error("当前版本只支持 Python 入口点")]
     UnsupportedEntrypoint,
+    #[error("运行记录存储失败：{0}")]
+    Storage(String),
 }
 
 #[derive(Debug, Clone)]
@@ -52,27 +58,49 @@ pub struct HostState {
     workspace_root: PathBuf,
     snapshot: Arc<RwLock<WorkspaceSnapshot>>,
     sequence: Arc<AtomicU64>,
+    run_store: Arc<RunStore>,
 }
 
 impl HostState {
     #[must_use]
     pub fn new(workspace_root: PathBuf) -> Self {
+        Self::try_new(workspace_root).expect("failed to initialize DRPA host state")
+    }
+
+    pub fn try_new(workspace_root: PathBuf) -> Result<Self, HostError> {
         let packages_root = workspace_root.join("packages");
-        let _ = fs::create_dir_all(&packages_root);
+        fs::create_dir_all(&packages_root)?;
         let packages = scan_installed_packages(&packages_root);
         let automations = derive_automations(&packages);
-        Self {
+        let run_store = Arc::new(RunStore::open(&workspace_root).map_err(HostError::Storage)?);
+        run_store
+            .mark_unfinished_interrupted()
+            .map_err(HostError::Storage)?;
+        let runs = run_store.load_summaries().map_err(HostError::Storage)?;
+        let completed = runs
+            .iter()
+            .filter(|run| matches!(run.status, RunStatus::Success | RunStatus::Failed))
+            .count();
+        let succeeded = runs
+            .iter()
+            .filter(|run| run.status == RunStatus::Success)
+            .count();
+        Ok(Self {
             workspace_root,
             snapshot: Arc::new(RwLock::new(WorkspaceSnapshot {
                 stats: WorkspaceStats {
                     active_runs: 0,
-                    success_rate: 0.0,
+                    success_rate: if completed == 0 {
+                        0.0
+                    } else {
+                        succeeded as f64 / completed as f64 * 100.0
+                    },
                     packages: packages.len() as u32,
                     saved_hours: 0.0,
                 },
                 packages,
                 automations,
-                runs: Vec::new(),
+                runs,
                 logs: vec![LogEntry {
                     id: 1,
                     time: log_timestamp(),
@@ -82,7 +110,8 @@ impl HostState {
                 }],
             })),
             sequence: Arc::new(AtomicU64::new(2)),
-        }
+            run_store,
+        })
     }
 
     #[must_use]
@@ -93,6 +122,31 @@ impl HostState {
     #[must_use]
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+
+    pub fn get_run_detail(&self, run_id: &str) -> Result<drpa_protocol::RunDetail, HostError> {
+        self.run_store
+            .get_detail(run_id)
+            .map_err(HostError::Storage)?
+            .ok_or_else(|| HostError::RunNotFound(run_id.to_owned()))
+    }
+
+    pub fn delete_run_record(&self, run_id: &str) -> Result<Option<String>, HostError> {
+        if self.run_is_active(run_id) {
+            return Err(HostError::Storage("运行中的记录不能删除".to_owned()));
+        }
+        let output_dir = self
+            .run_store
+            .delete_run(run_id)
+            .map_err(HostError::Storage)?;
+        self.snapshot.write().runs.retain(|run| run.id != run_id);
+        Ok(output_dir)
+    }
+
+    fn run_is_active(&self, run_id: &str) -> bool {
+        self.snapshot.read().runs.iter().any(|run| {
+            run.id == run_id && matches!(run.status, RunStatus::Running | RunStatus::Queued)
+        })
     }
 
     pub fn install_package(&self, archive_path: &Path) -> Result<PackageSummary, HostError> {
@@ -221,13 +275,23 @@ impl HostState {
             .join("outputs");
         let run = RunSummary {
             id: run_id.clone(),
+            package_id: package.id.clone(),
             package_name: package.name.clone(),
+            package_version: package.version.clone(),
+            profile_id: profile.id.clone(),
             profile_name: profile.name.clone(),
             status: RunStatus::Running,
-            started_at: log_timestamp(),
+            started_at: now_timestamp(),
+            finished_at: None,
             duration: "—".to_owned(),
+            duration_ms: None,
             progress: None,
+            exit_code: None,
         };
+        let redacted_parameters = redact_parameters(parameters, &package.parameters);
+        self.run_store
+            .create_run(&run, &redacted_parameters, &output_dir, "workbench")
+            .map_err(HostError::Storage)?;
         snapshot.runs.insert(0, run);
         snapshot.stats.active_runs += 1;
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
@@ -268,18 +332,30 @@ impl HostState {
             .join(&run_id)
             .join("outputs");
         let mut snapshot = self.snapshot.write();
-        snapshot.runs.insert(
-            0,
-            RunSummary {
-                id: run_id.clone(),
-                package_name: manifest.name.clone(),
-                profile_name: "Studio 直接运行".to_owned(),
-                status: RunStatus::Running,
-                started_at: log_timestamp(),
-                duration: "—".to_owned(),
-                progress: None,
-            },
-        );
+        let run = RunSummary {
+            id: run_id.clone(),
+            package_id: manifest.id.clone(),
+            package_name: manifest.name.clone(),
+            package_version: manifest.version.clone(),
+            profile_id: "studio".to_owned(),
+            profile_name: "Studio 直接运行".to_owned(),
+            status: RunStatus::Running,
+            started_at: now_timestamp(),
+            finished_at: None,
+            duration: "—".to_owned(),
+            duration_ms: None,
+            progress: None,
+            exit_code: None,
+        };
+        self.run_store
+            .create_run(
+                &run,
+                &redact_parameters_by_name(parameters),
+                &output_dir,
+                "studio",
+            )
+            .map_err(HostError::Storage)?;
+        snapshot.runs.insert(0, run);
         snapshot.stats.active_runs += 1;
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
         snapshot.logs.push(LogEntry {
@@ -304,6 +380,7 @@ impl HostState {
     }
 
     pub fn record_runtime_event(&self, run_id: &str, event: RuntimeEvent) {
+        let _ = self.run_store.append_runtime_event(run_id, &event);
         let mut snapshot = self.snapshot.write();
         match event {
             RuntimeEvent::Ready { .. } => self.push_log(
@@ -341,9 +418,18 @@ impl HostState {
             RuntimeEvent::Warning { message, .. } => {
                 self.push_log(&mut snapshot, LogLevel::Warning, "runtime", message);
             }
-            RuntimeEvent::Error { message, .. } => {
+            RuntimeEvent::Error {
+                message, traceback, ..
+            } => {
                 self.push_log(&mut snapshot, LogLevel::Error, "runtime", message);
-                finish_run(&mut snapshot, run_id, RunStatus::Failed);
+                self.finish_run(
+                    &mut snapshot,
+                    run_id,
+                    RunStatus::Failed,
+                    Some(1),
+                    None,
+                    traceback.as_deref(),
+                );
             }
             RuntimeEvent::Completed { exit_code, .. } => {
                 let status = if exit_code == 0 {
@@ -351,7 +437,7 @@ impl HostState {
                 } else {
                     RunStatus::Failed
                 };
-                finish_run(&mut snapshot, run_id, status);
+                self.finish_run(&mut snapshot, run_id, status, Some(exit_code), None, None);
                 let (level, message) = if exit_code == 0 {
                     (
                         LogLevel::Success,
@@ -370,20 +456,57 @@ impl HostState {
 
     pub fn fail_run(&self, run_id: &str, message: String) {
         let mut snapshot = self.snapshot.write();
-        finish_run(&mut snapshot, run_id, RunStatus::Failed);
+        let _ = self.run_store.append_host_event(
+            run_id,
+            LogLevel::Error,
+            "host",
+            &message,
+            serde_json::json!({"failure": "host"}),
+        );
+        self.finish_run(
+            &mut snapshot,
+            run_id,
+            RunStatus::Failed,
+            Some(1),
+            Some(&message),
+            None,
+        );
         self.push_log(&mut snapshot, LogLevel::Error, "runtime", message);
     }
 
     pub fn cancel_run(&self, run_id: &str) -> Result<(), HostError> {
         let mut snapshot = self.snapshot.write();
-        let run = snapshot
+        let run_index = snapshot
             .runs
-            .iter_mut()
-            .find(|run| run.id == run_id)
+            .iter()
+            .position(|run| run.id == run_id)
             .ok_or_else(|| HostError::RunNotFound(run_id.to_owned()))?;
-        if matches!(run.status, RunStatus::Running | RunStatus::Queued) {
-            run.status = RunStatus::Cancelled;
+        if matches!(
+            snapshot.runs[run_index].status,
+            RunStatus::Running | RunStatus::Queued
+        ) {
+            let _ = self.run_store.append_host_event(
+                run_id,
+                LogLevel::Warning,
+                "host",
+                "用户取消任务",
+                serde_json::json!({"reason": "user_cancelled"}),
+            );
+            snapshot.runs[run_index].status = RunStatus::Cancelled;
             snapshot.stats.active_runs = snapshot.stats.active_runs.saturating_sub(1);
+            if let Ok((finished_at, duration_ms)) = self.run_store.finish_run(
+                run_id,
+                RunStatus::Cancelled,
+                Some(130),
+                Some("用户取消任务"),
+                None,
+            ) {
+                let run = &mut snapshot.runs[run_index];
+                run.finished_at = Some(finished_at);
+                run.duration_ms = Some(duration_ms);
+                run.duration = format_duration(duration_ms);
+                run.exit_code = Some(130);
+            }
         }
         Ok(())
     }
@@ -411,6 +534,23 @@ impl HostState {
             message,
         });
     }
+
+    fn finish_run(
+        &self,
+        snapshot: &mut WorkspaceSnapshot,
+        run_id: &str,
+        status: RunStatus,
+        exit_code: Option<i32>,
+        error_message: Option<&str>,
+        error_traceback: Option<&str>,
+    ) {
+        let persisted = self
+            .run_store
+            .finish_run(run_id, status, exit_code, error_message, error_traceback)
+            .ok();
+        finish_run(snapshot, run_id, status, exit_code, persisted);
+        refresh_run_stats(snapshot);
+    }
 }
 
 fn log_timestamp() -> String {
@@ -424,7 +564,13 @@ fn log_timestamp() -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}.{fraction:03}Z")
 }
 
-fn finish_run(snapshot: &mut WorkspaceSnapshot, run_id: &str, status: RunStatus) {
+fn finish_run(
+    snapshot: &mut WorkspaceSnapshot,
+    run_id: &str,
+    status: RunStatus,
+    exit_code: Option<i32>,
+    persisted: Option<(String, u64)>,
+) {
     if let Some(run) = snapshot.runs.iter_mut().find(|run| run.id == run_id) {
         let was_active = matches!(run.status, RunStatus::Running | RunStatus::Queued);
         run.status = status;
@@ -433,10 +579,84 @@ fn finish_run(snapshot: &mut WorkspaceSnapshot, run_id: &str, status: RunStatus)
         } else {
             run.progress.unwrap_or(0)
         });
+        run.exit_code = exit_code.or(run.exit_code);
+        if let Some((finished_at, duration_ms)) = persisted {
+            run.finished_at = Some(finished_at);
+            run.duration_ms = Some(duration_ms);
+            run.duration = format_duration(duration_ms);
+        }
         if was_active {
             snapshot.stats.active_runs = snapshot.stats.active_runs.saturating_sub(1);
         }
     }
+}
+
+fn format_duration(duration_ms: u64) -> String {
+    if duration_ms < 1_000 {
+        format!("{duration_ms} ms")
+    } else if duration_ms < 60_000 {
+        format!("{:.1} s", duration_ms as f64 / 1_000.0)
+    } else {
+        format!(
+            "{}m {:02}s",
+            duration_ms / 60_000,
+            (duration_ms % 60_000) / 1_000
+        )
+    }
+}
+
+fn refresh_run_stats(snapshot: &mut WorkspaceSnapshot) {
+    let completed = snapshot
+        .runs
+        .iter()
+        .filter(|run| matches!(run.status, RunStatus::Success | RunStatus::Failed))
+        .count();
+    let succeeded = snapshot
+        .runs
+        .iter()
+        .filter(|run| run.status == RunStatus::Success)
+        .count();
+    snapshot.stats.success_rate = if completed == 0 {
+        0.0
+    } else {
+        succeeded as f64 / completed as f64 * 100.0
+    };
+}
+
+fn redact_parameters(
+    parameters: &serde_json::Value,
+    definitions: &[ParameterSummary],
+) -> serde_json::Value {
+    let mut redacted = parameters.clone();
+    let Some(values) = redacted.as_object_mut() else {
+        return serde_json::json!({});
+    };
+    for definition in definitions {
+        if definition.kind == "secret" && values.contains_key(&definition.id) {
+            values.insert(
+                definition.id.clone(),
+                serde_json::Value::String("***".to_owned()),
+            );
+        }
+    }
+    redacted
+}
+
+fn redact_parameters_by_name(parameters: &serde_json::Value) -> serde_json::Value {
+    let mut redacted = parameters.clone();
+    let Some(values) = redacted.as_object_mut() else {
+        return serde_json::json!({});
+    };
+    for (name, value) in values.iter_mut() {
+        let lower = name.to_ascii_lowercase();
+        if ["password", "secret", "token", "api_key", "apikey"]
+            .iter()
+            .any(|needle| lower.contains(needle))
+        {
+            *value = serde_json::Value::String("***".to_owned());
+        }
+    }
+    redacted
 }
 
 fn read_manifest(archive: &mut ZipArchive<File>) -> Result<PackageManifest, HostError> {

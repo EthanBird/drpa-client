@@ -85,6 +85,8 @@ Windows 正式安装采用应用旁数据模型：
     ├── projects/                    Studio 工作副本
     ├── build/                       Studio 导出包
     ├── runs/                        运行日志与产物
+    ├── system/drpa.sqlite3          Host 运行、事件与产物索引
+    ├── databases/workspace.sqlite3 RPAZ `ctx.sql` 与数据工作台
     ├── runtime-environment/
     │   └── environment/             最终位置创建的 Python 环境
     └── updates/                     更新暂存、备份和状态
@@ -155,9 +157,17 @@ React notebook UI
 
 Rust 与 Python bridge 之间使用 JSONL；bridge 与 IPython Kernel 之间使用真实 Jupyter wire protocol。当前支持标准 `stream`、`execute_result`、`display_data`、`error` 和变量读取。
 
+Studio Python 补全复用同一个项目 Kernel：Monaco 调用 `complete_studio_python`，Host 发送 JSONL `complete` 请求，bridge 使用 Jupyter `complete_request` 获取 IPython/Jedi 结果。前端必须在 Monaco UTF-16 offset 与 Jupyter Unicode code-point offset 之间转换，避免中文和 emoji 之前的光标范围错位。
+
 `execute_studio_cell` 是异步 Tauri command，所有运行时定位、Kernel 创建和阻塞式 JSONL 读取都进入 blocking worker。Notebook 打开后在后台调用 `prepare_studio_kernel` 预热；React 先提交“正在运行”状态并等待一帧再 invoke。UI 使用完整的 `minmax(0, 1fr)`/`min-height: 0` 容器链和内部滚动区，大量单元格不会扩张主工作区；单个 Monaco 编辑器最高 420 px，超出部分在编辑器内滚动。
 
 这不是 VS Code Extension Host。新增 notebook 能力时优先遵守 nbformat 和 Jupyter 消息规范，不要复制依赖 `NotebookController`、VS Code 命令或扩展市场的代码。详细对照见 [`JUPYTER_INTEGRATION.md`](JUPYTER_INTEGRATION.md)。
+
+## 6.1 运行记录与数据工作台
+
+`crates/drpa-host/src/run_store.rs` 使用 `data/system/drpa.sqlite3` 持久化 run、事件和产物。Host 启动时把上次异常退出后仍为 running/queued 的记录标记为 interrupted；运行记录页通过 `get_run_detail` 读取完整概览、日志、参数、错误回溯和产物，而不是只依赖当前进程内存。
+
+用户数据使用独立的 `data/databases/workspace.sqlite3`。RPAZ 通过 `ctx.sql` 访问，数据工作台通过 `apps/desktop/src-tauri/src/database.rs` 访问；React 始终经过 `DesktopGateway`。实现和扩展约定见 [`DATA_WORKBENCH.md`](DATA_WORKBENCH.md)。
 
 ## 7. Windows 更新
 

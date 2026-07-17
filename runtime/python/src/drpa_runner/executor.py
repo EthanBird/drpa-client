@@ -22,6 +22,7 @@ class ExecutionRequest:
     entrypoint: str
     callable: str
     parameters: dict[str, Any]
+    database_path: Path | None = None
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "ExecutionRequest":
@@ -34,6 +35,7 @@ class ExecutionRequest:
             entrypoint=str(raw["entrypoint"]),
             callable=str(raw.get("callable") or "main"),
             parameters=dict(raw.get("parameters") or {}),
+            database_path=Path(raw["database_path"]) if raw.get("database_path") else None,
         )
 
 
@@ -52,6 +54,11 @@ def execute_request(request: ExecutionRequest, events: EventWriter) -> int:
         params=request.parameters,
         package_dir=package_dir,
         output_dir=output_dir,
+        database_path=(
+            request.database_path.resolve()
+            if request.database_path is not None
+            else (output_dir / ".drpa-runtime.sqlite3").resolve()
+        ),
         events=events,
     )
 
@@ -70,6 +77,8 @@ def execute_request(request: ExecutionRequest, events: EventWriter) -> int:
         events.emit("error", message=str(exc), traceback=traceback.format_exc())
         events.emit("completed", exit_code=1)
         return 1
+    finally:
+        context.sql.close()
 
     events.emit("completed", exit_code=0)
     return 0

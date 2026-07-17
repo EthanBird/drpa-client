@@ -181,6 +181,23 @@ class JupyterKernelBridge:
             "duration_ms": round((time.perf_counter() - started) * 1000),
         }
 
+    def complete(self, request_id: str, source: str, cursor_pos: int) -> dict[str, Any]:
+        """Complete against the live IPython namespace using the Jupyter protocol."""
+
+        cursor_pos = max(0, min(int(cursor_pos), len(source)))
+        message_id = self.client.complete(source, cursor_pos=cursor_pos)
+        reply = self._shell_reply(message_id)
+        content = reply.get("content", {})
+        matches = content.get("matches", []) if content.get("status") == "ok" else []
+        return {
+            "request_id": request_id,
+            "matches": [str(match) for match in matches],
+            "cursor_start": int(content.get("cursor_start", cursor_pos)),
+            "cursor_end": int(content.get("cursor_end", cursor_pos)),
+            "metadata": content.get("metadata", {}),
+            "status": str(content.get("status", "error")),
+        }
+
     def _shell_reply(self, message_id: str) -> dict[str, Any]:
         while True:
             message = self.client.get_shell_msg(timeout=30)
@@ -221,24 +238,45 @@ def main() -> int:
     try:
         for line in sys.stdin:
             request: dict[str, Any] = {}
+            request_type: str | None = None
             try:
                 request = json.loads(line)
-                if request.get("type") != "execute":
+                request_type = request.get("type")
+                if request_type == "execute":
+                    response = kernel.execute(str(request["request_id"]), str(request.get("code", "")))
+                elif request_type == "complete":
+                    response = kernel.complete(
+                        str(request["request_id"]),
+                        str(request.get("code", "")),
+                        int(request.get("cursor_pos", 0)),
+                    )
+                else:
                     raise ValueError("unsupported kernel request")
-                response = kernel.execute(str(request["request_id"]), str(request.get("code", "")))
             except BaseException as exception:  # noqa: BLE001 - keep protocol alive for malformed requests
-                response = {
-                    "request_id": str(request.get("request_id", "")),
-                    "execution_count": 0,
-                    "stdout": "",
-                    "stderr": "",
-                    "result": None,
-                    "error": f"{type(exception).__name__}: {exception}",
-                    "traceback": traceback.format_exception(type(exception), exception, exception.__traceback__),
-                    "outputs": [],
-                    "variables": [],
-                    "duration_ms": 0,
-                }
+                error = f"{type(exception).__name__}: {exception}"
+                if request_type == "complete":
+                    cursor_pos = int(request.get("cursor_pos", 0))
+                    response = {
+                        "request_id": str(request.get("request_id", "")),
+                        "matches": [],
+                        "cursor_start": cursor_pos,
+                        "cursor_end": cursor_pos,
+                        "metadata": {"error": error},
+                        "status": "error",
+                    }
+                else:
+                    response = {
+                        "request_id": str(request.get("request_id", "")),
+                        "execution_count": 0,
+                        "stdout": "",
+                        "stderr": "",
+                        "result": None,
+                        "error": error,
+                        "traceback": traceback.format_exception(type(exception), exception, exception.__traceback__),
+                        "outputs": [],
+                        "variables": [],
+                        "duration_ms": 0,
+                    }
             sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
             sys.stdout.flush()
     finally:

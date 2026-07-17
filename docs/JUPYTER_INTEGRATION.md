@@ -8,6 +8,7 @@ DRPA Next 没有把 `microsoft/vscode-jupyter` 扩展包直接塞进 Tauri。该
 | --- | --- |
 | `src/kernels/kernelProvider.base.ts`：以 notebook/id 管理 Kernel 生命周期和状态 | Rust `StudioKernelManager` 以项目 ID 管理一个持久的 sealed-Python 子进程 |
 | `src/kernels/kernelExecution.ts`：执行队列、执行计数和输出 | JSONL 单请求串行协议、递增 `execution_count`、stdout/stderr/result/error |
+| Jupyter `complete_request`：基于代码和实时命名空间补全 | Monaco completion provider 将 UTF-16 光标转换为 Unicode code point，Rust 转发 JSONL `complete`，bridge 调用标准 Jupyter completion |
 | `src/notebooks/controllers/vscodeNotebookController.ts`：连接 VS Code Notebook UI | React + Monaco 的本地 Notebook 工作区，读写标准 nbformat v4 `.ipynb` |
 | `src/kernels/raw/session/rawJupyterSession.node.ts`：基于 ZMQ 的原生 Jupyter 会话 | 内置 `ipykernel`、`jupyter_client` 与 `pyzmq`，由 Python bridge 管理真实 Jupyter shell/iopub/control 通道；Rust Host 只承载进程生命周期与 JSONL IPC |
 
@@ -24,6 +25,7 @@ DRPA Next 没有把 `microsoft/vscode-jupyter` 扩展包直接塞进 Tauri。该
 - 代码与 Markdown 单元格增删、Monaco 编辑、单格运行、全部运行。
 - 项目级持久命名空间、执行计数、最后表达式结果、stdout/stderr、错误回溯。
 - Kernel 重启与变量浏览。
+- Python 文件与代码单元离线补全；同时使用当前单元源码和项目级持久 IPython 命名空间，不启动额外语言服务器。
 - 真实 IPython Kernel、Jupyter 消息协议与 ZMQ；支持标准 stream、execute_result、display_data、error 输出结构。
 - 执行结果回写 `.ipynb`，可在标准 Jupyter/VS Code 中继续打开。
 - 打开 Notebook 时异步预热 Kernel；首次运行的运行时定位、进程启动和输出等待都在 Rust blocking worker 中完成，WebView 主线程保持可交互。

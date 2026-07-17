@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::AppPaths;
 
 const KNOWLEDGE_DIRECTORY: &str = "knowledge";
-const SEED_MARKER: &str = ".drpa-default-knowledge-v1";
+const SEED_MARKER: &str = ".drpa-default-knowledge-v2";
 const MAX_MARKDOWN_BYTES: u64 = 8 * 1024 * 1024;
 
 const DEFAULT_DOCUMENTS: &[(&str, &str)] = &[
@@ -59,6 +59,10 @@ const DEFAULT_DOCUMENTS: &[(&str, &str)] = &[
         "RPAZ 开发指南/10_AI_Agent协作约定.md",
         include_str!("../knowledge_seed/10_AI_Agent协作约定.md"),
     ),
+    (
+        "RPAZ 开发指南/11_SQL与数据工作台.md",
+        include_str!("../knowledge_seed/11_SQL与数据工作台.md"),
+    ),
 ];
 
 #[derive(Serialize)]
@@ -90,7 +94,7 @@ pub(crate) fn seed_default_knowledge(workspace_root: &Path) -> std::io::Result<(
     }
     atomic_write(
         &marker,
-        b"DRPA default knowledge v1. User documents are never overwritten.\n",
+        b"DRPA default knowledge v2. User documents are never overwritten.\n",
     )
 }
 

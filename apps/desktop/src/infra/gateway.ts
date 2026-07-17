@@ -8,11 +8,17 @@ import type {
   AgentStreamEvent,
   AgentWorkspaceConfig,
   CurrentUser,
+  DatabaseColumn,
+  DatabaseInfo,
+  DatabaseQueryResult,
+  DatabaseTable,
   KnowledgeEntry,
   PackageSummary,
   PlatformCapabilities,
   RuntimeStatus,
+  RunDetail,
   StudioCellResult,
+  StudioCompletionResult,
   StudioProject,
   WindowsUpdateSession,
   WindowsUpdateStatus,
@@ -27,6 +33,8 @@ export interface DesktopGateway {
   uninstallPackage(packageId: string): Promise<void>;
   startRun(packageId: string, profileId: string, parameters: Record<string, unknown>): Promise<string>;
   cancelRun(runId: string): Promise<void>;
+  getRunDetail(runId: string): Promise<RunDetail>;
+  openRunOutputDirectory(runId: string): Promise<void>;
   listStudioProjects(): Promise<StudioProject[]>;
   createStudioProject(name: string): Promise<StudioProject>;
   openInstalledPackage(packageId: string): Promise<StudioProject>;
@@ -41,8 +49,14 @@ export interface DesktopGateway {
   openBuildOutputDirectory(): Promise<void>;
   runStudioProject(projectId: string, parameters: Record<string, unknown>): Promise<string>;
   executeStudioCell(projectId: string, code: string): Promise<StudioCellResult>;
+  completeStudioPython(projectId: string, code: string, cursorPos: number): Promise<StudioCompletionResult>;
   prepareStudioKernel(projectId: string): Promise<void>;
   restartStudioKernel(projectId: string): Promise<void>;
+  getWorkspaceDatabaseInfo(): Promise<DatabaseInfo>;
+  listDatabaseTables(): Promise<DatabaseTable[]>;
+  describeDatabaseTable(tableName: string): Promise<DatabaseColumn[]>;
+  executeDatabaseSql(sql: string): Promise<DatabaseQueryResult>;
+  openWorkspaceDatabaseDirectory(): Promise<void>;
   runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResult>;
   listenAgentStream(requestId: string, onEvent: (event: AgentStreamEvent) => void): Promise<() => void>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
@@ -142,6 +156,27 @@ const mockGateway: DesktopGateway = {
   async cancelRun() {
     await new Promise((resolve) => window.setTimeout(resolve, 180));
   },
+  async getRunDetail(runId) {
+    const summary = mockSnapshot.runs.find((run) => run.id === runId);
+    if (!summary) throw new Error("运行记录不存在");
+    return {
+      summary: structuredClone(summary),
+      parameters: { source: "mock", limit: 20 },
+      outputDir: `C:\\DRPA\\data\\runs\\${runId}\\outputs`,
+      events: mockSnapshot.logs.map((entry) => ({
+        id: entry.id,
+        runId,
+        recordedAt: `2026-07-18T${entry.time}Z`,
+        eventType: "log",
+        level: entry.level,
+        scope: entry.scope,
+        message: entry.message,
+        payload: {},
+      })),
+      artifacts: [],
+    };
+  },
+  async openRunOutputDirectory() {},
   async listStudioProjects() {
     return structuredClone(mockStudioProjects);
   },
@@ -207,8 +242,28 @@ const mockGateway: DesktopGateway = {
   async executeStudioCell(_projectId, code) {
     return { executionCount: 1, stdout: "", stderr: "", result: `预览模式：${code.length} 个字符`, traceback: [], outputs: [], variables: [], durationMs: 1 };
   },
+  async completeStudioPython(_projectId, code, cursorPos) {
+    const start = code.slice(0, cursorPos).search(/[A-Za-z_][A-Za-z0-9_]*$/);
+    return { matches: ["ctx", "print", "range"], cursorStart: start < 0 ? cursorPos : start, cursorEnd: cursorPos, metadata: {}, status: "ok" };
+  },
   async prepareStudioKernel() {},
   async restartStudioKernel() {},
+  async getWorkspaceDatabaseInfo() {
+    return { name: "工作区数据库", engine: "SQLite", path: "data/databases/workspace.sqlite3", sizeBytes: 24_576 };
+  },
+  async listDatabaseTables() {
+    return [{ name: "example_tasks", kind: "table", rowCount: 2 }];
+  },
+  async describeDatabaseTable() {
+    return [
+      { ordinal: 0, name: "id", dataType: "INTEGER", notNull: false, primaryKey: true },
+      { ordinal: 1, name: "name", dataType: "TEXT", notNull: true, primaryKey: false },
+    ];
+  },
+  async executeDatabaseSql(sql) {
+    return { columns: ["preview", "characters"], rows: [["浏览器预览", sql.length]], affectedRows: 0, durationMs: 1, truncated: false, statementType: "SELECT" };
+  },
+  async openWorkspaceDatabaseDirectory() {},
   async runAgentTurn(request) {
     const prompt = request.messages.at(-1)?.content ?? "";
     const message = request.projectId
@@ -327,6 +382,8 @@ const tauriGateway: DesktopGateway = {
   uninstallPackage: (packageId) => invoke<void>("uninstall_package", { packageId }),
   startRun: (packageId, profileId, parameters) => invoke<string>("start_run", { packageId, profileId, parameters }),
   cancelRun: (runId) => invoke<void>("cancel_run", { runId }),
+  getRunDetail: (runId) => invoke<RunDetail>("get_run_detail", { runId }),
+  openRunOutputDirectory: (runId) => invoke<void>("open_run_output_directory", { runId }),
   listStudioProjects: () => invoke<StudioProject[]>("list_studio_projects"),
   createStudioProject: (name) => invoke<StudioProject>("create_studio_project", { name }),
   openInstalledPackage: (packageId) => invoke<StudioProject>("open_installed_package", { packageId }),
@@ -341,8 +398,14 @@ const tauriGateway: DesktopGateway = {
   openBuildOutputDirectory: () => invoke<void>("open_build_output_directory"),
   runStudioProject: (projectId, parameters) => invoke<string>("run_studio_project", { projectId, parameters }),
   executeStudioCell: (projectId, code) => invoke<StudioCellResult>("execute_studio_cell", { projectId, code }),
+  completeStudioPython: (projectId, code, cursorPos) => invoke<StudioCompletionResult>("complete_studio_python", { projectId, code, cursorPos }),
   prepareStudioKernel: (projectId) => invoke<void>("prepare_studio_kernel", { projectId }),
   restartStudioKernel: (projectId) => invoke<void>("restart_studio_kernel", { projectId }),
+  getWorkspaceDatabaseInfo: () => invoke<DatabaseInfo>("get_workspace_database_info"),
+  listDatabaseTables: () => invoke<DatabaseTable[]>("list_database_tables"),
+  describeDatabaseTable: (tableName) => invoke<DatabaseColumn[]>("describe_database_table", { tableName }),
+  executeDatabaseSql: (sql) => invoke<DatabaseQueryResult>("execute_database_sql", { sql }),
+  openWorkspaceDatabaseDirectory: () => invoke<void>("open_workspace_database_directory"),
   runAgentTurn: (request) => invoke<AgentTurnResult>("run_agent_turn", { request }),
   listenAgentStream: async (requestId, onEvent) => listen<AgentStreamEvent>(`agent-stream-${requestId}`, (event) => onEvent(event.payload)),
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),

@@ -13,7 +13,7 @@ RPaz 是一个根目录包含 `manifest.yaml` 的 ZIP 文件。DRPA Next 的开�
 
 “打开已安装包”会把已安装版本复制为新的可编辑工作副本，绝不会直接修改安装区。修改后可以直接运行或另行导出。
 
-编辑器和 Notebook Kernel 完全来自应用安装包，不会访问 CDN。Notebook 使用持久 Python 会话，支持逐单元格/全部运行、执行计数、标准输出、异常、变量浏览和重启 Kernel。项目源码、构建产物和运行输出都保存在本地工作区。
+编辑器和 Notebook Kernel 完全来自应用安装包，不会访问 CDN。Python 文件和 Notebook 代码单元使用 Jupyter `complete_request` + IPython/Jedi 提供离线补全，补全读取当前代码和项目级持久命名空间。Notebook 支持逐单元格/全部运行、执行计数、标准输出、异常、变量浏览和重启 Kernel。项目源码、构建产物和运行输出都保存在本地工作区。
 
 ## 最小目录
 
@@ -65,7 +65,24 @@ def main(ctx):
 - `ctx.log`：标准 Python logger，日志会显示在工作区。
 - `ctx.progress(value, message)`：报告 0 到 100 的进度。
 - `ctx.output_file(relative_path, label)`：获得隔离输出路径并登记产物。
+- `ctx.open_output_directory()`：请求 Host 打开本次运行输出目录。
+- `ctx.sql`：连接工作区 SQLite；提供 `execute`、`executemany`、`query`、`scalar` 和事务。
 - `ctx.browser(headless=True)`：使用封装的 Chrome for Testing 与 DrissionPage。
+
+`ctx.sql` 示例：
+
+```python
+def main(ctx):
+    ctx.sql.execute("CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL)")
+    ctx.sql.execute(
+        "INSERT INTO counters(name, value) VALUES (?, 1) "
+        "ON CONFLICT(name) DO UPDATE SET value = value + 1",
+        ("runs",),
+    )
+    ctx.log.info("累计运行：%s", ctx.sql.scalar("SELECT value FROM counters WHERE name=?", ("runs",)))
+```
+
+完整说明见 [数据工作台与 `ctx.sql`](DATA_WORKBENCH.md)。
 
 脚本不应写死工作目录、解释器路径或浏览器路径，也不应自行调用 pip。离线依赖只能来自平台 sealed runtime 或包内经过锁定和校验的 wheel 集合。
 

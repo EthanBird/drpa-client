@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Windows 开发体验与数据能力
+
+- 运行记录改为 SQLite 持久化，支持应用重启后继续查看完整概览、事件时间线、参数、产物与错误回溯；异常退出时未结束任务标记为 interrupted。
+- 开发工作室和 Notebook 代码单元接入标准 Jupyter `complete_request`，通过项目级 IPython/Jedi 命名空间提供离线 Python 补全。
+- Runtime Context 新增 `ctx.sql`，支持 SQLite 参数化执行、批量写入、字典查询、标量读取、事务和嵌套 savepoint。
+- 新增自有数据工作台：本地 SQLite 对象树、表结构检查、Monaco SQL 编辑、`Ctrl+Enter`、结果网格、TSV 复制和查询历史；DBX 仅作为交互研究参考，不引入其运行时代码。
+
 ### Linux UOS Desktop 20 兼容包
 
 - 修复 UOS 中首次聚焦任意输入框后 WebView 页面完全失去点击响应的问题。UOS 包修订提升为 `1.0.0-2+uos20.3`，launcher 固定 GTK 使用 XIM 桥，避免私有 Ubuntu GTK 在 UOS 上自动连接不匹配的 IBus/Fcitx D-Bus IM 模块；继续继承系统 `XMODIFIERS` 以使用 DDE/Fcitx 的中文输入服务。

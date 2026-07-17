@@ -22,6 +22,7 @@ output_dir
 entrypoint
 callable
 parameters
+database_path
 ```
 
 Runtime 要求协议版本为 `1`。请求中的 `parameters` 缺失或为空时转换为空字典。`package_dir` 和 `output_dir` 都会解析为绝对规范路径；输出目录在入口调用前创建。
@@ -36,6 +37,7 @@ Runtime 要求协议版本为 `1`。请求中的 `parameters` 缺失或为空时
 | `ctx.package_dir` | `pathlib.Path` | 当前项目/安装版本根目录，已 `resolve()` | 读取包内资源 |
 | `ctx.output_dir` | `pathlib.Path` | 本次运行输出目录，已创建并 `resolve()` | 输出根目录 |
 | `ctx.log` | `logging.Logger` | INFO 级别、独立 Runtime handler | 输出结构化运行日志 |
+| `ctx.sql` | `SqlClient` | Host 管理的 `workspace.sqlite3` | 持久化结构化数据、事务和查询 |
 
 内部字段 `ctx._events` 是运行协议写入器，不属于包 SDK。包代码不要直接调用或替换它。
 
@@ -234,7 +236,63 @@ def main(ctx):
 
 该方法只允许打开当前运行的输出目录，实际桌面操作由 Host 执行。建议把它放在所有文件写入完成之后，并通过 `boolean` 参数让任务配置决定是否自动打开。
 
-## 7. `ctx.browser(headless=None)`
+## 7. `ctx.sql`
+
+`ctx.sql` 连接 Host 管理的工作区 SQLite 文件。数据库跨任务运行持久存在，默认位于工作区的 `databases/workspace.sqlite3`；脚本不应自行推导或写死这个路径。
+
+```python
+def main(ctx):
+    ctx.sql.execute(
+        """CREATE TABLE IF NOT EXISTS downloads (
+               id INTEGER PRIMARY KEY,
+               url TEXT NOT NULL,
+               saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    ctx.sql.execute(
+        "INSERT INTO downloads(url) VALUES (?)",
+        ("https://example.com/file",),
+    )
+    total = ctx.sql.scalar("SELECT COUNT(*) FROM downloads", default=0)
+    rows = ctx.sql.query(
+        "SELECT id, url, saved_at FROM downloads ORDER BY id DESC",
+        limit=100,
+    )
+    ctx.log.info("累计记录=%s，本次读取=%s", total, len(rows))
+```
+
+可用方法：
+
+- `execute(sql, parameters=()) -> int`：执行一个语句并返回影响行数。
+- `executemany(sql, rows) -> int`：批量执行参数化语句。
+- `query(sql, parameters=(), limit=None) -> list[dict]`：返回字典行。
+- `scalar(sql, parameters=(), default=None) -> Any`：返回第一行第一列。
+- `transaction()`：事务上下文；异常时回滚，支持嵌套 savepoint。
+
+始终使用参数绑定，不要把外部输入拼接进 SQL：
+
+```python
+title = str(ctx.params.get("title") or "")
+ctx.sql.execute("INSERT INTO notes(title) VALUES (?)", (title,))
+```
+
+多个写操作需要一起成功时使用事务：
+
+```python
+with ctx.sql.transaction():
+    ctx.sql.execute("INSERT INTO batches(name) VALUES (?)", (batch_name,))
+    batch_id = ctx.sql.scalar("SELECT last_insert_rowid()")
+    ctx.sql.executemany(
+        "INSERT INTO batch_items(batch_id, value) VALUES (?, ?)",
+        [(batch_id, value) for value in values],
+    )
+```
+
+数据库启用 WAL、外键和 30 秒 busy timeout。结构和数据可在 DRPA 的“数据工作台”中查看；`ctx.sql` 与工作台指向同一文件。
+
+更完整的建模、并发和工作台说明见 [SQL 与数据工作台](./11_SQL与数据工作台.md)。
+
+## 8. `ctx.browser(headless=None)`
 
 创建 DrissionPage `ChromiumPage`：
 
@@ -282,7 +340,7 @@ finally:
     page.quit()
 ```
 
-## 8. `ctx.package_dir`
+## 9. `ctx.package_dir`
 
 读取包内静态资源：
 
@@ -295,7 +353,7 @@ data = json.loads(template.read_text(encoding="utf-8"))
 
 需要验证路径未越界时，可以自己使用 `Path.resolve()` 并检查父子关系，或只拼接固定的代码内相对路径。
 
-## 9. `ctx.output_dir`
+## 10. `ctx.output_dir`
 
 可以用于创建暂时不希望登记为产物的内部文件，但最终交付文件仍应走 `output_file()`：
 
@@ -309,7 +367,7 @@ build_csv(scratch, final)
 
 不要假设不同运行共享同一个 output；每次运行应彼此隔离。需要跨运行缓存时，应等待平台提供明确缓存能力，而不是猜测父目录结构。
 
-## 10. 完整 Context 模板
+## 11. 完整 Context 模板
 
 ```python
 from __future__ import annotations

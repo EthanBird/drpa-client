@@ -7,6 +7,7 @@ from typing import Any
 
 from .events import EventWriter
 from .paths import resolve_child
+from .sql import SqlClient
 
 
 class RuntimeContext:
@@ -20,6 +21,7 @@ class RuntimeContext:
         params: dict[str, Any],
         package_dir: Path,
         output_dir: Path,
+        database_path: Path,
         events: EventWriter,
     ) -> None:
         self.run_id = run_id
@@ -28,6 +30,7 @@ class RuntimeContext:
         self.package_dir = package_dir.resolve()
         self.output_dir = output_dir.resolve()
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.sql = SqlClient(database_path)
         self._events = events
         self.log = self._build_logger()
 

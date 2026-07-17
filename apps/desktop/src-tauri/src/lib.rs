@@ -19,6 +19,7 @@ use zip::write::SimpleFileOptions;
 
 mod agent;
 mod agent_config;
+mod database;
 mod knowledge;
 
 const WINDOWS_UPDATE_SCHEMA: u32 = 2;
@@ -161,6 +162,16 @@ struct StudioKernelResponse {
     duration_ms: u64,
 }
 
+#[derive(Deserialize)]
+struct StudioKernelCompletionResponse {
+    request_id: String,
+    matches: Vec<String>,
+    cursor_start: usize,
+    cursor_end: usize,
+    metadata: serde_json::Value,
+    status: String,
+}
+
 #[derive(Deserialize, Serialize)]
 struct StudioVariable {
     name: String,
@@ -181,6 +192,16 @@ struct StudioCellResult {
     outputs: Vec<serde_json::Value>,
     variables: Vec<StudioVariable>,
     duration_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioCompletionResult {
+    matches: Vec<String>,
+    cursor_start: usize,
+    cursor_end: usize,
+    metadata: serde_json::Value,
+    status: String,
 }
 
 #[derive(Serialize)]
@@ -335,6 +356,41 @@ fn cancel_run(
 }
 
 #[tauri::command]
+fn get_run_detail(
+    run_id: String,
+    state: State<'_, HostState>,
+) -> Result<drpa_protocol::RunDetail, String> {
+    state
+        .get_run_detail(&run_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_run_output_directory(
+    run_id: String,
+    state: State<'_, HostState>,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    let detail = state
+        .get_run_detail(&run_id)
+        .map_err(|error| error.to_string())?;
+    let output = PathBuf::from(detail.output_dir);
+    let runs_root = paths.workspace_root.join("runs");
+    fs::create_dir_all(&output).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&runs_root).map_err(|error| error.to_string())?;
+    let output = output
+        .canonicalize()
+        .map_err(|error| format!("定位运行输出目录失败：{error}"))?;
+    let runs_root = runs_root
+        .canonicalize()
+        .map_err(|error| format!("定位运行记录目录失败：{error}"))?;
+    if !output.starts_with(&runs_root) {
+        return Err("运行输出目录超出工作区".to_owned());
+    }
+    open_directory_in_file_explorer(&output)
+}
+
+#[tauri::command]
 fn list_studio_projects(paths: State<'_, AppPaths>) -> Result<Vec<StudioProject>, String> {
     let projects_root = paths.workspace_root.join("projects");
     fs::create_dir_all(&projects_root).map_err(|error| error.to_string())?;
@@ -378,7 +434,7 @@ fn create_studio_project(
     fs::write(root.join("manifest.yaml"), manifest).map_err(|error| error.to_string())?;
     fs::write(
         root.join("main.py"),
-        "def main(ctx):\n    ctx.log.info(\"任务开始\")\n    ctx.progress(100, \"任务完成\")\n",
+        "from drpa_runner import RuntimeContext\n\n\ndef main(ctx: RuntimeContext) -> None:\n    ctx.log.info(\"任务开始\")\n    ctx.progress(100, \"任务完成\")\n",
     )
     .map_err(|error| error.to_string())?;
     fs::write(
@@ -728,6 +784,86 @@ async fn execute_studio_cell(
     })
     .await
     .map_err(|error| format!("执行 Notebook 单元任务失败：{error}"))?
+}
+
+#[tauri::command]
+async fn complete_studio_python(
+    project_id: String,
+    code: String,
+    cursor_pos: usize,
+    paths: State<'_, AppPaths>,
+    kernels: State<'_, StudioKernelManager>,
+) -> Result<StudioCompletionResult, String> {
+    let paths = paths.inner().clone();
+    let kernels = kernels.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        complete_studio_python_blocking(project_id, code, cursor_pos, &paths, &kernels)
+    })
+    .await
+    .map_err(|error| format!("执行 Python 补全任务失败：{error}"))?
+}
+
+fn complete_studio_python_blocking(
+    project_id: String,
+    code: String,
+    cursor_pos: usize,
+    paths: &AppPaths,
+    kernels: &StudioKernelManager,
+) -> Result<StudioCompletionResult, String> {
+    validate_project_id(&project_id)?;
+    let mut sessions = kernels
+        .sessions
+        .lock()
+        .map_err(|_| "Studio Kernel 状态已损坏".to_owned())?;
+    if let std::collections::hash_map::Entry::Vacant(entry) = sessions.entry(project_id.clone()) {
+        entry.insert(spawn_studio_kernel(&project_id, paths)?);
+    }
+    let request_id = Uuid::new_v4().simple().to_string();
+    let result = (|| {
+        let session = sessions
+            .get_mut(&project_id)
+            .ok_or_else(|| "创建 Studio Kernel 失败".to_owned())?;
+        serde_json::to_writer(
+            &mut session.stdin,
+            &serde_json::json!({
+                "type": "complete",
+                "request_id": request_id.clone(),
+                "code": code,
+                "cursor_pos": cursor_pos,
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+        session
+            .stdin
+            .write_all(b"\n")
+            .and_then(|_| session.stdin.flush())
+            .map_err(|error| format!("向 Kernel 发送补全请求失败：{error}"))?;
+        let mut line = String::new();
+        if session
+            .stdout
+            .read_line(&mut line)
+            .map_err(|error| format!("读取 Kernel 补全响应失败：{error}"))?
+            == 0
+        {
+            return Err("Studio Kernel 已意外退出".to_owned());
+        }
+        let response: StudioKernelCompletionResponse = serde_json::from_str(&line)
+            .map_err(|error| format!("Kernel 返回无效补全响应：{error}"))?;
+        if response.request_id != request_id {
+            return Err("Kernel 补全响应与当前请求不匹配".to_owned());
+        }
+        Ok(StudioCompletionResult {
+            matches: response.matches,
+            cursor_start: response.cursor_start,
+            cursor_end: response.cursor_end,
+            metadata: response.metadata,
+            status: response.status,
+        })
+    })();
+    if result.is_err() {
+        sessions.remove(&project_id);
+    }
+    result
 }
 
 fn execute_studio_cell_blocking(
@@ -1555,6 +1691,13 @@ fn execute_python_run(
         .ok_or_else(|| "无效的运行输出目录".to_owned())?;
     fs::create_dir_all(run_root).map_err(|error| error.to_string())?;
     let request_path = run_root.join("request.json");
+    let database_path = paths
+        .workspace_root
+        .join("databases")
+        .join("workspace.sqlite3");
+    if let Some(database_root) = database_path.parent() {
+        fs::create_dir_all(database_root).map_err(|error| error.to_string())?;
+    }
     let request = serde_json::json!({
         "protocol": RUNTIME_PROTOCOL_VERSION,
         "run_id": launch.run_id,
@@ -1564,6 +1707,7 @@ fn execute_python_run(
         "entrypoint": launch.entrypoint,
         "callable": launch.callable,
         "parameters": parameters,
+        "database_path": database_path,
     });
     let request_file = File::create(&request_path).map_err(|error| error.to_string())?;
     serde_json::to_writer_pretty(request_file, &request).map_err(|error| error.to_string())?;
@@ -2084,7 +2228,10 @@ pub fn run() {
                     .build()?;
             }
 
-            app.manage(HostState::new(workspace_root.clone()));
+            app.manage(
+                HostState::try_new(workspace_root.clone())
+                    .map_err(|error| std::io::Error::other(error.to_string()))?,
+            );
             app.manage(AppPaths {
                 workspace_root: workspace_root.clone(),
                 resource_dir,
@@ -2104,6 +2251,8 @@ pub fn run() {
             uninstall_package,
             start_run,
             cancel_run,
+            get_run_detail,
+            open_run_output_directory,
             list_studio_projects,
             create_studio_project,
             open_installed_package,
@@ -2118,7 +2267,13 @@ pub fn run() {
             run_studio_project,
             prepare_studio_kernel,
             execute_studio_cell,
+            complete_studio_python,
             restart_studio_kernel,
+            database::get_workspace_database_info,
+            database::list_database_tables,
+            database::describe_database_table,
+            database::execute_database_sql,
+            database::open_workspace_database_directory,
             run_agent_turn,
             agent_config::get_agent_workspace_config,
             agent_config::write_agent_workspace_document,

@@ -107,7 +107,10 @@ export const mockSnapshot: WorkspaceSnapshot = {
   runs: [
     {
       id: "run-1842",
+      packageId: "invoice.center",
       packageName: "发票中心",
+      packageVersion: "1.0.0",
+      profileId: "monthly",
       profileName: "月度结算",
       status: "running",
       startedAt: "09:42:08",
@@ -116,7 +119,10 @@ export const mockSnapshot: WorkspaceSnapshot = {
     },
     {
       id: "run-1841",
+      packageId: "portal.audit",
       packageName: "门户审计",
+      packageVersion: "1.0.0",
+      profileId: "daily",
       profileName: "每日检查",
       status: "running",
       startedAt: "09:38:44",
@@ -125,7 +131,10 @@ export const mockSnapshot: WorkspaceSnapshot = {
     },
     {
       id: "run-1840",
+      packageId: "catalog.sync",
       packageName: "目录同步",
+      packageVersion: "1.0.0",
+      profileId: "production",
       profileName: "生产同步",
       status: "queued",
       startedAt: "09:37:12",
@@ -133,7 +142,10 @@ export const mockSnapshot: WorkspaceSnapshot = {
     },
     {
       id: "run-1839",
+      packageId: "invoice.center",
       packageName: "发票中心",
+      packageVersion: "1.0.0",
+      profileId: "priority",
       profileName: "重点供应商",
       status: "success",
       startedAt: "08:06:21",
