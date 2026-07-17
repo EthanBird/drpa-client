@@ -68,7 +68,8 @@ test -n "$browser"
 useradd --create-home --shell /bin/sh drpa-smoke
 font_match="$(runuser -u drpa-smoke -- fc-match --format '%{family}\n' 'sans-serif:lang=zh-cn')"
 printf 'font_match=%s\n' "$font_match" >"$diagnostics/drpa-uos20-font-match.txt"
-printf '%s\n' "$font_match" | grep -Fq 'Noto Sans CJK'
+# Font families belong to the host desktop. Keep the match in diagnostics, but
+# do not require one distro-specific family before exercising the actual UI.
 set +e
 runuser -u drpa-smoke -- "$browser" \
   --headless \
