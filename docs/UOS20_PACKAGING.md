@@ -335,7 +335,7 @@ docker run --rm --volume /tmp/uos-diagnostics:/diagnostics drpa-next-uos20-smoke
 11. 捕获 1280×800 Xvfb 根窗口截图，要求至少 32 种颜色且灰度标准差不少于 0.03，拒绝纯白/纯色表面；
 12. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
 
-Debian 10 镜像不会安装系统 WebKitGTK 4.1；截图工具间接带入的系统 Mesa DRI 目录会在启动应用前被移走，从而证明软件渲染闭包确实来自 deb。Deepin 20.8 镜像用于覆盖与 UOS 同代的发行版用户态；即使镜像本身带 Mesa，launcher 的私有 RPATH、DRI 路径和 EGL vendor manifest 仍会固定到包内闭包。两次测试始终上传 PNG、视觉指标、React/IPC marker、WebKit 进程树、X11 window tree 和完整日志。
+Debian 10 镜像不会安装系统 WebKitGTK 4.1；截图工具间接带入的系统 Mesa DRI 目录会在启动应用前被移走，从而证明软件渲染闭包确实来自 deb。Deepin 20.8 镜像固定到不可变 SHA-256 digest，用于覆盖与 UOS 同代的发行版用户态；即使镜像本身带 Mesa，launcher 的私有 RPATH、DRI 路径和 EGL vendor manifest 仍会固定到包内闭包。两次测试始终上传 PNG、视觉指标、React/IPC marker、WebKit 进程树、X11 window tree 和完整日志。
 
 ## 12. 发布资产与触发规则
 

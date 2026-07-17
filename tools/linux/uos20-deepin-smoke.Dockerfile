@@ -1,4 +1,4 @@
-FROM linuxdeepin/apricot:v20.8-compatible
+FROM linuxdeepin/apricot:v20.8-compatible@sha256:be6ee56f055c4d3e3b1a77badaf7b42b3d0e70337f3ea3d203304d169ccefb78
 
 ARG DEB_FILENAME
 

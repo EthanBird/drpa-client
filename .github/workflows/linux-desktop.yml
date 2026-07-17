@@ -314,8 +314,8 @@ jobs:
             --file tools/linux/uos20-deepin-smoke.Dockerfile \
             --tag drpa-next-uos20-deepin-smoke \
             "$context"
-          docker image inspect linuxdeepin/apricot:v20.8-compatible \
-            --format '{{json .RepoDigests}}' >"$diagnostics/base-image-digests.json"
+          base_image="$(awk 'NR == 1 { print $2 }' tools/linux/uos20-deepin-smoke.Dockerfile)"
+          printf '{"image":"%s"}\n' "$base_image" >"$diagnostics/base-image-digests.json"
           docker run --rm \
             --volume "$diagnostics:/diagnostics" \
             drpa-next-uos20-deepin-smoke
