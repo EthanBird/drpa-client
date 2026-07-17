@@ -160,7 +160,7 @@ test -n "$window_id"
 xdotool windowfocus --sync "$window_id"
 xdotool key --clearmodifiers ctrl+k
 sleep 0.4
-xdotool mousemove --sync 640 130 click 1
+xdotool mousemove --sync 640 95 click 1
 xdotool type --delay 20 --clearmodifiers 'drpa-input-smoke'
 sleep 0.2
 xwd -display :99 -root -silent -out /tmp/drpa-uos20-input-stage.xwd
