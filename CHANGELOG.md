@@ -13,7 +13,8 @@
 - 启动器不全局导出 `LD_LIBRARY_PATH`，避免私有 libc 污染 `xdg-open` 等 UOS 系统程序；WebKitGTK 所需的 GBM、通用 libdrm、GLVND、Mesa EGL/GL 与软件 DRI 进入私有层，只有内核与 X11 server 继续由目标系统提供。
 - 新增机器可读 UOS deb manifest、私有运行库来源/散列库存和 ELF 解释器/RPATH 校验。构建器递归解析 `DT_NEEDED`，把 Fribidi、X11/XCB、ALSA、字体、NSS、Mesa/LLVM 等用户态依赖补入私有层；包的 `Depends` 不含系统 WebKitGTK、C++ runtime、GBM/libdrm、EGL 或 GL，只保留 glibc 2.28 基线与 `xdg-utils`。
 - UOS 固定根启动器按 AppImage `AppRun` 语义切换到包内 `usr/` 工作目录，使生产版 WebKitGTK 重定位后的 Network/Web helper 与 injected bundle 相对路径正确解析，并禁用旧 Mesa 不可靠的 DMABUF renderer；helper 仍使用包内解释器和传递型私有 RPATH。
-- Linux 发布门禁新增 Debian 10 与 Deepin 20.8/glibc 2.28 容器：真实安装 UOS deb，在 Debian 基线未安装 `libwebkit2gtk-4.1-0` 或系统 Mesa DRI 的条件下完成离线 runtime bootstrap、Jupyter/NumPy/Pandas/debugpy 等原生扩展导入、Chrome headless、React/IPC/像素级 UI、卸载和用户数据保留验证。
+- Linux 发布门禁新增 Debian 10 与 Deepin 20.8/glibc 2.28 容器：真实安装 UOS deb，在 Debian 基线未安装 `libwebkit2gtk-4.1-0`、并在启动前屏蔽系统 Mesa DRI 路径的条件下完成离线 runtime bootstrap、Jupyter/NumPy/Pandas/debugpy 等原生扩展导入、Chrome headless、React/IPC/像素级 UI、卸载和用户数据保留验证。
+- 最终发布 run `29551221688` 的 Debian 10 与固定 digest Deepin 20.8 双重 UI 门禁均通过；两边都生成 React/IPC marker、持续存活的 WebKitWebProcess 和非白屏 PNG。UOS deb 的 SHA-256 为 `ba7c6691cc172c1b74a1530d4b61dfca53c186ac396f18b67a8fd43f6feb4c88`。
 - 新增 `docs/UOS20_PACKAGING.md`，集中记录目标系统、依赖分层、私有 ELF 运行层、可复现构建、静态/容器门禁、已解决故障和 UOS 4.19 实体机回归清单。
 
 ## [1.0.0] - 2026-07-15

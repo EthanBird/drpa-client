@@ -308,7 +308,7 @@ python tools/linux/verify_uos20_deb.py \
 
 ## 11. glibc 2.28 与可视 UI 容器门禁
 
-静态检查无法证明应用真的显示内容。workflow 在回收构建磁盘后，先用 `tools/linux/uos20-smoke.Dockerfile` 创建不含系统 Mesa DRI 的 Debian 10 测试镜像，再用 `tools/linux/uos20-deepin-smoke.Dockerfile` 在 Deepin 20.8 同代用户态重复真实安装与可视测试：
+静态检查无法证明应用真的显示内容。workflow 在回收构建磁盘后，先用 `tools/linux/uos20-smoke.Dockerfile` 创建 Debian 10 测试镜像，并在启动前屏蔽截图工具间接带入的系统 Mesa DRI，再用 `tools/linux/uos20-deepin-smoke.Dockerfile` 在 Deepin 20.8 同代用户态重复真实安装与可视测试：
 
 ```bash
 docker build \
@@ -336,6 +336,14 @@ docker run --rm --volume /tmp/uos-diagnostics:/diagnostics drpa-next-uos20-smoke
 12. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
 
 Debian 10 镜像不会安装系统 WebKitGTK 4.1；截图工具间接带入的系统 Mesa DRI 目录会在启动应用前被移走，从而证明软件渲染闭包确实来自 deb。Deepin 20.8 镜像固定到不可变 SHA-256 digest，用于覆盖与 UOS 同代的发行版用户态；即使镜像本身带 Mesa，launcher 的私有 RPATH、DRI 路径和 EGL vendor manifest 仍会固定到包内闭包。两次测试始终上传 PNG、视觉指标、React/IPC marker、WebKit 进程树、X11 window tree 和完整日志。
+
+### 11.1 最终发布验证记录（2026-07-17）
+
+- 发布提交：`75a6c4386aa58aa1a12bedf5ee7caa479cf12004`；Actions：[Linux workflow run 29551221688](https://github.com/EthanBird/drpa-client/actions/runs/29551221688)。
+- UOS 包：`drpa-next-1.0.0-linux-x86_64-uos20.deb`，版本 `1.0.0-2+uos20.2`，Release 页面大小 324 MB，SHA-256 `ba7c6691cc172c1b74a1530d4b61dfca53c186ac396f18b67a8fd43f6feb4c88`。
+- Debian 10 / glibc 2.28：`reactMounted=true`、`ipcRoundTrip=true`，Host、WebKitNetworkProcess 与 WebKitWebProcess 同时存活；截图为 2575 色，灰度标准差 0.0625469。
+- Deepin 20.8：基础镜像固定为 `linuxdeepin/apricot:v20.8-compatible@sha256:be6ee56f055c4d3e3b1a77badaf7b42b3d0e70337f3ea3d203304d169ccefb78`；同样完成 React/IPC 与 WebKitWebProcess 检查，截图为 1825 色，灰度标准差 0.033566。
+- 两张 PNG 均经人工查看，仪表盘卡片、状态区与折线图已经实际绘制，不是纯白表面。最小容器没有完整桌面字体，Deepin 截图的文字可能显示缺字块；这不替代真实 UOS 20 / DDE / kernel 4.19 / Fantasy II-M 实体机回归。
 
 ## 12. 发布资产与触发规则
 
