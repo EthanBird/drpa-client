@@ -141,7 +141,8 @@ if [ "$ready" -ne 1 ]; then
   cat "$processes"
   exit 1
 fi
-python3 -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value["reactMounted"] is True; assert value["ipcRoundTrip"] is True' "$ui_ready"
+grep -Eq '"reactMounted"[[:space:]]*:[[:space:]]*true' "$ui_ready"
+grep -Eq '"ipcRoundTrip"[[:space:]]*:[[:space:]]*true' "$ui_ready"
 cp "$ui_ready" "$diagnostics/drpa-uos20-ui-ready.json"
 grep -Fq WebKitWebProcess "$processes"
 if grep -Eq 'EGL_NOT_INITIALIZED|Could not create .*EGL display|MESA-LOADER: failed to open swrast|Aborting' "$gui_log"; then
