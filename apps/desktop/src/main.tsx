@@ -7,6 +7,7 @@ import "./styles/global.css";
 import "./styles/workspace.css";
 import "./styles/data.css";
 import "./styles/local-dify.css";
+import "./styles/local-dify-workflow.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

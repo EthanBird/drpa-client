@@ -11,6 +11,9 @@
 - 新增本地 Dify Service API，支持 `/parameters`、`/chat-messages`、`/completion-messages`、`/workflows/run`、blocking 与 SSE streaming。
 - 新增 Dify YAML DSL 导入、原始 DSL 保留、规范化导出和云端 Provider 映射检查。
 - `dify-loves-hermes` 升级到 0.3，透传 Trace、Provider Route 和 Hop Count；Local Dify 检测重复 App 与四跳上限，支持本地/远程 Dify 套娃调试。
+- 新增 Workflow / Chatflow 可视化设计器：节点库、拖放画布、连线、条件分支端口、属性面板、高级 JSON、缩放、适应画布、撤销重做、校验与快捷键。
+- 新增版本化 Workflow IR 与旧应用迁移，支持 Start、LLM、Template、If/Else、HTTP、Python Code、Answer、End 本地执行、节点级流式事件和实时调试轨迹。
+- Dify DSL 适配扩展到 `workflow.graph` 节点/连线/坐标导入导出；`/v1/workflows/run` 复用本地图执行器。
 
 ### Windows 开发体验与数据能力
 

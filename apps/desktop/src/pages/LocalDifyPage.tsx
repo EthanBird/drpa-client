@@ -9,6 +9,7 @@ import {
   CloudUpload,
   Copy,
   Download,
+  GitBranch,
   KeyRound,
   LoaderCircle,
   MessageSquareText,
@@ -24,6 +25,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  Workflow,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -40,8 +42,9 @@ import type {
   LocalDifyServiceStatus,
 } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
+import { LocalDifyWorkflowDesigner } from "../components/LocalDifyWorkflowDesigner";
 
-type StudioTab = "debug" | "config" | "runs" | "api";
+type StudioTab = "workflow" | "debug" | "config" | "runs" | "api";
 
 interface PreviewMessage {
   id: string;
@@ -156,6 +159,9 @@ export function LocalDifyPage() {
       : []);
     setApiToken("");
     setCompatibility(null);
+    setTab((current) => selected && (selected.mode === "workflow" || selected.mode === "advanced-chat")
+      ? "workflow"
+      : current === "workflow" ? "debug" : current);
     if (selected) {
       void desktopGateway.listLocalDifyRuns(selected.id, 100).then(setRuns).catch((error: unknown) => setNotice(String(error)));
     } else {
@@ -177,18 +183,24 @@ export function LocalDifyPage() {
     }
   };
 
-  const saveApp = async () => {
-    if (!draft) return;
+  const persistApp = async (app: LocalDifyApp): Promise<LocalDifyApp> => {
     setBusy(true);
     try {
-      const saved = await desktopGateway.saveLocalDifyApp(draft);
+      const saved = await desktopGateway.saveLocalDifyApp(app);
       await reload(saved.id);
       setNotice("应用配置已保存");
+      return saved;
     } catch (error) {
       setNotice(String(error));
+      throw error;
     } finally {
       setBusy(false);
     }
+  };
+
+  const saveApp = async () => {
+    if (!draft) return;
+    await persistApp(draft);
   };
 
   const removeApp = async () => {
@@ -311,7 +323,9 @@ export function LocalDifyPage() {
     if (!draft) return;
     setBusy(true);
     try {
-      const report = await desktopGateway.checkLocalDifyCompatibility(draft.id);
+      const savedDraft = await desktopGateway.saveLocalDifyApp(draft);
+      setDraft(savedDraft);
+      const report = await desktopGateway.checkLocalDifyCompatibility(savedDraft.id);
       setCompatibility(report);
       if (!report.compatible) {
         setNotice("兼容性检查存在阻止导出的错误");
@@ -322,8 +336,9 @@ export function LocalDifyPage() {
         ? await saveDialog({ defaultPath: `${draft.name}.yml`, filters: [{ name: "Dify DSL", extensions: ["yml", "yaml"] }] })
         : `${draft.name}.yml`;
       if (!target) return;
-      const exported = await desktopGateway.exportLocalDifyDsl(draft.id, target);
+      const exported = await desktopGateway.exportLocalDifyDsl(savedDraft.id, target);
       setNotice(`Dify DSL 已导出：${exported}`);
+      await reload(savedDraft.id);
     } catch (error) {
       setNotice(String(error));
     } finally {
@@ -335,13 +350,15 @@ export function LocalDifyPage() {
     if (!draft) return;
     setBusy(true);
     try {
-      const report = await desktopGateway.checkLocalDifyCompatibility(draft.id);
+      const savedDraft = await desktopGateway.saveLocalDifyApp(draft);
+      setDraft(savedDraft);
+      const report = await desktopGateway.checkLocalDifyCompatibility(savedDraft.id);
       setCompatibility(report);
       if (!report.compatible) {
         setNotice("发布检查未通过");
         return;
       }
-      const published = await desktopGateway.publishLocalDifyApp(draft.id);
+      const published = await desktopGateway.publishLocalDifyApp(savedDraft.id);
       await reload(published.id);
       setApiToken(await desktopGateway.getLocalDifyAppApiToken(published.id));
       setNotice(`本地版本 v${published.publishedVersion} 已发布`);
@@ -378,7 +395,7 @@ export function LocalDifyPage() {
         </div>
       </header>
 
-      <div className="local-dify-layout">
+      <div className={`local-dify-layout ${tab === "workflow" ? "workflow-focus" : ""}`}>
         <aside className="local-dify-catalog">
           <header><Sparkles size={14} /><strong>本地应用</strong><span>{apps.length}</span></header>
           <div className="local-dify-app-list">
@@ -406,12 +423,23 @@ export function LocalDifyPage() {
               </div>
             </header>
             <nav className="local-dify-tabs" aria-label="AI 应用工作区">
+              {(draft.mode === "workflow" || draft.mode === "advanced-chat") && <button className={tab === "workflow" ? "active" : ""} type="button" onClick={() => setTab("workflow")}><Workflow size={13} /> 工作流</button>}
               <button className={tab === "debug" ? "active" : ""} type="button" onClick={() => setTab("debug")}><MessageSquareText size={13} /> 调试预览</button>
               <button className={tab === "config" ? "active" : ""} type="button" onClick={() => setTab("config")}><SlidersHorizontal size={13} /> 应用配置</button>
               <button className={tab === "runs" ? "active" : ""} type="button" onClick={() => setTab("runs")}><Activity size={13} /> 运行记录 <span>{runs.length}</span></button>
               <button className={tab === "api" ? "active" : ""} type="button" onClick={() => setTab("api")}><Server size={13} /> API 与导出</button>
               <em>{notice}</em>
             </nav>
+
+            {tab === "workflow" && (draft.mode === "workflow" || draft.mode === "advanced-chat") && <LocalDifyWorkflowDesigner
+              app={draft}
+              providers={providers}
+              busy={busy}
+              onChange={setDraft}
+              onSave={persistApp}
+              onRunCompleted={async () => setRuns(await desktopGateway.listLocalDifyRuns(draft.id, 100))}
+              onNotice={setNotice}
+            />}
 
             {tab === "debug" && <section className="local-dify-debug">
               <div className="dify-chat-stage">
@@ -438,7 +466,7 @@ export function LocalDifyPage() {
             {tab === "config" && <section className="local-dify-config">
               <div className="dify-config-section"><header><Braces size={15} /><div><h3>基本信息</h3><p>这些字段会进入本地应用配置和导出的 Dify DSL。</p></div></header><div className="dify-form-grid">
                 <label><span>应用名称</span><input aria-label="AI 应用名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-                <label><span>应用模式</span><select aria-label="AI 应用模式" value={draft.mode} onChange={(event) => setDraft({ ...draft, mode: event.target.value as LocalDifyAppMode })}><option value="chat">Chat</option><option value="completion">Completion</option><option value="advanced-chat">Chatflow（导入预览）</option><option value="workflow">Workflow（导入预览）</option></select></label>
+                <label><span>应用模式</span><select aria-label="AI 应用模式" value={draft.mode} onChange={(event) => setDraft({ ...draft, mode: event.target.value as LocalDifyAppMode })}><option value="chat">Chat</option><option value="completion">Completion</option><option value="advanced-chat">Chatflow</option><option value="workflow">Workflow</option></select></label>
                 <label className="wide"><span>应用描述</span><textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
                 <label><span>输入变量</span><input value={draft.inputKey} onChange={(event) => setDraft({ ...draft, inputKey: event.target.value })} /></label>
                 <label><span>Provider</span><select value={draft.providerId} onChange={(event) => setDraft({ ...draft, providerId: event.target.value })}><option value="">请选择 Provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
@@ -466,7 +494,7 @@ export function LocalDifyPage() {
         ) : <main className="local-dify-no-selection"><Bot size={42} /><h2>Local Dify Studio</h2><p>创建应用，配置 OpenAI 兼容 Provider，然后在本机调试并导出 Dify DSL。</p><button className="button primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={14} /> 新建 AI 应用</button></main>}
       </div>
 
-      {createOpen && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog dify-create-dialog" role="dialog" aria-modal="true" aria-label="新建 AI 应用"><header><div><Sparkles size={18} /><h2>新建 AI 应用</h2></div><button type="button" aria-label="关闭" onClick={() => setCreateOpen(false)}><X size={16} /></button></header><p>选择轻量应用类型，后续可导出为 Dify YAML DSL。</p><label><span>应用名称</span><input aria-label="新建 AI 应用名称" value={createName} autoFocus onChange={(event) => setCreateName(event.target.value)} /></label><div className="dify-mode-picker"><button className={createMode === "chat" ? "active" : ""} type="button" onClick={() => setCreateMode("chat")}><MessageSquareText size={18} /><strong>Chat</strong><span>多轮对话和开场白</span></button><button className={createMode === "completion" ? "active" : ""} type="button" onClick={() => setCreateMode("completion")}><Braces size={18} /><strong>Completion</strong><span>单次文本生成</span></button></div><footer><button className="button ghost" type="button" onClick={() => setCreateOpen(false)}>取消</button><button className="button primary" type="button" onClick={() => void createApp()} disabled={busy || !createName.trim()}><Plus size={13} /> 创建应用</button></footer></section></div>}
+      {createOpen && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog dify-create-dialog" role="dialog" aria-modal="true" aria-label="新建 AI 应用"><header><div><Sparkles size={18} /><h2>新建 AI 应用</h2></div><button type="button" aria-label="关闭" onClick={() => setCreateOpen(false)}><X size={16} /></button></header><p>选择应用类型；Workflow 与 Chatflow 提供完整可视化编排画布。</p><label><span>应用名称</span><input aria-label="新建 AI 应用名称" value={createName} autoFocus onChange={(event) => setCreateName(event.target.value)} /></label><div className="dify-mode-picker"><button className={createMode === "chat" ? "active" : ""} type="button" onClick={() => setCreateMode("chat")}><MessageSquareText size={18} /><strong>Chat</strong><span>多轮对话和开场白</span></button><button className={createMode === "completion" ? "active" : ""} type="button" onClick={() => setCreateMode("completion")}><Braces size={18} /><strong>Completion</strong><span>单次文本生成</span></button><button className={createMode === "workflow" ? "active" : ""} type="button" onClick={() => setCreateMode("workflow")}><Workflow size={18} /><strong>Workflow</strong><span>自动化与批处理工作流</span></button><button className={createMode === "advanced-chat" ? "active" : ""} type="button" onClick={() => setCreateMode("advanced-chat")}><GitBranch size={18} /><strong>Chatflow</strong><span>带流程编排的对话应用</span></button></div><footer><button className="button ghost" type="button" onClick={() => setCreateOpen(false)}>取消</button><button className="button primary" type="button" onClick={() => void createApp()} disabled={busy || !createName.trim()}><Plus size={13} /> 创建应用</button></footer></section></div>}
 
       {deleteOpen && draft && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-label="确认删除 AI 应用"><header><div><Trash2 size={18} /><h2>删除 AI 应用</h2></div></header><p>将删除“{draft.name}”的配置和本地 API Token；历史运行记录继续保留用于诊断。</p><footer><button className="button ghost" type="button" onClick={() => setDeleteOpen(false)}>取消</button><button className="button danger" type="button" onClick={() => void removeApp()} disabled={busy}>确认删除</button></footer></section></div>}
 

@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -14,9 +15,13 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
-use crate::{AppPaths, agent};
+use crate::local_dify_workflow::{
+    self, WorkflowGraph, WorkflowNode, WorkflowValidationReport, default_graph, graph_from_dify,
+    graph_to_dify, is_workflow_mode, normalize_graph, validate_graph,
+};
+use crate::{AppPaths, agent, locate_runtime_python};
 
-const LOCAL_DIFY_SCHEMA: u32 = 1;
+const LOCAL_DIFY_SCHEMA: u32 = 2;
 const MAX_APPS: usize = 200;
 const MAX_PROVIDERS: usize = 50;
 const MAX_INPUT_BYTES: usize = 1_000_000;
@@ -98,6 +103,8 @@ pub(crate) struct LocalDifyApp {
     pub input_key: String,
     pub temperature: f32,
     pub max_output_tokens: u32,
+    #[serde(default)]
+    pub workflow: WorkflowGraph,
     pub published_version: u32,
     pub api_enabled: bool,
     pub created_at: i64,
@@ -154,9 +161,33 @@ pub(crate) struct LocalDifyRunResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(crate) enum LocalDifyStreamEvent {
-    Started { run_id: String },
-    Delta { content: String },
-    Completed { run_id: String },
+    Started {
+        run_id: String,
+    },
+    NodeStarted {
+        run_id: String,
+        node_id: String,
+        node_type: String,
+        title: String,
+    },
+    NodeCompleted {
+        run_id: String,
+        node_id: String,
+        outputs: Value,
+        duration_ms: u64,
+    },
+    NodeFailed {
+        run_id: String,
+        node_id: String,
+        error: String,
+        duration_ms: u64,
+    },
+    Delta {
+        content: String,
+    },
+    Completed {
+        run_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -487,7 +518,18 @@ fn load_app(paths: &AppPaths, app_id: &str) -> Result<LocalDifyApp, String> {
     validate_identifier(app_id, "AI 应用")?;
     let bytes =
         fs::read(app_path(paths, app_id)).map_err(|error| format!("读取 AI 应用失败：{error}"))?;
-    serde_json::from_slice(&bytes).map_err(|error| format!("AI 应用配置无效：{error}"))
+    let app: LocalDifyApp =
+        serde_json::from_slice(&bytes).map_err(|error| format!("AI 应用配置无效：{error}"))?;
+    Ok(normalize_app(app))
+}
+
+fn normalize_app(mut app: LocalDifyApp) -> LocalDifyApp {
+    if is_workflow_mode(&app.mode) && app.workflow.nodes.is_empty() {
+        app.workflow = default_graph(&app.mode, &app.input_key);
+    } else {
+        normalize_graph(&mut app.workflow);
+    }
+    app
 }
 
 fn open_runtime_database(paths: &AppPaths) -> Result<Connection, String> {
@@ -540,7 +582,7 @@ pub(crate) fn list_local_dify_apps(
         if let Ok(bytes) = fs::read(path)
             && let Ok(app) = serde_json::from_slice::<LocalDifyApp>(&bytes)
         {
-            apps.push(app);
+            apps.push(normalize_app(app));
         }
     }
     apps.sort_by_key(|app| std::cmp::Reverse(app.updated_at));
@@ -562,6 +604,7 @@ pub(crate) fn create_local_dify_app(
         .first()
         .map(|item| item.id.clone())
         .unwrap_or_default();
+    let workflow = default_graph(&mode, "query");
     let app = LocalDifyApp {
         schema: LOCAL_DIFY_SCHEMA,
         id: format!("app-{}", Uuid::new_v4().simple()),
@@ -574,6 +617,7 @@ pub(crate) fn create_local_dify_app(
         input_key: "query".to_owned(),
         temperature: default_temperature(),
         max_output_tokens: default_max_output_tokens(),
+        workflow,
         published_version: 0,
         api_enabled: false,
         created_at: now,
@@ -594,12 +638,59 @@ pub(crate) fn save_local_dify_app(
     app.schema = LOCAL_DIFY_SCHEMA;
     app.created_at = existing.created_at;
     app.updated_at = now_timestamp();
+    if is_workflow_mode(&app.mode) && app.workflow.nodes.is_empty() {
+        app.workflow = default_graph(&app.mode, &app.input_key);
+    }
+    normalize_graph(&mut app.workflow);
     validate_app(&app)?;
+    if is_workflow_mode(&app.mode) {
+        let report = validate_graph(&app.workflow, &app.mode);
+        if !report.valid {
+            let summary = report
+                .issues
+                .iter()
+                .filter(|issue| issue.level == "error")
+                .map(|issue| issue.message.as_str())
+                .collect::<Vec<_>>()
+                .join("；");
+            return Err(format!("工作流校验失败：{summary}"));
+        }
+    }
     if !app.provider_id.is_empty() {
         let _ = load_provider(&paths, &app.provider_id)?;
     }
     write_json_atomic(&app_path(&paths, &app.id), &app)?;
     Ok(app)
+}
+
+#[tauri::command]
+pub(crate) fn validate_local_dify_workflow(
+    mut graph: WorkflowGraph,
+    mode: String,
+) -> Result<WorkflowValidationReport, String> {
+    if !is_workflow_mode(&mode) {
+        return Err("只有 Workflow 或 Chatflow 应用可以校验工作流".to_owned());
+    }
+    normalize_graph(&mut graph);
+    Ok(validate_graph(&graph, &mode))
+}
+
+#[tauri::command]
+pub(crate) fn create_local_dify_workflow_node(
+    kind: String,
+    x: f64,
+    y: f64,
+) -> Result<WorkflowNode, String> {
+    if !matches!(
+        kind.as_str(),
+        "llm" | "template-transform" | "if-else" | "http-request" | "code" | "answer" | "end"
+    ) {
+        return Err("工作流节点类型无效".to_owned());
+    }
+    if !x.is_finite() || !y.is_finite() {
+        return Err("工作流节点坐标无效".to_owned());
+    }
+    Ok(local_dify_workflow::new_node(&kind, x, y))
 }
 
 #[tauri::command]
@@ -781,8 +872,11 @@ where
 {
     validate_run_request(&request)?;
     let app = load_app(paths, &request.app_id)?;
-    if !matches!(app.mode.as_str(), "chat" | "completion") {
-        return Err("当前阶段只执行 Chat 与 Completion 应用".to_owned());
+    if !matches!(
+        app.mode.as_str(),
+        "chat" | "completion" | "workflow" | "advanced-chat"
+    ) {
+        return Err("当前应用模式不受本地执行器支持".to_owned());
     }
     if app.provider_id.is_empty() {
         return Err("请先为应用选择 Provider".to_owned());
@@ -794,26 +888,32 @@ where
     });
     let started = Instant::now();
     let query = request.query.trim().to_owned();
-    let mut messages = Vec::new();
-    if !app.system_prompt.trim().is_empty() {
-        messages.push(json!({"role": "system", "content": app.system_prompt}));
-    }
-    messages.push(json!({"role": "user", "content": query}));
-    let stream = request.stream && provider.streaming;
-    let payload = json!({
-        "model": provider.model,
-        "messages": messages,
-        "temperature": app.temperature,
-        "max_tokens": app.max_output_tokens.min(provider.max_output_tokens),
-        "stream": stream,
-        "stream_options": if stream { json!({"include_usage": true}) } else { Value::Null },
-        "user": request.user,
-    });
     let mut route = request.provider_route.clone();
     route.push(app.id.clone());
-    let completed = call_provider(&provider, &api_key, &payload, &route, |content| {
-        emit(LocalDifyStreamEvent::Delta { content });
-    });
+    let completed = if is_workflow_mode(&app.mode) {
+        run_workflow_internal(
+            paths, &app, &provider, &api_key, &request, &run_id, &route, &mut emit,
+        )
+    } else {
+        let mut messages = Vec::new();
+        if !app.system_prompt.trim().is_empty() {
+            messages.push(json!({"role": "system", "content": app.system_prompt}));
+        }
+        messages.push(json!({"role": "user", "content": query}));
+        let stream = request.stream && provider.streaming;
+        let payload = json!({
+            "model": provider.model,
+            "messages": messages,
+            "temperature": app.temperature,
+            "max_tokens": app.max_output_tokens.min(provider.max_output_tokens),
+            "stream": stream,
+            "stream_options": if stream { json!({"include_usage": true}) } else { Value::Null },
+            "user": request.user,
+        });
+        call_provider(&provider, &api_key, &payload, &route, |content| {
+            emit(LocalDifyStreamEvent::Delta { content });
+        })
+    };
     let duration_ms = started.elapsed().as_millis() as u64;
     match completed {
         Ok(completion) => {
@@ -864,6 +964,700 @@ where
         }
     }
 }
+
+struct WorkflowNodeResult {
+    outputs: BTreeMap<String, Value>,
+    branch: Option<String>,
+    answer: Option<String>,
+    usage: LocalDifyUsage,
+}
+
+type WorkflowOutputs = HashMap<String, BTreeMap<String, Value>>;
+
+#[allow(clippy::too_many_arguments)]
+fn run_workflow_internal<F>(
+    paths: &AppPaths,
+    app: &LocalDifyApp,
+    provider: &LocalDifyProvider,
+    api_key: &str,
+    request: &LocalDifyRunRequest,
+    run_id: &str,
+    route: &[String],
+    emit: &mut F,
+) -> Result<ProviderCompletion, String>
+where
+    F: FnMut(LocalDifyStreamEvent),
+{
+    let report = validate_graph(&app.workflow, &app.mode);
+    if !report.valid {
+        let summary = report
+            .issues
+            .iter()
+            .filter(|issue| issue.level == "error")
+            .map(|issue| issue.message.as_str())
+            .collect::<Vec<_>>()
+            .join("；");
+        return Err(format!("工作流校验失败：{summary}"));
+    }
+    let nodes: HashMap<&str, &WorkflowNode> = app
+        .workflow
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut outgoing: HashMap<&str, Vec<&local_dify_workflow::WorkflowEdge>> = HashMap::new();
+    for edge in &app.workflow.edges {
+        outgoing.entry(edge.source.as_str()).or_default().push(edge);
+    }
+    let start = app
+        .workflow
+        .nodes
+        .iter()
+        .find(|node| node.kind == "start")
+        .ok_or_else(|| "工作流缺少开始节点".to_owned())?;
+    let mut queue = VecDeque::from([start.id.clone()]);
+    let mut visited = HashSet::new();
+    let mut outputs = WorkflowOutputs::new();
+    let mut total_usage = LocalDifyUsage::default();
+    let mut final_answer = String::new();
+    while let Some(node_id) = queue.pop_front() {
+        if !visited.insert(node_id.clone()) {
+            continue;
+        }
+        let node = nodes
+            .get(node_id.as_str())
+            .copied()
+            .ok_or_else(|| format!("工作流节点不存在：{node_id}"))?;
+        emit(LocalDifyStreamEvent::NodeStarted {
+            run_id: run_id.to_owned(),
+            node_id: node.id.clone(),
+            node_type: node.kind.clone(),
+            title: node.title.clone(),
+        });
+        let started = Instant::now();
+        let executed = execute_workflow_node(
+            paths, app, provider, api_key, request, run_id, route, node, &outputs, emit,
+        );
+        let node_duration = started.elapsed().as_millis() as u64;
+        let executed = match executed {
+            Ok(executed) => executed,
+            Err(error) => {
+                emit(LocalDifyStreamEvent::NodeFailed {
+                    run_id: run_id.to_owned(),
+                    node_id: node.id.clone(),
+                    error: error.clone(),
+                    duration_ms: node_duration,
+                });
+                return Err(format!("节点“{}”执行失败：{error}", node.title));
+            }
+        };
+        total_usage.prompt_tokens = total_usage
+            .prompt_tokens
+            .saturating_add(executed.usage.prompt_tokens);
+        total_usage.completion_tokens = total_usage
+            .completion_tokens
+            .saturating_add(executed.usage.completion_tokens);
+        total_usage.total_tokens = total_usage
+            .total_tokens
+            .saturating_add(executed.usage.total_tokens);
+        if let Some(answer) = executed.answer.as_ref() {
+            final_answer = answer.clone();
+        }
+        emit(LocalDifyStreamEvent::NodeCompleted {
+            run_id: run_id.to_owned(),
+            node_id: node.id.clone(),
+            outputs: json!(executed.outputs),
+            duration_ms: node_duration,
+        });
+        outputs.insert(node.id.clone(), executed.outputs);
+        if let Some(edges) = outgoing.get(node.id.as_str()) {
+            let selected: Vec<_> = if let Some(branch) = executed.branch.as_deref() {
+                let matching: Vec<_> = edges
+                    .iter()
+                    .copied()
+                    .filter(|edge| workflow_edge_matches_branch(&edge.source_handle, branch))
+                    .collect();
+                if matching.is_empty() {
+                    edges
+                        .iter()
+                        .copied()
+                        .filter(|edge| edge.source_handle.is_empty())
+                        .collect()
+                } else {
+                    matching
+                }
+            } else {
+                edges.clone()
+            };
+            for edge in selected {
+                queue.push_back(edge.target.clone());
+            }
+        }
+    }
+    if final_answer.trim().is_empty() {
+        final_answer = outputs
+            .values()
+            .find_map(|values| {
+                ["answer", "result", "text", "output", "body"]
+                    .iter()
+                    .find_map(|key| values.get(*key).map(value_to_text))
+            })
+            .unwrap_or_default();
+    }
+    if final_answer.trim().is_empty() {
+        return Err("工作流完成，但输出节点没有产生结果".to_owned());
+    }
+    Ok(ProviderCompletion {
+        answer: final_answer,
+        usage: total_usage,
+    })
+}
+
+fn workflow_edge_matches_branch(handle: &str, branch: &str) -> bool {
+    handle == branch
+        || handle.ends_with(branch)
+        || (branch == "true" && handle.contains("case"))
+        || (branch == "false" && (handle.contains("else") || handle.contains("false")))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_workflow_node<F>(
+    paths: &AppPaths,
+    app: &LocalDifyApp,
+    provider: &LocalDifyProvider,
+    api_key: &str,
+    request: &LocalDifyRunRequest,
+    _run_id: &str,
+    route: &[String],
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    emit: &mut F,
+) -> Result<WorkflowNodeResult, String>
+where
+    F: FnMut(LocalDifyStreamEvent),
+{
+    let empty_usage = LocalDifyUsage::default();
+    match node.kind.as_str() {
+        "start" => {
+            let mut values = request.inputs.clone();
+            values
+                .entry(app.input_key.clone())
+                .or_insert_with(|| json!(request.query));
+            values
+                .entry("query".to_owned())
+                .or_insert_with(|| json!(request.query));
+            Ok(WorkflowNodeResult {
+                outputs: values,
+                branch: None,
+                answer: None,
+                usage: empty_usage,
+            })
+        }
+        "llm" => {
+            let messages = workflow_llm_messages(node, outputs, request);
+            let stream = request.stream && provider.streaming;
+            let temperature = node
+                .config
+                .get("model")
+                .and_then(|value| value.pointer("/completion_params/temperature"))
+                .and_then(Value::as_f64)
+                .unwrap_or(app.temperature as f64);
+            let payload = json!({
+                "model": provider.model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": app.max_output_tokens.min(provider.max_output_tokens),
+                "stream": stream,
+                "stream_options": if stream { json!({"include_usage": true}) } else { Value::Null },
+                "user": request.user,
+            });
+            let completion = call_provider(provider, api_key, &payload, route, |content| {
+                emit(LocalDifyStreamEvent::Delta { content });
+            })?;
+            Ok(WorkflowNodeResult {
+                outputs: BTreeMap::from([
+                    ("text".to_owned(), json!(completion.answer)),
+                    ("result".to_owned(), json!(completion.answer)),
+                ]),
+                branch: None,
+                answer: None,
+                usage: completion.usage,
+            })
+        }
+        "template-transform" => {
+            let template = node
+                .config
+                .get("template")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let rendered = render_workflow_template(template, outputs, request);
+            Ok(WorkflowNodeResult {
+                outputs: BTreeMap::from([("output".to_owned(), json!(rendered))]),
+                branch: None,
+                answer: None,
+                usage: empty_usage,
+            })
+        }
+        "if-else" => {
+            let (matched, case_id) = evaluate_workflow_condition(node, outputs, request);
+            Ok(WorkflowNodeResult {
+                outputs: BTreeMap::from([("result".to_owned(), json!(matched))]),
+                branch: Some(if matched { case_id } else { "false".to_owned() }),
+                answer: None,
+                usage: empty_usage,
+            })
+        }
+        "http-request" => {
+            let result = execute_workflow_http(node, outputs, request)?;
+            Ok(WorkflowNodeResult {
+                outputs: result,
+                branch: None,
+                answer: None,
+                usage: empty_usage,
+            })
+        }
+        "code" => {
+            let result = execute_workflow_python(paths, node, outputs, request)?;
+            Ok(WorkflowNodeResult {
+                outputs: result,
+                branch: None,
+                answer: None,
+                usage: empty_usage,
+            })
+        }
+        "answer" => {
+            let answer = node
+                .config
+                .get("answer")
+                .and_then(Value::as_str)
+                .map(|value| render_workflow_template(value, outputs, request))
+                .unwrap_or_default();
+            Ok(WorkflowNodeResult {
+                outputs: BTreeMap::from([("answer".to_owned(), json!(answer))]),
+                branch: None,
+                answer: Some(answer),
+                usage: empty_usage,
+            })
+        }
+        "end" => {
+            let values = workflow_end_outputs(node, outputs, request);
+            let answer = values
+                .get("answer")
+                .or_else(|| values.get("result"))
+                .or_else(|| values.values().next())
+                .map(value_to_text)
+                .unwrap_or_default();
+            Ok(WorkflowNodeResult {
+                outputs: values,
+                branch: None,
+                answer: Some(answer),
+                usage: empty_usage,
+            })
+        }
+        other => Err(format!("本地执行器尚未实现节点类型 {other}")),
+    }
+}
+
+fn workflow_llm_messages(
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> Vec<Value> {
+    let prompt = node.config.get("prompt_template");
+    let mut messages = Vec::new();
+    if let Some(items) = prompt.and_then(Value::as_array) {
+        for item in items {
+            let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+            if !text.is_empty() {
+                messages.push(json!({
+                    "role": item.get("role").and_then(Value::as_str).unwrap_or("user"),
+                    "content": render_workflow_template(text, outputs, request),
+                }));
+            }
+        }
+    } else if let Some(text) = prompt
+        .and_then(|value| value.get("text"))
+        .and_then(Value::as_str)
+    {
+        messages.push(json!({
+            "role": "user",
+            "content": render_workflow_template(text, outputs, request),
+        }));
+    }
+    if messages.is_empty() {
+        messages.push(json!({"role": "user", "content": request.query}));
+    }
+    messages
+}
+
+fn workflow_end_outputs(
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> BTreeMap<String, Value> {
+    let mut values = BTreeMap::new();
+    if let Some(items) = node.config.get("outputs").and_then(Value::as_array) {
+        for item in items {
+            let name = item
+                .get("variable")
+                .and_then(Value::as_str)
+                .unwrap_or("result");
+            let value = item
+                .get("value_selector")
+                .and_then(Value::as_array)
+                .and_then(|selector| lookup_selector(selector, outputs, request))
+                .unwrap_or(Value::Null);
+            values.insert(name.to_owned(), value);
+        }
+    }
+    values
+}
+
+fn evaluate_workflow_condition(
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> (bool, String) {
+    let case = node
+        .config
+        .get("cases")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first());
+    let case_id = case
+        .and_then(|item| item.get("case_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("true")
+        .to_owned();
+    let condition = case
+        .and_then(|item| item.get("conditions"))
+        .and_then(Value::as_array)
+        .and_then(|items| items.first());
+    let actual = condition
+        .and_then(|item| item.get("variable_selector"))
+        .and_then(Value::as_array)
+        .and_then(|selector| lookup_selector(selector, outputs, request))
+        .unwrap_or(Value::Null);
+    let expected = condition
+        .and_then(|item| item.get("value"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let operator = condition
+        .and_then(|item| item.get("comparison_operator"))
+        .and_then(Value::as_str)
+        .unwrap_or("is");
+    let actual_text = value_to_text(&actual);
+    let expected_text = value_to_text(&expected);
+    let matched = match operator {
+        "contains" => actual_text.contains(&expected_text),
+        "not contains" | "not_contains" => !actual_text.contains(&expected_text),
+        "start with" | "starts_with" => actual_text.starts_with(&expected_text),
+        "end with" | "ends_with" => actual_text.ends_with(&expected_text),
+        "is not" | "not_equal" => actual != expected && actual_text != expected_text,
+        "empty" | "is_empty" => actual_text.is_empty(),
+        "not empty" | "is_not_empty" => !actual_text.is_empty(),
+        ">" | "greater_than" => numeric_value(&actual) > numeric_value(&expected),
+        "<" | "less_than" => numeric_value(&actual) < numeric_value(&expected),
+        ">=" | "greater_than_or_equal" => numeric_value(&actual) >= numeric_value(&expected),
+        "<=" | "less_than_or_equal" => numeric_value(&actual) <= numeric_value(&expected),
+        _ => actual == expected || actual_text == expected_text,
+    };
+    (matched, case_id)
+}
+
+fn numeric_value(value: &Value) -> f64 {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        .unwrap_or_default()
+}
+
+fn lookup_selector(
+    selector: &[Value],
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> Option<Value> {
+    let node_id = selector.first()?.as_str()?;
+    let key = selector.get(1)?.as_str()?;
+    if node_id == "sys" && key == "query" {
+        return Some(json!(request.query));
+    }
+    outputs.get(node_id)?.get(key).cloned()
+}
+
+fn lookup_workflow_key(
+    key: &str,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> Option<Value> {
+    let key = key.trim().trim_matches('#').trim();
+    if matches!(key, "query" | "sys.query") {
+        return Some(json!(request.query));
+    }
+    if let Some((node_id, output_key)) = key.split_once('.') {
+        return outputs.get(node_id)?.get(output_key).cloned();
+    }
+    request
+        .inputs
+        .get(key)
+        .cloned()
+        .or_else(|| outputs.values().find_map(|values| values.get(key).cloned()))
+}
+
+fn render_workflow_template(
+    template: &str,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> String {
+    let mut rendered = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        rendered.push_str(&rest[..start]);
+        let tail = &rest[start + 2..];
+        let Some(end) = tail.find("}}") else {
+            rendered.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let key = &tail[..end];
+        if let Some(value) = lookup_workflow_key(key, outputs, request) {
+            rendered.push_str(&value_to_text(&value));
+        } else {
+            rendered.push_str(&rest[start..start + end + 4]);
+        }
+        rest = &tail[end + 2..];
+    }
+    rendered.push_str(rest);
+    rendered
+}
+
+fn value_to_text(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(value) => value.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+fn execute_workflow_http(
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> Result<BTreeMap<String, Value>, String> {
+    let method = node
+        .config
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("get")
+        .to_ascii_lowercase();
+    let url = render_workflow_template(
+        node.config
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        outputs,
+        request,
+    );
+    let parsed = url::Url::parse(&url).map_err(|error| format!("HTTP URL 无效：{error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("HTTP 节点只允许 http/https URL".to_owned());
+    }
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(120)))
+        .build();
+    let agent = ureq::Agent::new_with_config(agent);
+    let headers: Vec<(String, String)> = node
+        .config
+        .get("headers")
+        .and_then(Value::as_str)
+        .into_iter()
+        .flat_map(str::lines)
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| {
+            (
+                name.trim().to_owned(),
+                render_workflow_template(value, outputs, request),
+            )
+        })
+        .collect();
+    let body = node
+        .config
+        .get("body")
+        .and_then(|value| value.get("data"))
+        .map(value_to_text)
+        .unwrap_or_default();
+    let rendered_body = render_workflow_template(&body, outputs, request);
+    let response = match method.as_str() {
+        "post" => {
+            let mut builder = agent.post(&url);
+            for (name, value) in &headers {
+                builder = builder.header(name, value);
+            }
+            builder.send(rendered_body.as_bytes())
+        }
+        "put" => {
+            let mut builder = agent.put(&url);
+            for (name, value) in &headers {
+                builder = builder.header(name, value);
+            }
+            builder.send(rendered_body.as_bytes())
+        }
+        "patch" => {
+            let mut builder = agent.patch(&url);
+            for (name, value) in &headers {
+                builder = builder.header(name, value);
+            }
+            builder.send(rendered_body.as_bytes())
+        }
+        "delete" => {
+            let mut builder = agent.delete(&url);
+            for (name, value) in &headers {
+                builder = builder.header(name, value);
+            }
+            builder.call()
+        }
+        _ => {
+            let mut builder = agent.get(&url);
+            for (name, value) in &headers {
+                builder = builder.header(name, value);
+            }
+            builder.call()
+        }
+    };
+    let mut response = response.map_err(|error| format!("HTTP 请求失败：{error}"))?;
+    let status = response.status().as_u16();
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("读取 HTTP 响应失败：{error}"))?;
+    let json_value = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
+    Ok(BTreeMap::from([
+        ("status_code".to_owned(), json!(status)),
+        ("body".to_owned(), json!(body)),
+        ("json".to_owned(), json_value),
+    ]))
+}
+
+fn execute_workflow_python(
+    paths: &AppPaths,
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> Result<BTreeMap<String, Value>, String> {
+    let language = node
+        .config
+        .get("code_language")
+        .and_then(Value::as_str)
+        .unwrap_or("python3");
+    if !matches!(language, "python" | "python3") {
+        return Err("本地代码节点当前执行 Python 3；JavaScript 节点可继续导出到 Dify".to_owned());
+    }
+    let code = node
+        .config
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if code.is_empty() || code.len() > 100_000 {
+        return Err("Python 代码应为 1 到 100000 个字符".to_owned());
+    }
+    let mut inputs = BTreeMap::new();
+    if let Some(variables) = node.config.get("variables").and_then(Value::as_array) {
+        for variable in variables {
+            let name = variable
+                .get("variable")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if name.is_empty() {
+                continue;
+            }
+            let value = variable
+                .get("value_selector")
+                .and_then(Value::as_array)
+                .and_then(|selector| lookup_selector(selector, outputs, request))
+                .unwrap_or(Value::Null);
+            inputs.insert(name.to_owned(), value);
+        }
+    }
+    if inputs.is_empty() {
+        inputs.insert("input".to_owned(), json!(request.query));
+    }
+    let payload = json!({"code": code, "inputs": inputs});
+    let python = locate_runtime_python(paths)?;
+    let temporary = local_dify_root(paths).join("tmp");
+    fs::create_dir_all(&temporary).map_err(|error| error.to_string())?;
+    let id = Uuid::new_v4().simple().to_string();
+    let stdout_path = temporary.join(format!("{id}.stdout"));
+    let stderr_path = temporary.join(format!("{id}.stderr"));
+    let stdout = fs::File::create(&stdout_path).map_err(|error| error.to_string())?;
+    let stderr = fs::File::create(&stderr_path).map_err(|error| error.to_string())?;
+    let wrapper = r#"import json, sys
+payload = json.load(sys.stdin)
+scope = {}
+exec(compile(payload['code'], '<local-dify-code>', 'exec'), scope, scope)
+main = scope.get('main')
+if not callable(main):
+    raise RuntimeError('code node must define main(...)')
+result = main(**payload.get('inputs', {}))
+if not isinstance(result, dict):
+    result = {'result': result}
+print(json.dumps(result, ensure_ascii=False))
+"#;
+    let mut command = Command::new(python);
+    command
+        .args(["-I", "-c", wrapper])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .env("PYTHONNOUSERSITE", "1")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
+    hide_workflow_child_window(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("启动 Python 代码节点失败：{error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(payload.to_string().as_bytes())
+            .map_err(|error| format!("写入 Python 输入失败：{error}"))?;
+    }
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if started.elapsed() >= Duration::from_secs(30) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&stdout_path);
+            let _ = fs::remove_file(&stderr_path);
+            return Err("Python 代码节点执行超过 30 秒".to_owned());
+        }
+        thread::sleep(Duration::from_millis(40));
+    };
+    let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+    let _ = fs::remove_file(&stdout_path);
+    let _ = fs::remove_file(&stderr_path);
+    if !status.success() {
+        return Err(format!("Python 代码执行失败：{}", stderr.trim()));
+    }
+    let value: Value = serde_json::from_str(stdout.trim())
+        .map_err(|error| format!("Python 代码节点输出不是 JSON 对象：{error}"))?;
+    value
+        .as_object()
+        .cloned()
+        .map(|object| object.into_iter().collect())
+        .ok_or_else(|| "Python 代码节点输出必须是对象".to_owned())
+}
+
+#[cfg(windows)]
+fn hide_workflow_child_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x0800_0000);
+}
+
+#[cfg(not(windows))]
+fn hide_workflow_child_window(_command: &mut Command) {}
 
 fn call_provider<F>(
     provider: &LocalDifyProvider,
@@ -1188,13 +1982,18 @@ fn compatibility_report(
     paths: &AppPaths,
 ) -> Result<DifyCompatibilityReport, String> {
     let mut issues = Vec::new();
-    if !matches!(app.mode.as_str(), "chat" | "completion") {
-        issues.push(DifyCompatibilityIssue {
-            level: "error".to_owned(),
-            code: "mode-not-executable".to_owned(),
-            message: "当前运行时仅执行 Chat 与 Completion；Workflow 画布将在下一阶段接入。"
-                .to_owned(),
-        });
+    if is_workflow_mode(&app.mode) {
+        let report = validate_graph(&app.workflow, &app.mode);
+        issues.extend(
+            report
+                .issues
+                .into_iter()
+                .map(|issue| DifyCompatibilityIssue {
+                    level: issue.level,
+                    code: format!("workflow-{}", issue.code),
+                    message: issue.message,
+                }),
+        );
     }
     if app.provider_id.is_empty() {
         issues.push(DifyCompatibilityIssue {
@@ -1273,7 +2072,7 @@ fn render_dify_dsl(
             }
         })
         .unwrap_or("gpt-4o-mini");
-    let value = json!({
+    let mut value = json!({
         "version": "0.3.1",
         "kind": "app",
         "app": {
@@ -1285,29 +2084,75 @@ fn render_dify_dsl(
             "use_icon_as_answer_icon": false,
         },
         "dependencies": [],
-        "model_config": {
-            "model": {
-                "completion_params": {
+    });
+    if is_workflow_mode(&app.mode) {
+        let mut graph = app.workflow.clone();
+        for node in graph.nodes.iter_mut().filter(|node| node.kind == "llm") {
+            let mut model = node
+                .config
+                .get("model")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            model.insert("provider".to_owned(), json!(provider_name));
+            model.insert("name".to_owned(), json!(model_name));
+            model
+                .entry("mode".to_owned())
+                .or_insert_with(|| json!("chat"));
+            model.insert(
+                "completion_params".to_owned(),
+                json!({
                     "max_tokens": app.max_output_tokens,
                     "temperature": app.temperature,
+                }),
+            );
+            node.config.insert("model".to_owned(), Value::Object(model));
+        }
+        value.as_object_mut().expect("DSL root is object").insert(
+            "workflow".to_owned(),
+            json!({
+                "conversation_variables": [],
+                "environment_variables": [],
+                "features": {
+                    "file_upload": {"enabled": false},
+                    "opening_statement": app.opening_statement,
+                    "retriever_resource": {"enabled": false},
+                    "sensitive_word_avoidance": {"enabled": false},
+                    "speech_to_text": {"enabled": false},
+                    "suggested_questions": [],
+                    "suggested_questions_after_answer": {"enabled": false},
+                    "text_to_speech": {"enabled": false},
                 },
-                "mode": "chat",
-                "name": model_name,
-                "provider": provider_name,
-            },
-            "pre_prompt": app.system_prompt,
-            "prompt_type": "simple",
-            "user_input_form": [{
-                "paragraph": {
-                    "default": "",
-                    "label": app.input_key,
-                    "max_length": 1000000,
-                    "required": true,
-                    "variable": app.input_key,
-                }
-            }],
-        },
-    });
+                "graph": graph_to_dify(&graph),
+            }),
+        );
+    } else {
+        value.as_object_mut().expect("DSL root is object").insert(
+            "model_config".to_owned(),
+            json!({
+                "model": {
+                    "completion_params": {
+                        "max_tokens": app.max_output_tokens,
+                        "temperature": app.temperature,
+                    },
+                    "mode": "chat",
+                    "name": model_name,
+                    "provider": provider_name,
+                },
+                "pre_prompt": app.system_prompt,
+                "prompt_type": "simple",
+                "user_input_form": [{
+                    "paragraph": {
+                        "default": "",
+                        "label": app.input_key,
+                        "max_length": 1000000,
+                        "required": true,
+                        "variable": app.input_key,
+                    }
+                }],
+            }),
+        );
+    }
     serde_yaml::to_string(&value).map_err(|error| format!("生成 Dify DSL 失败：{error}"))
 }
 
@@ -1349,13 +2194,31 @@ fn import_dsl_source(source: &str, paths: &AppPaths) -> Result<LocalDifyApp, Str
         .get("model_config")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let imported_workflow = graph_from_dify(&value);
+    let workflow_model = imported_workflow
+        .as_ref()
+        .and_then(|graph| graph.nodes.iter().find(|node| node.kind == "llm"))
+        .and_then(|node| node.config.get("model"))
+        .cloned();
     let model_name = model_config
         .pointer("/model/name")
         .and_then(Value::as_str)
+        .or_else(|| {
+            workflow_model
+                .as_ref()
+                .and_then(|model| model.get("name"))
+                .and_then(Value::as_str)
+        })
         .unwrap_or("gpt-4o-mini");
     let provider_name = model_config
         .pointer("/model/provider")
         .and_then(Value::as_str)
+        .or_else(|| {
+            workflow_model
+                .as_ref()
+                .and_then(|model| model.get("provider"))
+                .and_then(Value::as_str)
+        })
         .unwrap_or("openai");
     let providers = load_providers(paths)?;
     let provider_id = providers
@@ -1371,6 +2234,11 @@ fn import_dsl_source(source: &str, paths: &AppPaths) -> Result<LocalDifyApp, Str
         .map(|provider| provider.id.clone())
         .unwrap_or_default();
     let now = now_timestamp();
+    let input_key = imported_workflow
+        .as_ref()
+        .map(extract_workflow_input_key)
+        .unwrap_or_else(|| extract_input_key(&model_config));
+    let workflow = imported_workflow.unwrap_or_else(|| default_graph(mode, &input_key));
     let app = LocalDifyApp {
         schema: LOCAL_DIFY_SCHEMA,
         id: format!("app-{}", Uuid::new_v4().simple()),
@@ -1390,18 +2258,36 @@ fn import_dsl_source(source: &str, paths: &AppPaths) -> Result<LocalDifyApp, Str
         opening_statement: model_config
             .get("opening_statement")
             .and_then(Value::as_str)
+            .or_else(|| {
+                value
+                    .pointer("/workflow/features/opening_statement")
+                    .and_then(Value::as_str)
+            })
             .unwrap_or_default()
             .to_owned(),
-        input_key: extract_input_key(&model_config),
+        input_key,
         temperature: model_config
             .pointer("/model/completion_params/temperature")
             .and_then(Value::as_f64)
+            .or_else(|| {
+                workflow_model
+                    .as_ref()
+                    .and_then(|model| model.pointer("/completion_params/temperature"))
+                    .and_then(Value::as_f64)
+            })
             .unwrap_or(0.2) as f32,
         max_output_tokens: model_config
             .pointer("/model/completion_params/max_tokens")
             .and_then(Value::as_u64)
+            .or_else(|| {
+                workflow_model
+                    .as_ref()
+                    .and_then(|model| model.pointer("/completion_params/max_tokens"))
+                    .and_then(Value::as_u64)
+            })
             .unwrap_or(4_096)
             .clamp(64, 131_072) as u32,
+        workflow,
         published_version: 0,
         api_enabled: false,
         created_at: now,
@@ -1422,6 +2308,20 @@ fn extract_input_key(model_config: &Value) -> String {
         .and_then(Value::as_object)
         .and_then(|entry| entry.values().next())
         .and_then(|field| field.get("variable"))
+        .and_then(Value::as_str)
+        .unwrap_or("query")
+        .to_owned()
+}
+
+fn extract_workflow_input_key(graph: &WorkflowGraph) -> String {
+    graph
+        .nodes
+        .iter()
+        .find(|node| node.kind == "start")
+        .and_then(|node| node.config.get("variables"))
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("variable"))
         .and_then(Value::as_str)
         .unwrap_or("query")
         .to_owned()
@@ -1909,6 +2809,7 @@ model_config:
             input_key: "query".to_owned(),
             temperature: 0.2,
             max_output_tokens: 512,
+            workflow: WorkflowGraph::default(),
             published_version: 0,
             api_enabled: false,
             created_at: now,
@@ -1936,6 +2837,141 @@ model_config:
             .query_row("SELECT COUNT(*) FROM local_dify_runs", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+        let _ = fs::remove_dir_all(paths.workspace_root);
+    }
+
+    #[test]
+    fn workflow_dsl_imports_and_exports_graph_nodes() {
+        let paths = test_paths();
+        ensure_root(&paths).unwrap();
+        let provider = save_provider_for_test(&paths, provider_input());
+        let source = r#"version: '0.3.1'
+kind: app
+app:
+  name: Imported Workflow
+  description: workflow test
+  mode: workflow
+workflow:
+  graph:
+    viewport: {x: 20, y: 30, zoom: 1}
+    nodes:
+      - id: start
+        position: {x: 80, y: 120}
+        data:
+          type: start
+          title: Start
+          variables:
+            - {label: query, variable: query, type: paragraph, required: true}
+      - id: template
+        position: {x: 380, y: 120}
+        data:
+          type: template-transform
+          title: Template
+          template: 'Hello {{#start.query#}}'
+      - id: end
+        position: {x: 680, y: 120}
+        data:
+          type: end
+          title: End
+          outputs:
+            - {variable: answer, value_selector: [template, output]}
+    edges:
+      - {id: edge-start-template, source: start, target: template}
+      - {id: edge-template-end, source: template, target: end}
+"#;
+        let app = import_dsl_source(source, &paths).unwrap();
+        assert_eq!(app.mode, "workflow");
+        assert_eq!(app.workflow.nodes.len(), 3);
+        assert_eq!(app.input_key, "query");
+        let rendered = render_dify_dsl(&app, Some(&provider)).unwrap();
+        assert!(rendered.contains("template-transform"));
+        assert!(rendered.contains("graph:"));
+        assert!(rendered.contains("edge-start-template"));
+        let _ = fs::remove_dir_all(paths.workspace_root);
+    }
+
+    #[test]
+    fn workflow_executor_runs_template_and_end_nodes_locally() {
+        let paths = test_paths();
+        ensure_root(&paths).unwrap();
+        let provider = save_provider_for_test(&paths, provider_input());
+        let now = now_timestamp();
+        let mut graph = default_graph("workflow", "query");
+        graph.nodes.retain(|node| node.kind != "llm");
+        let mut template = local_dify_workflow::new_node("template-transform", 360.0, 210.0);
+        template.id = "template".to_owned();
+        template
+            .config
+            .insert("template".to_owned(), json!("Hello {{#start.query#}}"));
+        let end = graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.kind == "end")
+            .unwrap();
+        end.config.insert(
+            "outputs".to_owned(),
+            json!([{"variable": "answer", "value_selector": ["template", "output"]}]),
+        );
+        graph.nodes.insert(1, template);
+        graph.edges = vec![
+            local_dify_workflow::WorkflowEdge {
+                id: "edge-start-template".to_owned(),
+                source: "start".to_owned(),
+                target: "template".to_owned(),
+                source_handle: "source".to_owned(),
+                target_handle: "target".to_owned(),
+                label: String::new(),
+                data: BTreeMap::new(),
+            },
+            local_dify_workflow::WorkflowEdge {
+                id: "edge-template-end".to_owned(),
+                source: "template".to_owned(),
+                target: "end".to_owned(),
+                source_handle: "source".to_owned(),
+                target_handle: "target".to_owned(),
+                label: String::new(),
+                data: BTreeMap::new(),
+            },
+        ];
+        let app = LocalDifyApp {
+            schema: LOCAL_DIFY_SCHEMA,
+            id: "app-workflow".to_owned(),
+            name: "Workflow".to_owned(),
+            description: String::new(),
+            mode: "workflow".to_owned(),
+            provider_id: provider.id,
+            system_prompt: String::new(),
+            opening_statement: String::new(),
+            input_key: "query".to_owned(),
+            temperature: 0.2,
+            max_output_tokens: 512,
+            workflow: graph,
+            published_version: 0,
+            api_enabled: false,
+            created_at: now,
+            updated_at: now,
+        };
+        write_json_atomic(&app_path(&paths, &app.id), &app).unwrap();
+        let request = LocalDifyRunRequest {
+            request_id: "request-workflow".to_owned(),
+            app_id: app.id,
+            query: "DRPA".to_owned(),
+            inputs: BTreeMap::new(),
+            user: "test".to_owned(),
+            stream: false,
+            conversation_id: String::new(),
+            provider_route: Vec::new(),
+        };
+        let mut events = Vec::new();
+        let result = run_app_internal(&paths, request, |event| events.push(event)).unwrap();
+        assert_eq!(result.answer, "Hello DRPA");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, LocalDifyStreamEvent::NodeCompleted { .. }))
+                .count(),
+            3
+        );
         let _ = fs::remove_dir_all(paths.workspace_root);
     }
 
@@ -1981,6 +3017,7 @@ model_config:
             input_key: "query".to_owned(),
             temperature: 0.2,
             max_output_tokens: 512,
+            workflow: WorkflowGraph::default(),
             published_version: 1,
             api_enabled: true,
             created_at: now,

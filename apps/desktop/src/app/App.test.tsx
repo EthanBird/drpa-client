@@ -141,6 +141,33 @@ describe("DRPA Next desktop shell", () => {
     expect((await screen.findAllByText("http://127.0.0.1:34130/v1"))[0]).toBeVisible();
   });
 
+  it("creates and edits a visual Local Dify workflow", async () => {
+    const validate = vi.spyOn(desktopGateway, "validateLocalDifyWorkflow");
+    const save = vi.spyOn(desktopGateway, "saveLocalDifyApp");
+    useAppStore.setState({ activeNavigation: "localDify" });
+    const { container } = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "AI 应用" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "新建应用" }));
+    fireEvent.change(screen.getByLabelText("新建 AI 应用名称"), { target: { value: "可视化工作流" } });
+    fireEvent.click(screen.getByRole("button", { name: /Workflow.*自动化与批处理工作流/ }));
+    fireEvent.click(screen.getByRole("button", { name: "创建应用" }));
+
+    expect(await screen.findByText("工作流编排")).toBeVisible();
+    await waitFor(() => expect(container.querySelectorAll(".workflow-node")).toHaveLength(3));
+    fireEvent.click(screen.getByRole("button", { name: /模板转换.*组合变量与文本/ }));
+    await waitFor(() => expect(container.querySelectorAll(".workflow-node")).toHaveLength(4));
+    fireEvent.click(screen.getByRole("button", { name: "校验" }));
+    await waitFor(() => expect(validate).toHaveBeenCalled());
+    expect(await screen.findByText("工作流有效")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "保存工作流" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      name: "可视化工作流",
+      mode: "workflow",
+      workflow: expect.objectContaining({ nodes: expect.arrayContaining([expect.objectContaining({ kind: "template-transform" })]) }),
+    })));
+  });
+
   it("generates SQL with the configured Agent and inserts it without executing", async () => {
     const runAgent = vi.spyOn(desktopGateway, "runAgentTurn");
     const executeSql = vi.spyOn(desktopGateway, "executeDatabaseSql");

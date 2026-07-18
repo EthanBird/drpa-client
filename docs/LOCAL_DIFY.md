@@ -2,7 +2,7 @@
 
 DRPA Local Dify 是面向离线开发与测试的轻量 AI 应用平台。它复用 DRPA 的 Tauri Host、SQLite、插件、Skills、Python Runtime 和日志基础设施，提供 Dify 常用的应用开发闭环，而不是在桌面安装目录内复制一套 Docker 服务栈。
 
-## 第一阶段能力
+## 当前能力
 
 - Chat 与 Completion 应用创建、编辑、复制式本地开发。
 - OpenAI Chat Completions 兼容 Provider。
@@ -14,8 +14,11 @@ DRPA Local Dify 是面向离线开发与测试的轻量 AI 应用平台。它复
 - Dify Service API：`parameters`、`chat-messages`、`completion-messages` 与 `workflows/run`。
 - 本地发布版本与每个应用独立的 Bearer Token。
 - Local Dify → Dify Loves Hermes → 远程 Dify 的 Provider 链路。
+- Workflow / Chatflow 可视化画布、节点属性、连线、缩放、校验、撤销重做和调试抽屉。
+- Start、LLM、Template、If/Else、HTTP、Python Code、Answer、End 本地执行器。
+- Dify `workflow.graph` 导入导出和 `/v1/workflows/run` 原生执行。
 
-Chatflow 与 Workflow DSL 在第一阶段可以导入并保留；可视化画布和图执行器进入第二阶段。
+工作流设计器的节点、IR、执行语义和快捷键见 [Local Dify 工作流设计器](LOCAL_DIFY_WORKFLOW.md)。
 
 ## 数据目录
 
@@ -121,7 +124,7 @@ POST /v1/completion-messages
 POST /v1/workflows/run
 ```
 
-`streaming` 响应使用 Dify 风格的 SSE `message` 与 `message_end` 事件。`workflows/run` 在第一阶段把 Chat/Completion 结果包装为 `data.outputs.answer`，方便 API 客户端和桥接插件进行开发测试。
+`streaming` 响应使用 Dify 风格的 SSE `message` 与 `message_end` 事件。`workflows/run` 执行已发布应用的 Workflow IR，并把最终结果写入 `data.outputs.answer`。
 
 ## Dify Loves Hermes 套娃链路
 
@@ -161,6 +164,7 @@ Local Dify 在调用 Provider 前把当前 App ID 加入路由。重复 App ID �
 - `app.name` 与 `app.mode`。
 - `model_config.model.provider/name`。
 - `pre_prompt`、completion params 与首个输入变量。
+- `workflow.graph.viewport/nodes/edges` 与工作流开场白。
 
 导入后保存原始 YAML，同时生成本地规范化应用。若已经存在相同的 `difyProvider + difyModel`，自动绑定该 Provider；否则应用保持“待选择 Provider”。
 
@@ -177,10 +181,13 @@ model_config:
   user_input_form: ...
 ```
 
+Workflow / Chatflow 则生成 `workflow.graph`，节点 `config` 恢复为 Dify `data`，并为每个 LLM 节点注入 Provider 云端映射。
+
 导出前执行兼容性检查：
 
 - 缺少 Provider：error。
-- Chatflow/Workflow 尚未进入图执行器：error。
+- Workflow 图结构、入口、输出路径或悬空连线错误：error。
+- 未连接节点或本地执行器尚未覆盖的导入节点：warning。
 - 未配置云端 Provider 映射：warning。
 - Provider 指向 localhost：warning。
 
@@ -192,6 +199,7 @@ warning 允许导出，上传云端后需要重新选择对应 Provider；error 
 
 ```text
 apps/desktop/src-tauri/src/local_dify.rs
+apps/desktop/src-tauri/src/local_dify_workflow.rs
 ```
 
 它同时负责：
@@ -208,19 +216,13 @@ apps/desktop/src-tauri/src/local_dify.rs
 
 ```text
 apps/desktop/src/pages/LocalDifyPage.tsx
+apps/desktop/src/components/LocalDifyWorkflowDesigner.tsx
 apps/desktop/src/styles/local-dify.css
+apps/desktop/src/styles/local-dify-workflow.css
 ```
 
 页面通过 lazy import 加载，避免影响 DRPA 首屏包体积。
 
-## 下一阶段
+## 后续工作流增强
 
-第二阶段在同一应用模型上增加 Workflow IR：
-
-1. Start、LLM、Template、If/Else、Variable、Answer。
-2. Python Code、HTTP、SQL 和 DRPA Tool 节点。
-3. 节点画布、变量检查、单节点运行和完整 trace。
-4. Dify Workflow Graph 导入导出 adapter。
-5. Portable 与 DRPA Enhanced 两种兼容模式。
-
-Workflow IR 作为执行模型，Dify YAML 作为导入导出协议，避免运行时与某一个 Dify DSL 版本强耦合。
+Workflow IR 已作为执行模型落地，Dify YAML 继续作为导入导出协议。后续增强聚焦 Iteration/Loop 容器、Tool/Knowledge/Agent 节点、并行汇聚、单节点运行、节点级持久化 Trace 和 AI 生成工作流。

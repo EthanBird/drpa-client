@@ -22,6 +22,7 @@ mod agent_config;
 mod database;
 mod knowledge;
 mod local_dify;
+mod local_dify_workflow;
 mod plugins;
 
 const WINDOWS_UPDATE_SCHEMA: u32 = 2;
@@ -2002,6 +2003,10 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
     ))
 }
 
+pub(crate) fn locate_runtime_python(paths: &AppPaths) -> Result<PathBuf, String> {
+    Ok(locate_runtime(paths)?.python)
+}
+
 fn runtime_roots(paths: &AppPaths) -> Result<Vec<PathBuf>, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut roots = Vec::new();
@@ -2419,6 +2424,8 @@ pub fn run() {
             local_dify::list_local_dify_apps,
             local_dify::create_local_dify_app,
             local_dify::save_local_dify_app,
+            local_dify::validate_local_dify_workflow,
+            local_dify::create_local_dify_workflow_node,
             local_dify::delete_local_dify_app,
             local_dify::list_local_dify_providers,
             local_dify::save_local_dify_provider,

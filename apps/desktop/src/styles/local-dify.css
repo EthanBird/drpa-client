@@ -2,6 +2,7 @@
 .local-dify-header { flex: 0 0 auto; }
 .local-dify-header-actions { display: flex; align-items: center; gap: 7px; }
 .local-dify-layout { display: grid; grid-template-columns: 238px minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; border-top: 1px solid var(--border-subtle); }
+.local-dify-layout.workflow-focus { grid-template-columns: 188px minmax(0, 1fr); }
 .local-dify-catalog { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; border-right: 1px solid var(--border-subtle); background: var(--surface-1); }
 .local-dify-catalog > header { display: flex; align-items: center; gap: 7px; min-height: 42px; padding: 0 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text-2); }
 .local-dify-catalog > header svg { color: var(--accent); }

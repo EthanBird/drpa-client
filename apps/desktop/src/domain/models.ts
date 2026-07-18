@@ -150,6 +150,66 @@ export interface LocalDifyProviderInput extends Omit<LocalDifyProvider, "hasApiK
   apiKey: string;
 }
 
+export type LocalDifyWorkflowNodeKind =
+  | "start"
+  | "llm"
+  | "template-transform"
+  | "if-else"
+  | "http-request"
+  | "code"
+  | "answer"
+  | "end"
+  | string;
+
+export interface LocalDifyWorkflowViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface LocalDifyWorkflowNode {
+  id: string;
+  kind: LocalDifyWorkflowNodeKind;
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  config: Record<string, unknown>;
+}
+
+export interface LocalDifyWorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle: string;
+  targetHandle: string;
+  label: string;
+  data: Record<string, unknown>;
+}
+
+export interface LocalDifyWorkflowGraph {
+  schema: number;
+  viewport: LocalDifyWorkflowViewport;
+  nodes: LocalDifyWorkflowNode[];
+  edges: LocalDifyWorkflowEdge[];
+}
+
+export interface LocalDifyWorkflowValidationIssue {
+  level: "info" | "warning" | "error" | string;
+  code: string;
+  message: string;
+  nodeId?: string;
+  edgeId?: string;
+}
+
+export interface LocalDifyWorkflowValidationReport {
+  valid: boolean;
+  nodeCount: number;
+  edgeCount: number;
+  issues: LocalDifyWorkflowValidationIssue[];
+}
+
 export interface LocalDifyApp {
   schema: number;
   id: string;
@@ -162,6 +222,7 @@ export interface LocalDifyApp {
   inputKey: string;
   temperature: number;
   maxOutputTokens: number;
+  workflow: LocalDifyWorkflowGraph;
   publishedVersion: number;
   apiEnabled: boolean;
   createdAt: number;
@@ -198,6 +259,9 @@ export interface LocalDifyRunResult {
 
 export type LocalDifyStreamEvent =
   | { type: "started"; runId: string }
+  | { type: "nodeStarted"; runId: string; nodeId: string; nodeType: string; title: string }
+  | { type: "nodeCompleted"; runId: string; nodeId: string; outputs: unknown; durationMs: number }
+  | { type: "nodeFailed"; runId: string; nodeId: string; error: string; durationMs: number }
   | { type: "delta"; content: string }
   | { type: "completed"; runId: string };
 

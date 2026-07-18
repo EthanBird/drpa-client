@@ -26,6 +26,9 @@ import type {
   LocalDifyRunSummary,
   LocalDifyServiceStatus,
   LocalDifyStreamEvent,
+  LocalDifyWorkflowGraph,
+  LocalDifyWorkflowNode,
+  LocalDifyWorkflowValidationReport,
   DifyCompatibilityReport,
   PackageSummary,
   PlatformCapabilities,
@@ -89,6 +92,8 @@ export interface DesktopGateway {
   listLocalDifyApps(): Promise<LocalDifyApp[]>;
   createLocalDifyApp(name: string, mode: LocalDifyAppMode): Promise<LocalDifyApp>;
   saveLocalDifyApp(app: LocalDifyApp): Promise<LocalDifyApp>;
+  validateLocalDifyWorkflow(graph: LocalDifyWorkflowGraph, mode: LocalDifyAppMode): Promise<LocalDifyWorkflowValidationReport>;
+  createLocalDifyWorkflowNode(kind: string, x: number, y: number): Promise<LocalDifyWorkflowNode>;
   deleteLocalDifyApp(appId: string): Promise<void>;
   listLocalDifyProviders(): Promise<LocalDifyProvider[]>;
   saveLocalDifyProvider(input: LocalDifyProviderInput): Promise<LocalDifyProvider>;
@@ -188,7 +193,7 @@ let mockLocalDifyProviders: LocalDifyProvider[] = [{
   updatedAt: Date.now(),
 }];
 let mockLocalDifyApps: LocalDifyApp[] = [{
-  schema: 1,
+  schema: 2,
   id: "app-browser-preview",
   name: "本地 Dify 调试应用",
   description: "通过 OpenAI 兼容 Provider 调试提示词并导出 Dify DSL。",
@@ -199,6 +204,7 @@ let mockLocalDifyApps: LocalDifyApp[] = [{
   inputKey: "query",
   temperature: 0.2,
   maxOutputTokens: 4096,
+  workflow: { schema: 1, viewport: { x: 80, y: 120, zoom: 1 }, nodes: [], edges: [] },
   publishedVersion: 1,
   apiEnabled: true,
   createdAt: Date.now() - 3600000,
@@ -212,6 +218,39 @@ let mockLocalDifyService: LocalDifyServiceStatus = {
   lastError: "",
 };
 const mockLocalDifyStreamListeners = new Map<string, (event: LocalDifyStreamEvent) => void>();
+
+function mockWorkflowNode(kind: string, x: number, y: number): LocalDifyWorkflowNode {
+  const id = `node-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const templates: Record<string, { title: string; height: number; config: Record<string, unknown> }> = {
+    start: { title: "开始", height: 84, config: { variables: [{ label: "query", variable: "query", type: "paragraph", required: true }] } },
+    llm: { title: "LLM", height: 104, config: { prompt_template: [{ role: "user", text: "{{#start.query#}}" }], model: { provider: "", name: "", mode: "chat", completion_params: {} } } },
+    "template-transform": { title: "模板转换", height: 96, config: { template: "{{ input }}", variables: [] } },
+    "if-else": { title: "条件分支", height: 112, config: { cases: [{ case_id: "true", logical_operator: "and", conditions: [{ variable_selector: ["start", "query"], comparison_operator: "contains", value: "" }] }] } },
+    "http-request": { title: "HTTP 请求", height: 108, config: { method: "get", url: "https://example.com", headers: "", body: { type: "none", data: [] } } },
+    code: { title: "代码执行", height: 112, config: { code_language: "python3", code: "def main(input: str):\n    return {'result': input}\n", variables: [], outputs: { result: { type: "string" } } } },
+    answer: { title: "直接回复", height: 84, config: { answer: "{{#llm.text#}}" } },
+    end: { title: "结束", height: 84, config: { outputs: [{ variable: "answer", value_selector: ["llm", "text"] }] } },
+  };
+  const template = templates[kind] ?? templates.end!;
+  return { id, kind, title: template.title, x, y, width: 220, height: template.height, config: structuredClone(template.config) };
+}
+
+function mockWorkflowGraph(mode: LocalDifyAppMode, inputKey = "query"): LocalDifyWorkflowGraph {
+  if (mode !== "workflow" && mode !== "advanced-chat") return { schema: 1, viewport: { x: 80, y: 120, zoom: 1 }, nodes: [], edges: [] };
+  const start = { ...mockWorkflowNode("start", 80, 210), id: "start", config: { variables: [{ label: inputKey, variable: inputKey, type: "paragraph", required: true }] } };
+  const llm = { ...mockWorkflowNode("llm", 390, 210), id: "llm", config: { prompt_template: [{ role: "user", text: `{{#start.${inputKey}#}}` }], model: { provider: "", name: "", mode: "chat", completion_params: {} } } };
+  const terminalKind = mode === "advanced-chat" ? "answer" : "end";
+  const terminal = { ...mockWorkflowNode(terminalKind, 700, 210), id: terminalKind };
+  return {
+    schema: 1,
+    viewport: { x: 80, y: 120, zoom: 1 },
+    nodes: [start, llm, terminal],
+    edges: [
+      { id: "edge-start-llm", source: "start", target: "llm", sourceHandle: "source", targetHandle: "target", label: "", data: {} },
+      { id: `edge-llm-${terminalKind}`, source: "llm", target: terminalKind, sourceHandle: "source", targetHandle: "target", label: "", data: {} },
+    ],
+  };
+}
 const mockAgentSkills = new Map<string, string>([[
   "rpaz-development",
   "---\nname: rpaz-development\ndescription: 创建、修改、校验或构建 RPAZ 脚本包时使用。\n---\n\n# RPAZ Development\n",
@@ -455,7 +494,7 @@ const mockGateway: DesktopGateway = {
   async createLocalDifyApp(name, mode) {
     const now = Date.now();
     const app: LocalDifyApp = {
-      schema: 1,
+      schema: 2,
       id: `app-${now}`,
       name,
       description: "用于本地测试与 Dify DSL 导出的 AI 应用。",
@@ -466,6 +505,7 @@ const mockGateway: DesktopGateway = {
       inputKey: "query",
       temperature: 0.2,
       maxOutputTokens: 4096,
+      workflow: mockWorkflowGraph(mode),
       publishedVersion: 0,
       apiEnabled: false,
       createdAt: now,
@@ -478,6 +518,22 @@ const mockGateway: DesktopGateway = {
     const saved = { ...app, updatedAt: Date.now() };
     mockLocalDifyApps = mockLocalDifyApps.map((item) => item.id === saved.id ? saved : item);
     return structuredClone(saved);
+  },
+  async validateLocalDifyWorkflow(graph, mode) {
+    const issues: LocalDifyWorkflowValidationReport["issues"] = [];
+    const starts = graph.nodes.filter((node) => node.kind === "start");
+    if (starts.length !== 1) issues.push({ level: "error", code: "start-count", message: "工作流需要且只允许一个开始节点" });
+    const terminal = mode === "advanced-chat" ? "answer" : "end";
+    if (!graph.nodes.some((node) => node.kind === terminal)) issues.push({ level: "error", code: "terminal-missing", message: `当前模式至少需要一个 ${terminal} 节点` });
+    for (const edge of graph.edges) {
+      if (!graph.nodes.some((node) => node.id === edge.source) || !graph.nodes.some((node) => node.id === edge.target)) {
+        issues.push({ level: "error", code: "dangling-edge", message: "连线引用了不存在的节点", edgeId: edge.id });
+      }
+    }
+    return { valid: !issues.some((issue) => issue.level === "error"), nodeCount: graph.nodes.length, edgeCount: graph.edges.length, issues };
+  },
+  async createLocalDifyWorkflowNode(kind, x, y) {
+    return structuredClone(mockWorkflowNode(kind, x, y));
   },
   async deleteLocalDifyApp(appId) {
     mockLocalDifyApps = mockLocalDifyApps.filter((item) => item.id !== appId);
@@ -816,6 +872,8 @@ const tauriGateway: DesktopGateway = {
   listLocalDifyApps: () => invoke<LocalDifyApp[]>("list_local_dify_apps"),
   createLocalDifyApp: (name, mode) => invoke<LocalDifyApp>("create_local_dify_app", { input: { name, mode } }),
   saveLocalDifyApp: (app) => invoke<LocalDifyApp>("save_local_dify_app", { app }),
+  validateLocalDifyWorkflow: (graph, mode) => invoke<LocalDifyWorkflowValidationReport>("validate_local_dify_workflow", { graph, mode }),
+  createLocalDifyWorkflowNode: (kind, x, y) => invoke<LocalDifyWorkflowNode>("create_local_dify_workflow_node", { kind, x, y }),
   deleteLocalDifyApp: (appId) => invoke<void>("delete_local_dify_app", { appId }),
   listLocalDifyProviders: () => invoke<LocalDifyProvider[]>("list_local_dify_providers"),
   saveLocalDifyProvider: (input) => invoke<LocalDifyProvider>("save_local_dify_provider", { input }),
