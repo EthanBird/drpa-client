@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Local Dify 开发平台
+
+- 基础设施新增“AI 应用”：本地管理 Chat/Completion 应用和 OpenAI-compatible Provider，支持 Prompt、模型参数、流式 Markdown 调试和 Provider 连接测试。
+- Local Dify 源码按应用写入工作区文件，运行记录写入独立 SQLite；Provider API Key 与应用 API Token 从公开配置和 DSL 中分离。
+- 新增本地 Dify Service API，支持 `/parameters`、`/chat-messages`、`/completion-messages`、`/workflows/run`、blocking 与 SSE streaming。
+- 新增 Dify YAML DSL 导入、原始 DSL 保留、规范化导出和云端 Provider 映射检查。
+- `dify-loves-hermes` 升级到 0.3，透传 Trace、Provider Route 和 Hop Count；Local Dify 检测重复 App 与四跳上限，支持本地/远程 Dify 套娃调试。
+
 ### Windows 开发体验与数据能力
 
 - 运行记录改为 SQLite 持久化，支持应用重启后继续查看完整概览、事件时间线、参数、产物与错误回溯；异常退出时未结束任务标记为 interrupted。

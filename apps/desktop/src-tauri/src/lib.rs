@@ -21,6 +21,7 @@ mod agent;
 mod agent_config;
 mod database;
 mod knowledge;
+mod local_dify;
 mod plugins;
 
 const WINDOWS_UPDATE_SCHEMA: u32 = 2;
@@ -2370,6 +2371,7 @@ pub fn run() {
             });
             app.manage(RunProcessManager::default());
             app.manage(plugin_manager);
+            app.manage(local_dify::LocalDifyServiceManager::default());
             acknowledge_windows_update_startup(&workspace_root)?;
             Ok(())
         })
@@ -2414,6 +2416,24 @@ pub fn run() {
             database::describe_remote_database_table,
             database::execute_remote_database_sql,
             database::get_remote_database_schema_context,
+            local_dify::list_local_dify_apps,
+            local_dify::create_local_dify_app,
+            local_dify::save_local_dify_app,
+            local_dify::delete_local_dify_app,
+            local_dify::list_local_dify_providers,
+            local_dify::save_local_dify_provider,
+            local_dify::delete_local_dify_provider,
+            local_dify::test_local_dify_provider,
+            local_dify::run_local_dify_app,
+            local_dify::list_local_dify_runs,
+            local_dify::publish_local_dify_app,
+            local_dify::get_local_dify_app_api_token,
+            local_dify::check_local_dify_compatibility,
+            local_dify::import_local_dify_dsl,
+            local_dify::export_local_dify_dsl,
+            local_dify::get_local_dify_service_status,
+            local_dify::start_local_dify_service,
+            local_dify::stop_local_dify_service,
             run_agent_turn,
             agent_config::get_agent_workspace_config,
             agent_config::write_agent_workspace_document,

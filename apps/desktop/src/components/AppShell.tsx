@@ -19,6 +19,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Workflow,
   X,
   Zap,
 } from "lucide-react";
@@ -49,6 +50,7 @@ const infrastructureNavigation: Array<{
   label: string;
   icon: typeof Gauge;
 }> = [
+  { id: "localDify", label: "AI 应用", icon: Workflow },
   { id: "agent", label: "AI Agent", icon: Bot },
   { id: "plugins", label: "插件", icon: PlugZap },
   { id: "runtimes", label: "运行环境", icon: Boxes },

@@ -217,12 +217,15 @@ DRPA Agent → OpenAI tools + messages
 
 ## Dify 连接与会话
 
-`dify-loves-hermes` 0.2 增加：
+`dify-loves-hermes` 0.3 提供：
 
 - `GET /v1/provider/test`：使用 Dify `/parameters` 检查 URL、API Key 和 App 参数，并返回耗时与输入字段摘要。
 - `conversations.json`：原子持久化最近 1000 个 DRPA Session 到 Dify `conversation_id` 的映射，插件重启后继续同一会话。
 - `input_key`：把 Completion/Workflow 的对话文本写入指定 `inputs` 变量，适配不同 Dify App 的输入表单。
 - 插件页“测试 Dify 连接”按钮：区分 Bridge 已启动和上游 Dify App API 真正可用。
+- 透传 `X-DRPA-Trace-Id`、`X-DRPA-Provider-Route` 与 `X-DRPA-Hop-Count`，支持连接 DRPA Local Dify 并由 Host 检测循环 Provider 链路。
+
+DRPA 自带的 Local Dify 开发平台见 [`LOCAL_DIFY.md`](LOCAL_DIFY.md)。它可以把本地发布应用暴露为 Dify Service API；本插件再将该 API 转换为 OpenAI Chat Completions，因此本地应用既可供普通 Dify 客户端测试，也可直接作为 DRPA AI Agent Provider。
 
 ## 当前协议边界
 

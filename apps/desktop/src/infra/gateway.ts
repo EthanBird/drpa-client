@@ -16,6 +16,17 @@ import type {
   RemoteConnectionTest,
   RemoteDatabaseProfile,
   KnowledgeEntry,
+  LocalDifyApp,
+  LocalDifyAppMode,
+  LocalDifyProvider,
+  LocalDifyProviderInput,
+  LocalDifyProviderTest,
+  LocalDifyRunRequest,
+  LocalDifyRunResult,
+  LocalDifyRunSummary,
+  LocalDifyServiceStatus,
+  LocalDifyStreamEvent,
+  DifyCompatibilityReport,
   PackageSummary,
   PlatformCapabilities,
   PluginLogLine,
@@ -75,6 +86,25 @@ export interface DesktopGateway {
   describeRemoteDatabaseTable(profileId: string, password: string, tableName: string): Promise<DatabaseColumn[]>;
   executeRemoteDatabaseSql(profileId: string, password: string, sql: string): Promise<DatabaseQueryResult>;
   getRemoteDatabaseSchemaContext(profileId: string, password: string): Promise<string>;
+  listLocalDifyApps(): Promise<LocalDifyApp[]>;
+  createLocalDifyApp(name: string, mode: LocalDifyAppMode): Promise<LocalDifyApp>;
+  saveLocalDifyApp(app: LocalDifyApp): Promise<LocalDifyApp>;
+  deleteLocalDifyApp(appId: string): Promise<void>;
+  listLocalDifyProviders(): Promise<LocalDifyProvider[]>;
+  saveLocalDifyProvider(input: LocalDifyProviderInput): Promise<LocalDifyProvider>;
+  deleteLocalDifyProvider(providerId: string): Promise<void>;
+  testLocalDifyProvider(providerId: string): Promise<LocalDifyProviderTest>;
+  runLocalDifyApp(request: LocalDifyRunRequest): Promise<LocalDifyRunResult>;
+  listenLocalDifyStream(requestId: string, onEvent: (event: LocalDifyStreamEvent) => void): Promise<() => void>;
+  listLocalDifyRuns(appId?: string, limit?: number): Promise<LocalDifyRunSummary[]>;
+  publishLocalDifyApp(appId: string): Promise<LocalDifyApp>;
+  getLocalDifyAppApiToken(appId: string): Promise<string>;
+  checkLocalDifyCompatibility(appId: string): Promise<DifyCompatibilityReport>;
+  importLocalDifyDsl(sourcePath: string): Promise<LocalDifyApp>;
+  exportLocalDifyDsl(appId: string, targetPath: string): Promise<string>;
+  getLocalDifyServiceStatus(): Promise<LocalDifyServiceStatus>;
+  startLocalDifyService(port: number): Promise<LocalDifyServiceStatus>;
+  stopLocalDifyService(): Promise<LocalDifyServiceStatus>;
   runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResult>;
   listenAgentStream(requestId: string, onEvent: (event: AgentStreamEvent) => void): Promise<() => void>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
@@ -138,6 +168,50 @@ const mockKnowledgeContents = new Map<string, string>([
 let mockAgentAgentsMarkdown = "# DRPA Agent 工作约定\n\n- 修改项目后运行 `rpaz_validate`。\n";
 let mockAgentMemoryMarkdown = "# Agent Memory\n\n记录稳定事实与偏好。\n";
 let mockRemoteDatabaseProfiles: RemoteDatabaseProfile[] = [];
+let mockLocalDifyProviders: LocalDifyProvider[] = [{
+  id: "provider-browser-preview",
+  name: "OpenAI 兼容 Provider",
+  baseUrl: "http://127.0.0.1:34121/v1",
+  model: "dify-app",
+  contextWindow: 128000,
+  maxOutputTokens: 4096,
+  temperature: 0.2,
+  streaming: true,
+  supportsTools: true,
+  supportsJson: true,
+  supportsVision: false,
+  timeoutSeconds: 120,
+  customHeaders: {},
+  difyProvider: "langgenius/openai/openai",
+  difyModel: "gpt-4o-mini",
+  hasApiKey: false,
+  updatedAt: Date.now(),
+}];
+let mockLocalDifyApps: LocalDifyApp[] = [{
+  schema: 1,
+  id: "app-browser-preview",
+  name: "本地 Dify 调试应用",
+  description: "通过 OpenAI 兼容 Provider 调试提示词并导出 Dify DSL。",
+  mode: "chat",
+  providerId: "provider-browser-preview",
+  systemPrompt: "你是 DRPA Local Dify 中的开发助手。回答应准确、简洁，并说明关键步骤。",
+  openingStatement: "你好，这是一个本地 Dify 调试应用。",
+  inputKey: "query",
+  temperature: 0.2,
+  maxOutputTokens: 4096,
+  publishedVersion: 1,
+  apiEnabled: true,
+  createdAt: Date.now() - 3600000,
+  updatedAt: Date.now(),
+}];
+let mockLocalDifyRuns: LocalDifyRunSummary[] = [];
+let mockLocalDifyService: LocalDifyServiceStatus = {
+  running: false,
+  port: 34130,
+  endpoint: "http://127.0.0.1:34130/v1",
+  lastError: "",
+};
+const mockLocalDifyStreamListeners = new Map<string, (event: LocalDifyStreamEvent) => void>();
 const mockAgentSkills = new Map<string, string>([[
   "rpaz-development",
   "---\nname: rpaz-development\ndescription: 创建、修改、校验或构建 RPAZ 脚本包时使用。\n---\n\n# RPAZ Development\n",
@@ -165,8 +239,8 @@ function mockPlugins(): PluginSummary[] {
   return [{
     id: "dify-loves-hermes",
     name: "Dify Loves Hermes",
-    version: "0.2.0",
-    description: "将 Dify App API 转换为本地 OpenAI 兼容接口，并补充外部工具调用桥。",
+    version: "0.3.0",
+    description: "将本地或远程 Dify App API 转换为 OpenAI 兼容接口，并补充工具调用与 Provider 链路追踪。",
     types: ["provider-adapter", "service"],
     enabled: mockPluginEnabled,
     autostart: false,
@@ -374,6 +448,146 @@ const mockGateway: DesktopGateway = {
   },
   async getRemoteDatabaseSchemaContext() {
     return "-- PostgreSQL 数据库结构\n\nCREATE TABLE public.remote_tasks (id bigint NOT NULL);\n";
+  },
+  async listLocalDifyApps() {
+    return structuredClone(mockLocalDifyApps);
+  },
+  async createLocalDifyApp(name, mode) {
+    const now = Date.now();
+    const app: LocalDifyApp = {
+      schema: 1,
+      id: `app-${now}`,
+      name,
+      description: "用于本地测试与 Dify DSL 导出的 AI 应用。",
+      mode,
+      providerId: mockLocalDifyProviders[0]?.id ?? "",
+      systemPrompt: "你是一个准确、简洁的 AI 助手。",
+      openingStatement: "你好，我是本地 AI 应用。",
+      inputKey: "query",
+      temperature: 0.2,
+      maxOutputTokens: 4096,
+      publishedVersion: 0,
+      apiEnabled: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    mockLocalDifyApps = [app, ...mockLocalDifyApps];
+    return structuredClone(app);
+  },
+  async saveLocalDifyApp(app) {
+    const saved = { ...app, updatedAt: Date.now() };
+    mockLocalDifyApps = mockLocalDifyApps.map((item) => item.id === saved.id ? saved : item);
+    return structuredClone(saved);
+  },
+  async deleteLocalDifyApp(appId) {
+    mockLocalDifyApps = mockLocalDifyApps.filter((item) => item.id !== appId);
+  },
+  async listLocalDifyProviders() {
+    return structuredClone(mockLocalDifyProviders);
+  },
+  async saveLocalDifyProvider(input) {
+    const provider: LocalDifyProvider = {
+      ...input,
+      id: input.id || `provider-${Date.now()}`,
+      hasApiKey: input.apiKey.length > 0 || mockLocalDifyProviders.some((item) => item.id === input.id && item.hasApiKey),
+      updatedAt: Date.now(),
+    };
+    const { apiKey: _apiKey, ...saved } = provider as LocalDifyProvider & { apiKey?: string };
+    mockLocalDifyProviders = [...mockLocalDifyProviders.filter((item) => item.id !== saved.id), saved];
+    return structuredClone(saved);
+  },
+  async deleteLocalDifyProvider(providerId) {
+    mockLocalDifyProviders = mockLocalDifyProviders.filter((item) => item.id !== providerId);
+  },
+  async testLocalDifyProvider(providerId) {
+    const provider = mockLocalDifyProviders.find((item) => item.id === providerId);
+    if (!provider) throw new Error("Provider 不存在");
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+    return { ok: true, message: "Provider 连接成功：OK", model: provider.model, durationMs: 42 };
+  },
+  async runLocalDifyApp(request) {
+    const app = mockLocalDifyApps.find((item) => item.id === request.appId);
+    const provider = mockLocalDifyProviders.find((item) => item.id === app?.providerId);
+    if (!app || !provider) throw new Error("应用或 Provider 不存在");
+    const answer = `## Local Dify 调试结果\n\n已通过 **${provider.name}** 处理：${request.query}`;
+    const runId = `dify-run-${Date.now()}`;
+    const listener = mockLocalDifyStreamListeners.get(request.requestId);
+    listener?.({ type: "started", runId });
+    if (request.stream) {
+      for (const chunk of answer.match(/.{1,14}/gs) ?? [answer]) {
+        await new Promise((resolve) => window.setTimeout(resolve, 12));
+        listener?.({ type: "delta", content: chunk });
+      }
+    } else {
+      await new Promise((resolve) => window.setTimeout(resolve, 160));
+    }
+    listener?.({ type: "completed", runId });
+    const result: LocalDifyRunResult = {
+      runId,
+      appId: app.id,
+      answer,
+      conversationId: request.conversationId || `conversation-${Date.now()}`,
+      providerId: provider.id,
+      model: provider.model,
+      usage: { promptTokens: 18, completionTokens: 28, totalTokens: 46 },
+      durationMs: 164,
+    };
+    mockLocalDifyRuns = [{
+      id: runId,
+      appId: app.id,
+      appName: app.name,
+      status: "success",
+      query: request.query,
+      answer,
+      providerId: provider.id,
+      model: provider.model,
+      promptTokens: 18,
+      completionTokens: 28,
+      durationMs: 164,
+      error: "",
+      createdAt: Date.now(),
+    }, ...mockLocalDifyRuns];
+    return result;
+  },
+  async listenLocalDifyStream(requestId, onEvent) {
+    mockLocalDifyStreamListeners.set(requestId, onEvent);
+    return () => { mockLocalDifyStreamListeners.delete(requestId); };
+  },
+  async listLocalDifyRuns(appId, limit = 100) {
+    return structuredClone(mockLocalDifyRuns.filter((item) => !appId || item.appId === appId).slice(0, limit));
+  },
+  async publishLocalDifyApp(appId) {
+    const app = mockLocalDifyApps.find((item) => item.id === appId);
+    if (!app) throw new Error("应用不存在");
+    return this.saveLocalDifyApp({ ...app, apiEnabled: true, publishedVersion: app.publishedVersion + 1 });
+  },
+  async getLocalDifyAppApiToken() {
+    return "app-browser-preview-token";
+  },
+  async checkLocalDifyCompatibility(appId) {
+    const app = mockLocalDifyApps.find((item) => item.id === appId);
+    return {
+      compatible: Boolean(app?.providerId),
+      targetVersion: "0.3.1",
+      issues: app?.providerId ? [] : [{ level: "error", code: "provider-missing", message: "应用尚未选择 Provider。" }],
+    };
+  },
+  async importLocalDifyDsl() {
+    return this.createLocalDifyApp("导入的 Dify 应用", "chat");
+  },
+  async exportLocalDifyDsl(appId, targetPath) {
+    return targetPath || `${appId}.yml`;
+  },
+  async getLocalDifyServiceStatus() {
+    return structuredClone(mockLocalDifyService);
+  },
+  async startLocalDifyService(port) {
+    mockLocalDifyService = { running: true, port, endpoint: `http://127.0.0.1:${port}/v1`, startedAt: Date.now(), lastError: "" };
+    return structuredClone(mockLocalDifyService);
+  },
+  async stopLocalDifyService() {
+    mockLocalDifyService = { ...mockLocalDifyService, running: false, startedAt: undefined };
+    return structuredClone(mockLocalDifyService);
   },
   async runAgentTurn(request) {
     const prompt = request.messages.at(-1)?.content ?? "";
@@ -599,6 +813,25 @@ const tauriGateway: DesktopGateway = {
   describeRemoteDatabaseTable: (profileId, password, tableName) => invoke<DatabaseColumn[]>("describe_remote_database_table", { profileId, password, tableName }),
   executeRemoteDatabaseSql: (profileId, password, sql) => invoke<DatabaseQueryResult>("execute_remote_database_sql", { profileId, password, sql }),
   getRemoteDatabaseSchemaContext: (profileId, password) => invoke<string>("get_remote_database_schema_context", { profileId, password }),
+  listLocalDifyApps: () => invoke<LocalDifyApp[]>("list_local_dify_apps"),
+  createLocalDifyApp: (name, mode) => invoke<LocalDifyApp>("create_local_dify_app", { input: { name, mode } }),
+  saveLocalDifyApp: (app) => invoke<LocalDifyApp>("save_local_dify_app", { app }),
+  deleteLocalDifyApp: (appId) => invoke<void>("delete_local_dify_app", { appId }),
+  listLocalDifyProviders: () => invoke<LocalDifyProvider[]>("list_local_dify_providers"),
+  saveLocalDifyProvider: (input) => invoke<LocalDifyProvider>("save_local_dify_provider", { input }),
+  deleteLocalDifyProvider: (providerId) => invoke<void>("delete_local_dify_provider", { providerId }),
+  testLocalDifyProvider: (providerId) => invoke<LocalDifyProviderTest>("test_local_dify_provider", { providerId }),
+  runLocalDifyApp: (request) => invoke<LocalDifyRunResult>("run_local_dify_app", { request }),
+  listenLocalDifyStream: async (requestId, onEvent) => listen<LocalDifyStreamEvent>(`local-dify-stream-${requestId}`, (event) => onEvent(event.payload)),
+  listLocalDifyRuns: (appId, limit) => invoke<LocalDifyRunSummary[]>("list_local_dify_runs", { appId, limit }),
+  publishLocalDifyApp: (appId) => invoke<LocalDifyApp>("publish_local_dify_app", { appId }),
+  getLocalDifyAppApiToken: (appId) => invoke<string>("get_local_dify_app_api_token", { appId }),
+  checkLocalDifyCompatibility: (appId) => invoke<DifyCompatibilityReport>("check_local_dify_compatibility", { appId }),
+  importLocalDifyDsl: (sourcePath) => invoke<LocalDifyApp>("import_local_dify_dsl", { sourcePath }),
+  exportLocalDifyDsl: (appId, targetPath) => invoke<string>("export_local_dify_dsl", { appId, targetPath }),
+  getLocalDifyServiceStatus: () => invoke<LocalDifyServiceStatus>("get_local_dify_service_status"),
+  startLocalDifyService: (port) => invoke<LocalDifyServiceStatus>("start_local_dify_service", { port }),
+  stopLocalDifyService: () => invoke<LocalDifyServiceStatus>("stop_local_dify_service"),
   runAgentTurn: (request) => invoke<AgentTurnResult>("run_agent_turn", { request }),
   listenAgentStream: async (requestId, onEvent) => listen<AgentStreamEvent>(`agent-stream-${requestId}`, (event) => onEvent(event.payload)),
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),

@@ -6,6 +6,7 @@ import "./styles/tokens.css";
 import "./styles/global.css";
 import "./styles/workspace.css";
 import "./styles/data.css";
+import "./styles/local-dify.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

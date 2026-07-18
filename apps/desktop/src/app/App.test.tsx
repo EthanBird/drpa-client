@@ -114,6 +114,33 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByText(/workspace\.sqlite3/)).toBeVisible();
   });
 
+  it("develops and streams a Local Dify app, then exposes its compatible API", async () => {
+    const runApp = vi.spyOn(desktopGateway, "runLocalDifyApp");
+    const startService = vi.spyOn(desktopGateway, "startLocalDifyService");
+    useAppStore.setState({ activeNavigation: "localDify" });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "AI 应用" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "本地 Dify 调试应用" })).toBeVisible();
+    const input = screen.getByLabelText("Local Dify 调试输入");
+    fireEvent.change(input, { target: { value: "验证本地流式输出" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行 Local Dify 应用" }));
+
+    await waitFor(() => expect(runApp).toHaveBeenCalledWith(expect.objectContaining({
+      appId: "app-browser-preview",
+      query: "验证本地流式输出",
+      stream: true,
+    })));
+    expect(await screen.findByRole("heading", { name: "Local Dify 调试结果" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "API 与导出" }));
+    const startButton = await screen.findByRole("button", { name: "启动服务" });
+    await waitFor(() => expect(startButton).toBeEnabled());
+    fireEvent.click(startButton);
+    await waitFor(() => expect(startService).toHaveBeenCalledWith(34130));
+    expect((await screen.findAllByText("http://127.0.0.1:34130/v1"))[0]).toBeVisible();
+  });
+
   it("generates SQL with the configured Agent and inserts it without executing", async () => {
     const runAgent = vi.spyOn(desktopGateway, "runAgentTurn");
     const executeSql = vi.spyOn(desktopGateway, "executeDatabaseSql");
@@ -281,7 +308,7 @@ describe("DRPA Next desktop shell", () => {
     expect((await screen.findAllByText("Dify Loves Hermes"))[0]).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "启动" }));
     await waitFor(() => expect(startPlugin).toHaveBeenCalledWith("dify-loves-hermes"));
-    expect(screen.getAllByText(/Dify App API 转换为本地 OpenAI 兼容接口/)[0]).toBeVisible();
+    expect(screen.getAllByText(/Dify App API 转换为 OpenAI 兼容接口/)[0]).toBeVisible();
     expect(screen.getByText("http://127.0.0.1:34121/v1")).toBeVisible();
     fireEvent.click(await screen.findByRole("button", { name: "测试 Dify 连接" }));
     await waitFor(() => expect(testPluginConnection).toHaveBeenCalledWith("dify-loves-hermes"));

@@ -18,6 +18,7 @@ import { useAppStore } from "./store";
 
 const StudioPage = lazy(() => import("../pages/StudioPage").then((module) => ({ default: module.StudioPage })));
 const DataPage = lazy(() => import("../pages/DataPage").then((module) => ({ default: module.DataPage })));
+const LocalDifyPage = lazy(() => import("../pages/LocalDifyPage").then((module) => ({ default: module.LocalDifyPage })));
 
 function waitForTwoPaints(): Promise<void> {
   const schedule = (callback: FrameRequestCallback) => {
@@ -158,6 +159,7 @@ export function App() {
         {activeNavigation === "workbench" && <WorkbenchPage />}
         {activeNavigation === "runs" && <RunsPage />}
         {activeNavigation === "automations" && <AutomationsPage />}
+        {activeNavigation === "localDify" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载 AI 应用工作台…</h2></div></div>}><LocalDifyPage /></Suspense>}
         {activeNavigation === "agent" && <AgentPage />}
         {activeNavigation === "plugins" && <PluginsPage />}
         {activeNavigation === "docs" && <DocsPage />}

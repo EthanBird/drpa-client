@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-PLUGIN_VERSION = "0.2.0"
+PLUGIN_VERSION = "0.3.0"
 STATE_PATH = Path(os.environ.get("DRPA_PLUGIN_CONFIG", "state.json"))
 CONVERSATIONS_PATH = STATE_PATH.with_name("conversations.json")
 CONVERSATION_LOCK = threading.Lock()
@@ -147,11 +147,15 @@ def open_dify(
     session: str,
     query: str,
     streaming: bool,
+    trace_headers: dict[str, str] | None = None,
 ):
     body = compact_json(dify_payload(config, session, query, streaming)).encode("utf-8")
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream" if streaming else "application/json"}
     if config["api_key"]:
         headers["Authorization"] = f"Bearer {config['api_key']}"
+    for name, value in (trace_headers or {}).items():
+        if value:
+            headers[name] = value
     request = urllib.request.Request(dify_endpoint(config), data=body, headers=headers, method="POST")
     try:
         return urllib.request.urlopen(request, timeout=config["timeout_seconds"])
@@ -222,15 +226,25 @@ def extract_answer(data: dict[str, Any]) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
-def call_dify_blocking(config: dict[str, Any], session: str, query: str) -> tuple[str, dict[str, Any]]:
-    with open_dify(config, session, query, False) as response:
+def call_dify_blocking(
+    config: dict[str, Any],
+    session: str,
+    query: str,
+    trace_headers: dict[str, str] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    with open_dify(config, session, query, False, trace_headers) as response:
         data = json.loads(response.read().decode("utf-8"))
     remember_conversation(session, data)
     return extract_answer(data), data
 
 
-def iter_dify_stream(config: dict[str, Any], session: str, query: str) -> Iterable[tuple[str, dict[str, Any]]]:
-    with open_dify(config, session, query, True) as response:
+def iter_dify_stream(
+    config: dict[str, Any],
+    session: str,
+    query: str,
+    trace_headers: dict[str, str] | None = None,
+) -> Iterable[tuple[str, dict[str, Any]]]:
+    with open_dify(config, session, query, True, trace_headers) as response:
         event_data: list[str] = []
         for raw in response:
             line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
@@ -353,7 +367,7 @@ def stream_chunk(model: str, delta: dict[str, Any], finish_reason: str | None = 
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DRPA-DifyBridge/0.2"
+    server_version = "DRPA-DifyBridge/0.3"
 
     def log_message(self, format: str, *args: Any) -> None:
         log(format % args)
@@ -397,6 +411,11 @@ class Handler(BaseHTTPRequestHandler):
             session = normalize_session(payload, config)
             model = str(payload.get("model") or config["model"])
             query = tool_bridge_query(messages, tools) if tools else plain_query(messages)
+            trace_headers = {
+                "X-DRPA-Trace-Id": self.headers.get("X-DRPA-Trace-Id", ""),
+                "X-DRPA-Provider-Route": self.headers.get("X-DRPA-Provider-Route", ""),
+                "X-DRPA-Hop-Count": self.headers.get("X-DRPA-Hop-Count", ""),
+            }
             if payload.get("stream") and not tools:
                 completion_id = f"chatcmpl-{uuid.uuid4().hex}"
                 self.send_response(200)
@@ -406,7 +425,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(stream_chunk(model, {"role": "assistant"}, completion_id=completion_id))
                 self.wfile.flush()
-                for content, _event in iter_dify_stream(config, session, query):
+                for content, _event in iter_dify_stream(config, session, query, trace_headers):
                     if content:
                         self.wfile.write(stream_chunk(model, {"content": content}, completion_id=completion_id))
                         self.wfile.flush()
@@ -414,7 +433,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
                 return
-            answer, _metadata = call_dify_blocking(config, session, query)
+            answer, _metadata = call_dify_blocking(config, session, query, trace_headers)
             envelope = parse_tool_envelope(answer, tools) if tools else {"type": "final", "content": answer}
             if payload.get("stream"):
                 completion_id = f"chatcmpl-{uuid.uuid4().hex}"

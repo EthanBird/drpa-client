@@ -1,8 +1,8 @@
 schema: 1
 id: dify-loves-hermes
 name: Dify Loves Hermes
-version: 0.2.0
-description: 将 Dify App API 转换为本地 OpenAI 兼容接口，并补充外部工具调用桥。
+version: 0.3.0
+description: 将本地或远程 Dify App API 转换为 OpenAI 兼容接口，并补充工具调用与 Provider 链路追踪。
 types:
   - provider-adapter
   - service

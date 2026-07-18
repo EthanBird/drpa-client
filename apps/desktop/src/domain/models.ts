@@ -7,6 +7,7 @@ export type NavigationId =
   | "runs"
   | "automations"
   | "agent"
+  | "localDify"
   | "plugins"
   | "docs"
   | "runtimes"
@@ -121,6 +122,126 @@ export interface RemoteDatabaseProfile {
 export interface RemoteConnectionTest {
   serverVersion: string;
   latencyMs: number;
+}
+
+export type LocalDifyAppMode = "chat" | "completion" | "advanced-chat" | "workflow";
+
+export interface LocalDifyProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  contextWindow: number;
+  maxOutputTokens: number;
+  temperature: number;
+  streaming: boolean;
+  supportsTools: boolean;
+  supportsJson: boolean;
+  supportsVision: boolean;
+  timeoutSeconds: number;
+  customHeaders: Record<string, string>;
+  difyProvider: string;
+  difyModel: string;
+  hasApiKey: boolean;
+  updatedAt: number;
+}
+
+export interface LocalDifyProviderInput extends Omit<LocalDifyProvider, "hasApiKey" | "updatedAt"> {
+  apiKey: string;
+}
+
+export interface LocalDifyApp {
+  schema: number;
+  id: string;
+  name: string;
+  description: string;
+  mode: LocalDifyAppMode;
+  providerId: string;
+  systemPrompt: string;
+  openingStatement: string;
+  inputKey: string;
+  temperature: number;
+  maxOutputTokens: number;
+  publishedVersion: number;
+  apiEnabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LocalDifyRunRequest {
+  requestId: string;
+  appId: string;
+  query: string;
+  inputs: Record<string, unknown>;
+  user: string;
+  stream: boolean;
+  conversationId: string;
+  providerRoute?: string[];
+}
+
+export interface LocalDifyUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface LocalDifyRunResult {
+  runId: string;
+  appId: string;
+  answer: string;
+  conversationId: string;
+  providerId: string;
+  model: string;
+  usage: LocalDifyUsage;
+  durationMs: number;
+}
+
+export type LocalDifyStreamEvent =
+  | { type: "started"; runId: string }
+  | { type: "delta"; content: string }
+  | { type: "completed"; runId: string };
+
+export interface LocalDifyRunSummary {
+  id: string;
+  appId: string;
+  appName: string;
+  status: "success" | "failed" | string;
+  query: string;
+  answer: string;
+  providerId: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  durationMs: number;
+  error: string;
+  createdAt: number;
+}
+
+export interface LocalDifyProviderTest {
+  ok: boolean;
+  message: string;
+  model: string;
+  durationMs: number;
+}
+
+export interface DifyCompatibilityIssue {
+  level: "info" | "warning" | "error" | string;
+  code: string;
+  message: string;
+}
+
+export interface DifyCompatibilityReport {
+  compatible: boolean;
+  targetVersion: string;
+  issues: DifyCompatibilityIssue[];
+}
+
+export interface LocalDifyServiceStatus {
+  running: boolean;
+  port: number;
+  endpoint: string;
+  startedAt?: number;
+  lastError: string;
 }
 
 export interface RuntimeStatus {

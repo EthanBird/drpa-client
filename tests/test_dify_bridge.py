@@ -136,3 +136,56 @@ def test_provider_connection_uses_dify_parameters_endpoint() -> None:
 
     assert result["ok"] is True
     assert result["details"]["input_fields"] == 1
+
+
+def test_bridge_forwards_provider_route_headers_to_nested_dify(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, str] = {}
+    monkeypatch.setattr(dify_bridge, "CONVERSATIONS_PATH", tmp_path / "conversations.json")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            observed["route"] = self.headers.get("X-DRPA-Provider-Route", "")
+            observed["hops"] = self.headers.get("X-DRPA-Hop-Count", "")
+            observed["trace"] = self.headers.get("X-DRPA-Trace-Id", "")
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            body = json.dumps({"answer": "nested ok", "conversation_id": "nested-conversation"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        answer, _ = dify_bridge.call_dify_blocking(
+            {
+                "base_url": f"http://127.0.0.1:{server.server_port}/v1",
+                "api_key": "",
+                "app_type": "chat",
+                "input_key": "query",
+                "timeout_seconds": 5,
+            },
+            "session",
+            "hello",
+            {
+                "X-DRPA-Provider-Route": "app-one,app-two",
+                "X-DRPA-Hop-Count": "2",
+                "X-DRPA-Trace-Id": "trace-test",
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert answer == "nested ok"
+    assert observed == {"route": "app-one,app-two", "hops": "2", "trace": "trace-test"}
