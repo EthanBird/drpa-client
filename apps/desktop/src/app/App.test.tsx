@@ -272,7 +272,8 @@ describe("DRPA Next desktop shell", () => {
   });
 
   it("manages local service plugins and exposes a provider endpoint", async () => {
-    const startPlugin = vi.spyOn(desktopGateway, "startPlugin").mockResolvedValue();
+    const startPlugin = vi.spyOn(desktopGateway, "startPlugin");
+    const testPluginConnection = vi.spyOn(desktopGateway, "testPluginConnection");
     useAppStore.setState({ activeNavigation: "plugins" });
     render(<App />);
 
@@ -282,6 +283,15 @@ describe("DRPA Next desktop shell", () => {
     await waitFor(() => expect(startPlugin).toHaveBeenCalledWith("dify-loves-hermes"));
     expect(screen.getAllByText(/Dify App API 转换为本地 OpenAI 兼容接口/)[0]).toBeVisible();
     expect(screen.getByText("http://127.0.0.1:34121/v1")).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "测试 Dify 连接" }));
+    await waitFor(() => expect(testPluginConnection).toHaveBeenCalledWith("dify-loves-hermes"));
+    expect(await screen.findByText(/Dify App API 连接成功/)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "插件开发" }));
+    fireEvent.change(screen.getByLabelText("插件项目 ID"), { target: { value: "example-tool" } });
+    fireEvent.change(screen.getByLabelText("插件项目名称"), { target: { value: "Example Tool" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+    expect(await screen.findByText("Example Tool")).toBeVisible();
   });
 
   it("renders streamed Agent Markdown and supports editing or regenerating the latest turn", async () => {

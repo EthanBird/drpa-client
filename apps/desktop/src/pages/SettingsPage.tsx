@@ -3,7 +3,6 @@ import {
   Bot,
   Brain,
   CheckCircle2,
-  CircleAlert,
   Cpu,
   Database,
   Download,
@@ -11,20 +10,19 @@ import {
   FolderOpen,
   KeyRound,
   Languages,
-  Library,
   Link2,
   Moon,
   Palette,
-  Plus,
   Save,
   Sun,
-  Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { useAppStore, type FontScale } from "../app/store";
-import type { AgentSkillPackage, AgentWorkspaceConfig, PlatformCapabilities, WindowsUpdateSession, WindowsUpdateStatus } from "../domain/models";
+import type { AgentWorkspaceConfig, PlatformCapabilities, WindowsUpdateSession, WindowsUpdateStatus } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
+
+const SkillWorkspace = lazy(() => import("../components/SkillWorkspace").then((module) => ({ default: module.SkillWorkspace })));
 
 const phaseLabel: Record<WindowsUpdateStatus["phase"], string> = {
   verifying: "读取更新包",
@@ -46,14 +44,6 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-}
-
-function skillTemplate(name: string) {
-  return `# ${name}\n\n## 工作流\n\n1. 读取必要上下文。\n2. 执行可验证的最小步骤。\n3. 运行检查并报告结果。\n`;
-}
-
-function skillManifestTemplate(name: string) {
-  return `schema: 2\nid: ${name}\nname: ${name}\nversion: 1.0.0\ndescription: 说明这个 Skill 解决什么问题，以及应该在何时使用。\nactivation:\n  intents: []\n  file_patterns: []\npermissions:\n  workspace_read: true\n  workspace_write: false\n  network: false\ntools: []\nlibraries: []\n`;
 }
 
 export function SettingsPage() {
@@ -82,46 +72,12 @@ export function SettingsPage() {
   const [agentWorkspaceError, setAgentWorkspaceError] = useState("");
   const [documentTab, setDocumentTab] = useState<"agents" | "memory">("agents");
   const [documentDraft, setDocumentDraft] = useState("");
-  const [selectedSkill, setSelectedSkill] = useState("");
-  const [skillDraft, setSkillDraft] = useState("");
-  const [skillManifestDraft, setSkillManifestDraft] = useState("");
-  const [skillPackage, setSkillPackage] = useState<AgentSkillPackage | null>(null);
-  const [skillEditorTab, setSkillEditorTab] = useState<"manifest" | "instructions" | "code">("manifest");
-  const [selectedSkillFile, setSelectedSkillFile] = useState("");
-  const [skillFileDraft, setSkillFileDraft] = useState("");
-  const [newSkillFile, setNewSkillFile] = useState("");
-  const [newSkillName, setNewSkillName] = useState("");
-  const [skillNotice, setSkillNotice] = useState("");
-  const [pendingDeleteSkill, setPendingDeleteSkill] = useState("");
   const [updateSession, setUpdateSession] = useState<WindowsUpdateSession | null>(null);
   const [updateStatus, setUpdateStatus] = useState<WindowsUpdateStatus | null>(null);
   const [updateError, setUpdateError] = useState("");
   const [updating, setUpdating] = useState(false);
   const pollTimer = useRef<number | undefined>(undefined);
   const restartRequested = useRef(false);
-
-  const reloadAgentWorkspace = async (preferredSkill?: string) => {
-    const config = await desktopGateway.getAgentWorkspaceConfig();
-    setAgentWorkspace(config);
-    setAgentWorkspaceError("");
-    setDocumentDraft(documentTab === "agents" ? config.agentsMarkdown : config.memoryMarkdown);
-    const nextSkill = preferredSkill && config.skills.some((skill) => skill.name === preferredSkill)
-      ? preferredSkill
-      : selectedSkill && config.skills.some((skill) => skill.name === selectedSkill)
-        ? selectedSkill
-        : config.skills[0]?.name ?? "";
-    setSelectedSkill(nextSkill);
-    if (nextSkill) {
-      const packageData = await desktopGateway.readAgentSkillPackage(nextSkill);
-      setSkillPackage(packageData);
-      setSkillManifestDraft(packageData.manifestYaml);
-      setSkillDraft(packageData.instructionsMarkdown);
-    } else {
-      setSkillPackage(null);
-      setSkillManifestDraft("");
-      setSkillDraft("");
-    }
-  };
 
   useEffect(() => {
     void desktopGateway.getDataDirectory().then(setDataDirectory);
@@ -136,17 +92,9 @@ export function SettingsPage() {
         });
       }
     });
-    void desktopGateway.getAgentWorkspaceConfig().then(async (config) => {
+    void desktopGateway.getAgentWorkspaceConfig().then((config) => {
       setAgentWorkspace(config);
       setDocumentDraft(config.agentsMarkdown);
-      const first = config.skills[0]?.name ?? "";
-      setSelectedSkill(first);
-      if (first) {
-        const packageData = await desktopGateway.readAgentSkillPackage(first);
-        setSkillPackage(packageData);
-        setSkillManifestDraft(packageData.manifestYaml);
-        setSkillDraft(packageData.instructionsMarkdown);
-      }
     }).catch((error: unknown) => setAgentWorkspaceError(String(error)));
     return () => window.clearTimeout(pollTimer.current);
   }, []);
@@ -167,91 +115,6 @@ export function SettingsPage() {
       setAgentWorkspaceError(documentTab === "agents" ? "AGENTS.md 已保存" : "MEMORY.md 已保存");
     } catch (error) {
       setAgentWorkspaceError(String(error));
-    }
-  };
-
-  const selectSkill = async (name: string) => {
-    try {
-      setSelectedSkill(name);
-      const packageData = await desktopGateway.readAgentSkillPackage(name);
-      setSkillPackage(packageData);
-      setSkillManifestDraft(packageData.manifestYaml);
-      setSkillDraft(packageData.instructionsMarkdown);
-      setSelectedSkillFile("");
-      setSkillFileDraft("");
-      setSkillNotice("");
-    } catch (error) {
-      setSkillNotice(String(error));
-    }
-  };
-
-  const createSkill = async () => {
-    const name = newSkillName.trim().toLowerCase().replace(/\s+/g, "-");
-    if (!name) return;
-    try {
-      await desktopGateway.writeAgentSkillPackage(name, skillManifestTemplate(name), skillTemplate(name));
-      setNewSkillName("");
-      setSkillNotice(`Skill 已创建：${name}`);
-      await reloadAgentWorkspace(name);
-    } catch (error) {
-      setSkillNotice(String(error));
-    }
-  };
-
-  const saveSkill = async () => {
-    if (!selectedSkill) return;
-    try {
-      if (skillEditorTab === "code" && selectedSkillFile) {
-        await desktopGateway.writeAgentSkillFile(selectedSkill, selectedSkillFile, skillFileDraft);
-      } else {
-        await desktopGateway.writeAgentSkillPackage(selectedSkill, skillManifestDraft, skillDraft);
-      }
-      setSkillNotice(`Skill 已保存：${selectedSkill}`);
-      await reloadAgentWorkspace(selectedSkill);
-    } catch (error) {
-      setSkillNotice(String(error));
-    }
-  };
-
-  const selectSkillFile = async (relativePath: string) => {
-    if (!selectedSkill) return;
-    try {
-      setSelectedSkillFile(relativePath);
-      setSkillFileDraft(await desktopGateway.readAgentSkillFile(selectedSkill, relativePath));
-      setSkillEditorTab("code");
-      setSkillNotice("");
-    } catch (error) {
-      setSkillNotice(String(error));
-    }
-  };
-
-  const createSkillFile = async () => {
-    const relativePath = newSkillFile.trim().replace(/\\/g, "/");
-    if (!selectedSkill || !relativePath) return;
-    const content = relativePath.endsWith(".py")
-      ? "def run(arguments, context):\n    return {\"arguments\": arguments}\n"
-      : "";
-    try {
-      await desktopGateway.writeAgentSkillFile(selectedSkill, relativePath, content);
-      setNewSkillFile("");
-      await reloadAgentWorkspace(selectedSkill);
-      await selectSkillFile(relativePath);
-      setSkillNotice(`已创建能力包文件：${relativePath}`);
-    } catch (error) {
-      setSkillNotice(String(error));
-    }
-  };
-
-  const deleteSkill = async () => {
-    if (!pendingDeleteSkill) return;
-    try {
-      await desktopGateway.deleteAgentSkill(pendingDeleteSkill);
-      setSkillNotice(`Skill 已删除：${pendingDeleteSkill}`);
-      setPendingDeleteSkill("");
-      setSelectedSkill("");
-      await reloadAgentWorkspace();
-    } catch (error) {
-      setSkillNotice(String(error));
     }
   };
 
@@ -371,30 +234,8 @@ export function SettingsPage() {
           <textarea className="agent-document-editor" aria-label={documentTab === "agents" ? "编辑 AGENTS.md" : "编辑 MEMORY.md"} value={documentDraft} onChange={(event) => setDocumentDraft(event.target.value)} spellCheck={false} />
         </section>
 
-        <section className="settings-card settings-card-wide skills-library-card">
-          <header><Library size={18} /><div><h2>Skills 2.0 能力包</h2><p>Skill 由清单、指令、工作流、资源、可执行工具和代码库组成；ToolRegistry 会自动发现清单中声明的工具。</p></div></header>
-          <div className="skills-library-layout">
-            <aside className="skills-library-sidebar">
-              <div className="skill-create-row"><input aria-label="新 Skill 名称" value={newSkillName} onChange={(event) => setNewSkillName(event.target.value.toLowerCase())} onKeyDown={(event) => { if (event.key === "Enter") void createSkill(); }} placeholder="new-skill" /><button type="button" aria-label="创建 Skill" onClick={() => void createSkill()} disabled={!newSkillName.trim()}><Plus size={14} /></button></div>
-              <div className="skill-list">{agentWorkspace?.skills.map((skill) => <button type="button" className={selectedSkill === skill.name ? "active" : ""} onClick={() => void selectSkill(skill.name)} key={skill.name}><strong>{skill.displayName || skill.name}</strong><span>{skill.description}</span><small>v{skill.version || "1.0.0"} · {skill.toolCount || 0} tools · {skill.libraryCount || 0} libs</small></button>)}{agentWorkspace?.skills.length === 0 && <p>暂无 Skill</p>}</div>
-            </aside>
-            <div className="skill-editor-pane">
-              <header><div><strong>{selectedSkill || "选择或创建一个 Skill"}</strong><span>{skillNotice}</span></div><button className="button ghost small danger-text" type="button" disabled={!selectedSkill} onClick={() => setPendingDeleteSkill(selectedSkill)}><Trash2 size={13} /> 删除</button><button className="button secondary small" type="button" disabled={!selectedSkill} onClick={() => void saveSkill()}><Save size={13} /> 保存 Skill</button></header>
-              <div className="skill-v2-tabs" role="tablist" aria-label="Skill 能力包文件">
-                <button type="button" role="tab" aria-selected={skillEditorTab === "manifest"} className={skillEditorTab === "manifest" ? "active" : ""} onClick={() => setSkillEditorTab("manifest")}>skill.yaml</button>
-                <button type="button" role="tab" aria-selected={skillEditorTab === "instructions"} className={skillEditorTab === "instructions" ? "active" : ""} onClick={() => setSkillEditorTab("instructions")}>instructions.md</button>
-                {skillPackage?.files.filter((file) => !["skill.yaml", "instructions.md", "SKILL.md"].includes(file)).map((file) => <button type="button" role="tab" aria-selected={skillEditorTab === "code" && selectedSkillFile === file} className={skillEditorTab === "code" && selectedSkillFile === file ? "active" : ""} onClick={() => void selectSkillFile(file)} key={file}>{file}</button>)}
-              </div>
-              <div className="skill-file-create"><input aria-label="新能力包文件路径" value={newSkillFile} onChange={(event) => setNewSkillFile(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createSkillFile(); }} placeholder="tools/example.py 或 workflows/main.yaml" /><button className="button ghost small" type="button" onClick={() => void createSkillFile()} disabled={!selectedSkill || !newSkillFile.trim()}><Plus size={12} /> 新建文件</button></div>
-              {skillEditorTab === "manifest" && <textarea aria-label="编辑 skill.yaml" value={skillManifestDraft} onChange={(event) => setSkillManifestDraft(event.target.value)} disabled={!selectedSkill} spellCheck={false} />}
-              {skillEditorTab === "instructions" && <textarea aria-label="编辑 instructions.md" value={skillDraft} onChange={(event) => setSkillDraft(event.target.value)} disabled={!selectedSkill} spellCheck={false} />}
-              {skillEditorTab === "code" && <textarea aria-label="编辑 Skill 代码文件" value={skillFileDraft} onChange={(event) => setSkillFileDraft(event.target.value)} disabled={!selectedSkillFile} spellCheck={false} />}
-            </div>
-          </div>
-        </section>
+        <Suspense fallback={<section className="settings-card settings-card-wide skill-workspace-loading">正在加载 Skills 代码编辑器…</section>}><SkillWorkspace /></Suspense>
       </div>
-
-      {pendingDeleteSkill && <div className="knowledge-confirm-overlay" role="dialog" aria-modal="true" aria-label="确认删除 Skill"><section className="knowledge-confirm"><div className="knowledge-confirm-icon"><CircleAlert size={18} /></div><div><h2>删除 Skill？</h2><p>“{pendingDeleteSkill}”的清单、指令、工具、代码库与全部能力包文件将从本地 Skills 库删除。</p></div><footer><button className="button secondary" type="button" onClick={() => setPendingDeleteSkill("")}>取消</button><button className="button danger" type="button" onClick={() => void deleteSkill()}>确认删除</button></footer></section></div>}
 
       {updateStatus && (
         <div className="update-progress-overlay" role="dialog" aria-modal="true" aria-label="Windows 更新进度">

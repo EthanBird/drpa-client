@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::State;
 use uuid::Uuid;
+use zip::write::SimpleFileOptions;
 
 use crate::AppPaths;
 
@@ -49,6 +50,109 @@ result = function(arguments, context) if len(parameters) >= 2 else function(argu
 json.dump({"ok": True, "result": result}, sys.stdout, ensure_ascii=False)
 "#;
 
+const TOOL_PLUGIN_TEMPLATE: &str = r#"schema: 1
+id: {id}
+name: {name}
+version: 0.1.0
+description: DRPA 本地工具插件。
+types: [tool-provider]
+tools:
+  - name: example
+    description: 返回调用参数和插件上下文。
+    runtime: bundled-python
+    entry: tools/example.py:run
+    timeout_seconds: 30
+    parameters:
+      type: object
+      properties:
+        text: { type: string }
+      required: [text]
+      additionalProperties: false
+default_config: {}
+"#;
+
+const SERVICE_PLUGIN_TEMPLATE: &str = r#"schema: 1
+id: {id}
+name: {name}
+version: 0.1.0
+description: DRPA 本地 OpenAI 兼容服务插件。
+types: [provider-adapter, service]
+service:
+  runtime: bundled-python
+  entry: service/main.py
+  transport: http
+  endpoint: http://127.0.0.1:{port}/v1
+  healthcheck: http://127.0.0.1:{port}/v1/health
+tools: []
+default_config:
+  port: 34201
+  model: local-plugin
+"#;
+
+const TOOL_PYTHON_TEMPLATE: &str = r#"def run(arguments, context):
+    return {
+        "text": arguments["text"],
+        "plugin_root": context.get("pluginRoot"),
+    }
+"#;
+
+const SERVICE_PYTHON_TEMPLATE: &str = r#"from __future__ import annotations
+
+import json
+import os
+import time
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+STATE_PATH = Path(os.environ["DRPA_PLUGIN_CONFIG"])
+
+
+def config():
+    return json.loads(STATE_PATH.read_text(encoding="utf-8")).get("config", {})
+
+
+class Handler(BaseHTTPRequestHandler):
+    def send_json(self, status, value):
+        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        settings = config()
+        if self.path.rstrip("/") in {"/health", "/v1/health"}:
+            self.send_json(200, {"status": "ok"})
+        elif self.path.rstrip("/") == "/v1/models":
+            self.send_json(200, {"object": "list", "data": [{"id": settings.get("model", "local-plugin"), "object": "model"}]})
+        else:
+            self.send_json(404, {"error": {"message": "Not found"}})
+
+    def do_POST(self):
+        if self.path.rstrip("/") != "/v1/chat/completions":
+            self.send_json(404, {"error": {"message": "Not found"}})
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        messages = payload.get("messages", [])
+        content = str(messages[-1].get("content", "")) if messages else ""
+        settings = config()
+        self.send_json(200, {
+            "id": f"chatcmpl-{uuid.uuid4().hex}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": payload.get("model") or settings.get("model", "local-plugin"),
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": f"Plugin received: {content}"}, "finish_reason": "stop"}],
+        })
+
+
+if __name__ == "__main__":
+    settings = config()
+    ThreadingHTTPServer(("127.0.0.1", int(settings.get("port", 34201))), Handler).serve_forever()
+"#;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct PluginManifest {
     pub(crate) schema: u32,
@@ -78,6 +182,8 @@ pub(crate) struct PluginServiceManifest {
     pub(crate) endpoint: String,
     #[serde(default)]
     pub(crate) healthcheck: String,
+    #[serde(default)]
+    pub(crate) test_endpoint: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -126,6 +232,19 @@ pub(crate) struct PluginLogLine {
     timestamp: u64,
     stream: String,
     message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PluginProjectSummary {
+    id: String,
+    name: String,
+    version: String,
+    description: String,
+    types: Vec<String>,
+    directory: String,
+    valid: bool,
+    validation_message: String,
 }
 
 pub(crate) struct PluginToolExecution {
@@ -286,6 +405,162 @@ pub(crate) fn get_plugin_logs(
         .cloned()
         .collect();
     Ok(result)
+}
+
+#[tauri::command]
+pub(crate) async fn test_plugin_connection(
+    plugin_id: String,
+    paths: State<'_, AppPaths>,
+) -> Result<Value, String> {
+    let workspace_root = paths.workspace_root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (root, manifest) = load_plugin(&workspace_root, &plugin_id)?;
+        let state = read_plugin_state(&root, &manifest)?;
+        let service = manifest
+            .service
+            .ok_or_else(|| "该插件没有 Provider 服务".to_owned())?;
+        if service.test_endpoint.trim().is_empty() {
+            return Err("该插件没有声明连接测试入口".to_owned());
+        }
+        let endpoint = render_endpoint(&service.test_endpoint, &state.config);
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(35)))
+            .build();
+        let http = ureq::Agent::new_with_config(config);
+        let mut response = http
+            .get(&endpoint)
+            .call()
+            .map_err(|error| format!("插件连接测试失败：{error}"))?;
+        response
+            .body_mut()
+            .read_json::<Value>()
+            .map_err(|error| format!("插件连接测试返回无效 JSON：{error}"))
+    })
+    .await
+    .map_err(|error| format!("插件连接测试后台任务失败：{error}"))?
+}
+
+#[tauri::command]
+pub(crate) fn list_plugin_projects(
+    paths: State<'_, AppPaths>,
+) -> Result<Vec<PluginProjectSummary>, String> {
+    list_plugin_projects_inner(&paths.workspace_root)
+}
+
+#[tauri::command]
+pub(crate) fn create_plugin_project(
+    plugin_id: String,
+    name: String,
+    project_type: String,
+    paths: State<'_, AppPaths>,
+) -> Result<PluginProjectSummary, String> {
+    validate_identifier(&plugin_id, "插件")?;
+    let display_name = name.trim();
+    if display_name.is_empty() || display_name.len() > 80 {
+        return Err("插件名称需要 1-80 个字符".to_owned());
+    }
+    let root = plugin_projects_root(&paths.workspace_root).join(&plugin_id);
+    if root.exists() {
+        return Err(format!("插件项目已存在：{plugin_id}"));
+    }
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let result = (|| {
+        let manifest = match project_type.as_str() {
+            "tool" => {
+                fs::create_dir_all(root.join("tools")).map_err(|error| error.to_string())?;
+                fs::write(root.join("tools/example.py"), TOOL_PYTHON_TEMPLATE)
+                    .map_err(|error| error.to_string())?;
+                TOOL_PLUGIN_TEMPLATE
+            }
+            "service" => {
+                fs::create_dir_all(root.join("service")).map_err(|error| error.to_string())?;
+                fs::write(root.join("service/main.py"), SERVICE_PYTHON_TEMPLATE)
+                    .map_err(|error| error.to_string())?;
+                fs::write(
+                    root.join("config.schema.json"),
+                    serde_json::to_vec_pretty(&json!({
+                        "type": "object",
+                        "properties": {
+                            "port": {"type": "integer", "title": "监听端口", "minimum": 1024, "maximum": 65535},
+                            "model": {"type": "string", "title": "模型名称"}
+                        },
+                        "required": ["port", "model"]
+                    }))
+                    .map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?;
+                SERVICE_PLUGIN_TEMPLATE
+            }
+            _ => return Err("插件项目类型只支持 tool 或 service".to_owned()),
+        };
+        fs::write(
+            root.join("plugin.yaml"),
+            manifest
+                .replace("{id}", &plugin_id)
+                .replace("{name}", display_name),
+        )
+        .map_err(|error| error.to_string())?;
+        fs::write(
+            root.join("README.md"),
+            format!("# {display_name}\n\n使用 DRPA 插件开发工具验证、构建并安装。\n"),
+        )
+        .map_err(|error| error.to_string())?;
+        validate_plugin_project_root(&root, &plugin_id)
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&root);
+        return Err(error);
+    }
+    list_plugin_projects_inner(&paths.workspace_root)?
+        .into_iter()
+        .find(|project| project.id == plugin_id)
+        .ok_or_else(|| "插件项目创建后读取失败".to_owned())
+}
+
+#[tauri::command]
+pub(crate) fn validate_plugin_project(
+    plugin_id: String,
+    paths: State<'_, AppPaths>,
+) -> Result<PluginProjectSummary, String> {
+    validate_identifier(&plugin_id, "插件")?;
+    let root = plugin_projects_root(&paths.workspace_root).join(&plugin_id);
+    validate_plugin_project_root(&root, &plugin_id)?;
+    list_plugin_projects_inner(&paths.workspace_root)?
+        .into_iter()
+        .find(|project| project.id == plugin_id)
+        .ok_or_else(|| "插件项目不存在".to_owned())
+}
+
+#[tauri::command]
+pub(crate) fn build_plugin_project(
+    plugin_id: String,
+    paths: State<'_, AppPaths>,
+) -> Result<String, String> {
+    build_plugin_project_inner(&paths.workspace_root, &plugin_id)
+}
+
+fn build_plugin_project_inner(workspace_root: &Path, plugin_id: &str) -> Result<String, String> {
+    validate_identifier(plugin_id, "插件")?;
+    let root = plugin_projects_root(workspace_root).join(plugin_id);
+    let manifest = validate_plugin_project_root(&root, plugin_id)?;
+    let output_root = workspace_root.join("build").join("plugins");
+    fs::create_dir_all(&output_root).map_err(|error| error.to_string())?;
+    let output = output_root.join(format!("{}-{}.drpa-plugin", manifest.id, manifest.version));
+    let file = File::create(&output).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let mut files = Vec::new();
+    collect_plugin_project_files(&root, &root, &mut files)?;
+    files.sort();
+    for relative in files {
+        archive
+            .start_file(relative.replace('\\', "/"), options)
+            .map_err(|error| error.to_string())?;
+        let mut source = File::open(root.join(&relative)).map_err(|error| error.to_string())?;
+        std::io::copy(&mut source, &mut archive).map_err(|error| error.to_string())?;
+    }
+    archive.finish().map_err(|error| error.to_string())?;
+    Ok(output.to_string_lossy().into_owned())
 }
 
 pub(crate) fn start_plugin_inner(
@@ -903,6 +1178,12 @@ fn parse_plugin_manifest(
         {
             return Err("插件 service.healthcheck 必须是 http(s) 地址".to_owned());
         }
+        if !service.test_endpoint.is_empty()
+            && !(service.test_endpoint.starts_with("http://")
+                || service.test_endpoint.starts_with("https://"))
+        {
+            return Err("插件 service.test_endpoint 必须是 http(s) 地址".to_owned());
+        }
     }
     let mut tool_names = HashSet::new();
     for tool in &manifest.tools {
@@ -1141,8 +1422,109 @@ fn qualified_plugin_tool_name(plugin: &str, tool: &str) -> String {
     format!("plugin_{plugin}__{tool}")
 }
 
+fn list_plugin_projects_inner(workspace_root: &Path) -> Result<Vec<PluginProjectSummary>, String> {
+    let root = plugin_projects_root(workspace_root);
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let mut projects = Vec::new();
+    for entry in fs::read_dir(&root)
+        .map_err(|error| error.to_string())?
+        .flatten()
+    {
+        if !entry.path().is_dir() || !entry.path().join("plugin.yaml").is_file() {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        let result = validate_plugin_project_root(&entry.path(), &id);
+        match result {
+            Ok(manifest) => projects.push(PluginProjectSummary {
+                id,
+                name: manifest.name,
+                version: manifest.version,
+                description: manifest.description,
+                types: manifest.types,
+                directory: entry.path().to_string_lossy().into_owned(),
+                valid: true,
+                validation_message: "插件清单与入口文件有效".to_owned(),
+            }),
+            Err(error) => projects.push(PluginProjectSummary {
+                id: id.clone(),
+                name: id,
+                version: "-".to_owned(),
+                description: "插件项目需要修复".to_owned(),
+                types: Vec::new(),
+                directory: entry.path().to_string_lossy().into_owned(),
+                valid: false,
+                validation_message: error,
+            }),
+        }
+    }
+    projects.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(projects)
+}
+
+fn validate_plugin_project_root(root: &Path, expected_id: &str) -> Result<PluginManifest, String> {
+    if !root.is_dir() {
+        return Err(format!("插件项目不存在：{expected_id}"));
+    }
+    let manifest = load_manifest_from_root(root, Some(expected_id))?;
+    if let Some(service) = &manifest.service {
+        resolve_plugin_path(root, &service.entry, true)?;
+    }
+    for tool in &manifest.tools {
+        let entry = tool
+            .entry
+            .split_once(':')
+            .map_or(tool.entry.as_str(), |(path, _)| path);
+        resolve_plugin_path(root, entry, true)?;
+    }
+    let schema = root.join("config.schema.json");
+    if schema.is_file() {
+        serde_json::from_str::<Value>(
+            &fs::read_to_string(schema).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("config.schema.json 无效：{error}"))?;
+    }
+    Ok(manifest)
+}
+
+fn collect_plugin_project_files(
+    root: &Path,
+    current: &Path,
+    output: &mut Vec<String>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(current).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if kind.is_symlink() || name == "__pycache__" || name == "state.json" || name == ".builtin"
+        {
+            continue;
+        }
+        if kind.is_dir() {
+            collect_plugin_project_files(root, &entry.path(), output)?;
+        } else if kind.is_file() && !name.ends_with(".pyc") {
+            output.push(
+                entry
+                    .path()
+                    .strip_prefix(root)
+                    .map_err(|error| error.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+            if output.len() > MAX_PLUGIN_FILES {
+                return Err(format!("插件项目文件超过 {MAX_PLUGIN_FILES} 个"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn plugins_root(workspace_root: &Path) -> PathBuf {
     workspace_root.join("plugins")
+}
+
+fn plugin_projects_root(workspace_root: &Path) -> PathBuf {
+    workspace_root.join("plugin-projects")
 }
 
 fn unix_millis() -> u64 {
@@ -1216,6 +1598,39 @@ mod tests {
         assert_eq!(plugins[0].endpoint, format!("http://127.0.0.1:{port}/v1"));
 
         stop_plugin_inner("dify-loves-hermes", &manager).unwrap();
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn validates_and_collects_generated_plugin_projects() {
+        let workspace =
+            std::env::temp_dir().join(format!("drpa-plugin-project-{}", Uuid::new_v4()));
+        let root = plugin_projects_root(&workspace).join("example-service");
+        fs::create_dir_all(root.join("service")).unwrap();
+        fs::write(
+            root.join("plugin.yaml"),
+            SERVICE_PLUGIN_TEMPLATE
+                .replace("{id}", "example-service")
+                .replace("{name}", "Example Service"),
+        )
+        .unwrap();
+        fs::write(root.join("service/main.py"), SERVICE_PYTHON_TEMPLATE).unwrap();
+        fs::write(root.join("state.json"), "{}").unwrap();
+        fs::create_dir_all(root.join("service/__pycache__")).unwrap();
+        fs::write(root.join("service/__pycache__/main.pyc"), b"ignored").unwrap();
+
+        let manifest = validate_plugin_project_root(&root, "example-service").unwrap();
+        assert!(manifest.types.contains(&"provider-adapter".to_owned()));
+        let mut files = Vec::new();
+        collect_plugin_project_files(&root, &root, &mut files).unwrap();
+        files.sort();
+        assert_eq!(files, vec!["plugin.yaml", "service/main.py"]);
+        let package = build_plugin_project_inner(&workspace, "example-service").unwrap();
+        let mut archive = zip::ZipArchive::new(File::open(package).unwrap()).unwrap();
+        assert!(archive.by_name("plugin.yaml").is_ok());
+        assert!(archive.by_name("service/main.py").is_ok());
+        assert!(archive.by_name("state.json").is_err());
+
         let _ = fs::remove_dir_all(workspace);
     }
 

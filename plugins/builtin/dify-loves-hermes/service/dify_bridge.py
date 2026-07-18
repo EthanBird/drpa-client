@@ -14,10 +14,21 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"
 STATE_PATH = Path(os.environ.get("DRPA_PLUGIN_CONFIG", "state.json"))
-CONVERSATIONS: dict[str, str] = {}
+CONVERSATIONS_PATH = STATE_PATH.with_name("conversations.json")
 CONVERSATION_LOCK = threading.Lock()
+
+
+def load_conversations() -> dict[str, str]:
+    try:
+        value = json.loads(CONVERSATIONS_PATH.read_text(encoding="utf-8"))
+        return {str(key): str(item) for key, item in value.items() if key and item}
+    except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+        return {}
+
+
+CONVERSATIONS: dict[str, str] = load_conversations()
 
 
 def log(message: str) -> None:
@@ -31,6 +42,7 @@ def load_config() -> dict[str, Any]:
         "base_url": str(config.get("base_url", "http://127.0.0.1:5001/v1")).rstrip("/"),
         "api_key": str(config.get("api_key", "")),
         "app_type": str(config.get("app_type", "chat")),
+        "input_key": str(config.get("input_key", "query")),
         "model": str(config.get("model", "dify-app")),
         "port": int(config.get("port", 34121)),
         "user_prefix": str(config.get("user_prefix", "drpa")),
@@ -118,8 +130,8 @@ def dify_payload(
         "response_mode": "streaming" if streaming else "blocking",
         "user": session,
     }
-    if config["app_type"] == "workflow":
-        body["inputs"] = {"query": query}
+    if config["app_type"] in {"completion", "workflow"}:
+        body["inputs"] = {config["input_key"]: query}
     else:
         body["query"] = query
     if config["app_type"] == "chat":
@@ -155,6 +167,44 @@ def remember_conversation(session: str, data: dict[str, Any]) -> None:
     if conversation_id:
         with CONVERSATION_LOCK:
             CONVERSATIONS[session] = str(conversation_id)
+            while len(CONVERSATIONS) > 1000:
+                CONVERSATIONS.pop(next(iter(CONVERSATIONS)))
+            temporary = CONVERSATIONS_PATH.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(CONVERSATIONS, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temporary.replace(CONVERSATIONS_PATH)
+
+
+def test_dify_connection(config: dict[str, Any]) -> dict[str, Any]:
+    headers = {"Accept": "application/json"}
+    if config["api_key"]:
+        headers["Authorization"] = f"Bearer {config['api_key']}"
+    request = urllib.request.Request(
+        f"{config['base_url']}/parameters",
+        headers=headers,
+        method="GET",
+    )
+    started = time.perf_counter()
+    try:
+        with urllib.request.urlopen(request, timeout=min(30, config["timeout_seconds"])) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read(65536).decode("utf-8", errors="replace")
+        raise RuntimeError(f"Dify HTTP {error.code}: {detail}") from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"Dify 连接失败：{error.reason}") from error
+    return {
+        "ok": True,
+        "message": "Dify App API 连接成功",
+        "duration_ms": round((time.perf_counter() - started) * 1000),
+        "details": {
+            "opening_statement": bool(data.get("opening_statement")),
+            "input_fields": len(data.get("user_input_form", [])),
+            "file_upload": bool(data.get("file_upload", {}).get("enabled")),
+        },
+    }
 
 
 def extract_answer(data: dict[str, Any]) -> str:
@@ -303,7 +353,7 @@ def stream_chunk(model: str, delta: dict[str, Any], finish_reason: str | None = 
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DRPA-DifyBridge/0.1"
+    server_version = "DRPA-DifyBridge/0.2"
 
     def log_message(self, format: str, *args: Any) -> None:
         log(format % args)
@@ -323,6 +373,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.rstrip("/") == "/v1/models":
             self.send_json(200, {"object": "list", "data": [{"id": config["model"], "object": "model", "owned_by": "dify"}]})
+            return
+        if self.path.rstrip("/") == "/v1/provider/test":
+            try:
+                self.send_json(200, test_dify_connection(config))
+            except Exception as error:
+                self.send_json(502, {"ok": False, "message": str(error), "duration_ms": 0, "details": {}})
             return
         self.send_json(404, {"error": {"message": "Not found", "type": "not_found"}})
 

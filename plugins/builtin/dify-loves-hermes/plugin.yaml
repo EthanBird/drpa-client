@@ -1,7 +1,7 @@
 schema: 1
 id: dify-loves-hermes
 name: Dify Loves Hermes
-version: 0.1.0
+version: 0.2.0
 description: 将 Dify App API 转换为本地 OpenAI 兼容接口，并补充外部工具调用桥。
 types:
   - provider-adapter
@@ -12,11 +12,13 @@ service:
   transport: http
   endpoint: http://127.0.0.1:{port}/v1
   healthcheck: http://127.0.0.1:{port}/v1/health
+  test_endpoint: http://127.0.0.1:{port}/v1/provider/test
 tools: []
 default_config:
   base_url: http://127.0.0.1:5001/v1
   api_key: ""
   app_type: chat
+  input_key: query
   model: dify-app
   port: 34121
   user_prefix: drpa

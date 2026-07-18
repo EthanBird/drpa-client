@@ -16,6 +16,11 @@
       "title": "应用类型",
       "enum": ["chat", "completion", "workflow"]
     },
+    "input_key": {
+      "type": "string",
+      "title": "工作流/文本生成输入变量",
+      "description": "Completion 或 Workflow 中接收对话文本的 inputs 字段名"
+    },
     "model": {
       "type": "string",
       "title": "兼容模型名称"
@@ -41,5 +46,5 @@
       "maximum": 600
     }
   },
-  "required": ["base_url", "app_type", "model", "port"]
+  "required": ["base_url", "app_type", "input_key", "model", "port"]
 }

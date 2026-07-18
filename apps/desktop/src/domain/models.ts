@@ -232,6 +232,12 @@ export interface AgentSkillPackage {
   manifestYaml: string;
   instructionsMarkdown: string;
   files: string[];
+  entries: AgentSkillEntry[];
+}
+
+export interface AgentSkillEntry {
+  path: string;
+  kind: "file" | "directory";
 }
 
 export interface AgentWorkspaceConfig {
@@ -324,6 +330,24 @@ export interface PluginLogLine {
   timestamp: number;
   stream: "stdout" | "stderr";
   message: string;
+}
+
+export interface PluginProjectSummary {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  types: string[];
+  directory: string;
+  valid: boolean;
+  validationMessage: string;
+}
+
+export interface PluginConnectionTest {
+  ok: boolean;
+  message: string;
+  duration_ms: number;
+  details: Record<string, unknown>;
 }
 
 export interface RunEventRecord {

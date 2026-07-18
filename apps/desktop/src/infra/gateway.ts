@@ -19,6 +19,8 @@ import type {
   PackageSummary,
   PlatformCapabilities,
   PluginLogLine,
+  PluginConnectionTest,
+  PluginProjectSummary,
   PluginSummary,
   RuntimeStatus,
   RunDetail,
@@ -94,6 +96,9 @@ export interface DesktopGateway {
   writeAgentSkillPackage(name: string, manifestYaml: string, instructionsMarkdown: string): Promise<void>;
   readAgentSkillFile(name: string, relativePath: string): Promise<string>;
   writeAgentSkillFile(name: string, relativePath: string, content: string): Promise<void>;
+  createAgentSkillDirectory(name: string, relativePath: string): Promise<void>;
+  renameAgentSkillPath(name: string, relativePath: string, newRelativePath: string): Promise<void>;
+  deleteAgentSkillPath(name: string, relativePath: string): Promise<void>;
   deleteAgentSkill(name: string): Promise<void>;
   listPlugins(): Promise<PluginSummary[]>;
   installPlugin(packagePath: string): Promise<PluginSummary>;
@@ -103,6 +108,11 @@ export interface DesktopGateway {
   stopPlugin(pluginId: string): Promise<void>;
   uninstallPlugin(pluginId: string): Promise<void>;
   getPluginLogs(pluginId: string): Promise<PluginLogLine[]>;
+  testPluginConnection(pluginId: string): Promise<PluginConnectionTest>;
+  listPluginProjects(): Promise<PluginProjectSummary[]>;
+  createPluginProject(pluginId: string, name: string, projectType: "tool" | "service"): Promise<PluginProjectSummary>;
+  validatePluginProject(pluginId: string): Promise<PluginProjectSummary>;
+  buildPluginProject(pluginId: string): Promise<string>;
   listKnowledgeEntries(): Promise<KnowledgeEntry[]>;
   readKnowledgeFile(relativePath: string): Promise<string>;
   writeKnowledgeFile(relativePath: string, content: string): Promise<void>;
@@ -136,12 +146,16 @@ const mockAgentSkillManifests = new Map<string, string>([[
   "rpaz-development",
   "schema: 2\nid: rpaz-development\nname: RPAZ Development\nversion: 2.0.0\ndescription: 创建、修改、校验或构建 RPAZ 脚本包时使用。\ntools: []\nlibraries: []\n",
 ]]);
+const mockAgentSkillFiles = new Map<string, string>();
+const mockAgentSkillDirectories = new Set<string>();
+let mockPluginProjects: PluginProjectSummary[] = [];
 let mockPluginRunning = false;
 let mockPluginEnabled = false;
 let mockPluginConfig: Record<string, unknown> = {
   base_url: "http://127.0.0.1:5001/v1",
   api_key: "",
   app_type: "chat",
+  input_key: "query",
   model: "dify-app",
   port: 34121,
   tool_bridge: true,
@@ -151,7 +165,7 @@ function mockPlugins(): PluginSummary[] {
   return [{
     id: "dify-loves-hermes",
     name: "Dify Loves Hermes",
-    version: "0.1.0",
+    version: "0.2.0",
     description: "将 Dify App API 转换为本地 OpenAI 兼容接口，并补充外部工具调用桥。",
     types: ["provider-adapter", "service"],
     enabled: mockPluginEnabled,
@@ -468,11 +482,22 @@ const mockGateway: DesktopGateway = {
   async readAgentSkillPackage(name) {
     const instructionsMarkdown = mockAgentSkills.get(name);
     if (!instructionsMarkdown) throw new Error("Skill 不存在");
+    const extraFiles = [...mockAgentSkillFiles.keys()]
+      .filter((key) => key.startsWith(`${name}:`))
+      .map((key) => key.slice(name.length + 1));
+    const directories = [...mockAgentSkillDirectories]
+      .filter((key) => key.startsWith(`${name}:`))
+      .map((key) => key.slice(name.length + 1));
+    const files = ["skill.yaml", "instructions.md", ...extraFiles];
     return {
       name,
       manifestYaml: mockAgentSkillManifests.get(name) ?? `schema: 2\nid: ${name}\nname: ${name}\nversion: 1.0.0\ndescription: Skill\ntools: []\nlibraries: []\n`,
       instructionsMarkdown,
-      files: ["skill.yaml", "instructions.md"],
+      files,
+      entries: [
+        ...directories.map((path) => ({ path, kind: "directory" as const })),
+        ...files.map((path) => ({ path, kind: "file" as const })),
+      ],
     };
   },
   async writeAgentSkill(name, content) {
@@ -485,11 +510,29 @@ const mockGateway: DesktopGateway = {
   async readAgentSkillFile(name, relativePath) {
     if (relativePath === "skill.yaml") return mockAgentSkillManifests.get(name) ?? "";
     if (relativePath === "instructions.md") return mockAgentSkills.get(name) ?? "";
-    return "";
+    return mockAgentSkillFiles.get(`${name}:${relativePath}`) ?? "";
   },
   async writeAgentSkillFile(name, relativePath, content) {
     if (relativePath === "skill.yaml") mockAgentSkillManifests.set(name, content);
     if (relativePath === "instructions.md") mockAgentSkills.set(name, content);
+    if (!['skill.yaml', 'instructions.md'].includes(relativePath)) mockAgentSkillFiles.set(`${name}:${relativePath}`, content);
+  },
+  async createAgentSkillDirectory(name, relativePath) {
+    mockAgentSkillDirectories.add(`${name}:${relativePath}`);
+  },
+  async renameAgentSkillPath(name, relativePath, newRelativePath) {
+    const fileKey = `${name}:${relativePath}`;
+    if (mockAgentSkillFiles.has(fileKey)) {
+      const content = mockAgentSkillFiles.get(fileKey) ?? "";
+      mockAgentSkillFiles.delete(fileKey);
+      mockAgentSkillFiles.set(`${name}:${newRelativePath}`, content);
+    }
+    const directoryKey = `${name}:${relativePath}`;
+    if (mockAgentSkillDirectories.delete(directoryKey)) mockAgentSkillDirectories.add(`${name}:${newRelativePath}`);
+  },
+  async deleteAgentSkillPath(name, relativePath) {
+    mockAgentSkillFiles.delete(`${name}:${relativePath}`);
+    mockAgentSkillDirectories.delete(`${name}:${relativePath}`);
   },
   async deleteAgentSkill(name) {
     mockAgentSkills.delete(name);
@@ -503,6 +546,15 @@ const mockGateway: DesktopGateway = {
   async stopPlugin() { mockPluginRunning = false; },
   async uninstallPlugin() { mockPluginEnabled = false; mockPluginRunning = false; },
   async getPluginLogs() { return mockPluginRunning ? [{ timestamp: Date.now(), stream: "stderr", message: "listening on http://127.0.0.1:34121/v1" }] : []; },
+  async testPluginConnection() { return { ok: true, message: "Dify App API 连接成功", duration_ms: 18, details: { input_fields: 1 } }; },
+  async listPluginProjects() { return mockPluginProjects; },
+  async createPluginProject(pluginId, name, projectType) {
+    const project = { id: pluginId, name, version: "0.1.0", description: "DRPA 插件项目", types: [projectType === "tool" ? "tool-provider" : "provider-adapter", ...(projectType === "service" ? ["service"] : [])], directory: `浏览器预览数据/plugin-projects/${pluginId}`, valid: true, validationMessage: "插件清单与入口文件有效" };
+    mockPluginProjects = [...mockPluginProjects, project];
+    return project;
+  },
+  async validatePluginProject(pluginId) { return mockPluginProjects.find((item) => item.id === pluginId) ?? Promise.reject(new Error("插件项目不存在")); },
+  async buildPluginProject(pluginId) { return `浏览器预览数据/build/plugins/${pluginId}-0.1.0.drpa-plugin`; },
 };
 
 const tauriGateway: DesktopGateway = {
@@ -568,6 +620,9 @@ const tauriGateway: DesktopGateway = {
   writeAgentSkillPackage: (name, manifestYaml, instructionsMarkdown) => invoke<void>("write_agent_skill_package", { name, manifestYaml, instructionsMarkdown }),
   readAgentSkillFile: (name, relativePath) => invoke<string>("read_agent_skill_file", { name, relativePath }),
   writeAgentSkillFile: (name, relativePath, content) => invoke<void>("write_agent_skill_file", { name, relativePath, content }),
+  createAgentSkillDirectory: (name, relativePath) => invoke<void>("create_agent_skill_directory", { name, relativePath }),
+  renameAgentSkillPath: (name, relativePath, newRelativePath) => invoke<void>("rename_agent_skill_path", { name, relativePath, newRelativePath }),
+  deleteAgentSkillPath: (name, relativePath) => invoke<void>("delete_agent_skill_path", { name, relativePath }),
   deleteAgentSkill: (name) => invoke<void>("delete_agent_skill", { name }),
   listPlugins: () => invoke<PluginSummary[]>("list_plugins"),
   installPlugin: (packagePath) => invoke<PluginSummary>("install_plugin", { packagePath }),
@@ -577,6 +632,11 @@ const tauriGateway: DesktopGateway = {
   stopPlugin: (pluginId) => invoke<void>("stop_plugin", { pluginId }),
   uninstallPlugin: (pluginId) => invoke<void>("uninstall_plugin", { pluginId }),
   getPluginLogs: (pluginId) => invoke<PluginLogLine[]>("get_plugin_logs", { pluginId }),
+  testPluginConnection: (pluginId) => invoke<PluginConnectionTest>("test_plugin_connection", { pluginId }),
+  listPluginProjects: () => invoke<PluginProjectSummary[]>("list_plugin_projects"),
+  createPluginProject: (pluginId, name, projectType) => invoke<PluginProjectSummary>("create_plugin_project", { pluginId, name, projectType }),
+  validatePluginProject: (pluginId) => invoke<PluginProjectSummary>("validate_plugin_project", { pluginId }),
+  buildPluginProject: (pluginId) => invoke<string>("build_plugin_project", { pluginId }),
   listKnowledgeEntries: () => invoke<KnowledgeEntry[]>("list_knowledge_entries"),
   readKnowledgeFile: (relativePath) => invoke<string>("read_knowledge_file", { relativePath }),
   writeKnowledgeFile: (relativePath, content) => invoke<void>("write_knowledge_file", { relativePath, content }),

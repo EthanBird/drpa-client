@@ -8,6 +8,8 @@ import {
   Download,
   ExternalLink,
   FileCode2,
+  FlaskConical,
+  Hammer,
   LoaderCircle,
   Play,
   PlugZap,
@@ -20,7 +22,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../app/store";
-import type { PluginLogLine, PluginSummary } from "../domain/models";
+import type { PluginLogLine, PluginProjectSummary, PluginSummary } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 
 const statusLabels: Record<PluginSummary["status"], string> = {
@@ -51,6 +53,11 @@ export function PluginsPage() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [pendingUninstall, setPendingUninstall] = useState("");
+  const [projects, setProjects] = useState<PluginProjectSummary[]>([]);
+  const [developerOpen, setDeveloperOpen] = useState(false);
+  const [newProjectId, setNewProjectId] = useState("");
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectType, setNewProjectType] = useState<"tool" | "service">("tool");
 
   const selected = useMemo(
     () => plugins.find((plugin) => plugin.id === selectedId) ?? plugins[0],
@@ -58,7 +65,11 @@ export function PluginsPage() {
   );
 
   const reload = async (preferred?: string) => {
-    const next = await desktopGateway.listPlugins();
+    const [next, nextProjects] = await Promise.all([
+      desktopGateway.listPlugins(),
+      desktopGateway.listPluginProjects(),
+    ]);
+    setProjects(nextProjects);
     setPlugins(next);
     const id = preferred && next.some((plugin) => plugin.id === preferred)
       ? preferred
@@ -138,6 +149,54 @@ export function PluginsPage() {
     setActiveNavigation("agent");
   };
 
+  const testConnection = async () => {
+    if (!selected) return;
+    setBusy(true);
+    setNotice("");
+    try {
+      const result = await desktopGateway.testPluginConnection(selected.id);
+      if (!result.ok) throw new Error(result.message);
+      setNotice(`${result.message} · ${result.duration_ms} ms · 会话映射已持久化`);
+    } catch (error) {
+      setNotice(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createProject = async () => {
+    const id = newProjectId.trim().toLowerCase().replace(/\s+/g, "-");
+    const name = newProjectName.trim() || id;
+    if (!id) return;
+    setBusy(true);
+    try {
+      await desktopGateway.createPluginProject(id, name, newProjectType);
+      setNewProjectId("");
+      setNewProjectName("");
+      await reload(selected?.id);
+      setNotice(`插件项目已创建：${id}`);
+    } catch (error) {
+      setNotice(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const buildAndInstallProject = async (project: PluginProjectSummary) => {
+    setBusy(true);
+    try {
+      await desktopGateway.validatePluginProject(project.id);
+      const packagePath = await desktopGateway.buildPluginProject(project.id);
+      const installed = await desktopGateway.installPlugin(packagePath);
+      await reload(installed.id);
+      setNotice(`已验证、构建并安装：${packagePath}`);
+    } catch (error) {
+      setNotice(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const updateConfig = (key: string, value: unknown) => {
     setConfigDraft((current) => ({ ...current, [key]: value }));
   };
@@ -151,10 +210,17 @@ export function PluginsPage() {
           <p>管理离线服务、模型适配器和工具提供者。插件进程由 DRPA 启停、记录日志并隐藏控制台窗口。</p>
         </div>
         <div className="page-actions">
+          <button className="button secondary" type="button" onClick={() => setDeveloperOpen(!developerOpen)}><Hammer size={13} /> 插件开发</button>
           <button className="button secondary" type="button" onClick={() => void reload(selected?.id)} disabled={busy}><RefreshCw size={13} /> 刷新</button>
           <button className="button primary" type="button" onClick={() => void install()} disabled={busy}><Download size={13} /> 安装本地插件</button>
         </div>
       </header>
+
+      {developerOpen && <section className="plugin-developer-workbench">
+        <header><div><span><Hammer size={14} /> 插件开发工作台</span><small>创建 Tool 或 OpenAI-compatible Service 模板，验证后构建离线 `.drpa-plugin`。</small></div><em>{projects.length} 个项目</em></header>
+        <div className="plugin-project-create"><input aria-label="插件项目 ID" value={newProjectId} onChange={(event) => setNewProjectId(event.target.value.toLowerCase())} placeholder="example-plugin" /><input aria-label="插件项目名称" value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} placeholder="Example Plugin" /><select aria-label="插件项目类型" value={newProjectType} onChange={(event) => setNewProjectType(event.target.value as "tool" | "service")}><option value="tool">Tool Provider</option><option value="service">Provider Service</option></select><button className="button primary small" type="button" onClick={() => void createProject()} disabled={!newProjectId.trim() || busy}><FileCode2 size={12} /> 创建项目</button></div>
+        <div className="plugin-project-list">{projects.map((project) => <article key={project.id}><div className={project.valid ? "valid" : "invalid"}>{project.valid ? <FlaskConical size={14} /> : <CircleAlert size={14} />}</div><span><strong>{project.name}</strong><code>{project.id} · v{project.version} · {project.types.join(" / ")}</code><small>{project.validationMessage}</small></span><button className="button secondary small" type="button" onClick={() => void buildAndInstallProject(project)} disabled={!project.valid || busy}><Hammer size={12} /> 构建并安装</button></article>)}{projects.length === 0 && <p>还没有插件项目。创建后源码保存在工作区 `plugin-projects/`。</p>}</div>
+      </section>}
 
       <div className="plugins-layout">
         <aside className="plugin-catalog">
@@ -210,6 +276,7 @@ export function PluginsPage() {
               <header><Bot size={15} /><div><h3>Provider 与工具</h3><p>{selected.toolCount} 个 Tool · {selected.types.join(" · ")}</p></div></header>
               <label><span>OpenAI 兼容 Endpoint</span><div><code>{selected.endpoint || "未导出 Endpoint"}</code><button type="button" title="复制 Endpoint" onClick={() => void navigator.clipboard.writeText(selected.endpoint)} disabled={!selected.endpoint}><Copy size={12} /></button></div></label>
               <button className="button primary" type="button" onClick={useAsProvider} disabled={!selected.endpoint || selected.status !== "running"}><ExternalLink size={13} /> 用作 AI Agent Provider</button>
+              {selected.id === "dify-loves-hermes" && <button className="button secondary" type="button" onClick={() => void testConnection()} disabled={selected.status !== "running" || busy}><FlaskConical size={13} /> 测试 Dify 连接</button>}
               <small>工具桥会把 Dify 的结构化决策转换为 OpenAI `tool_calls`，再交给 DRPA ToolRegistry 执行。</small>
             </section>
 

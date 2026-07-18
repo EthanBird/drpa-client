@@ -108,7 +108,7 @@ def run(arguments, context):
 
 ### 旧版迁移
 
-工作区中的 `SKILL.md` 会在初始化时迁移为 `skill.yaml + instructions.md`。旧文件保留，避免覆盖用户内容。设置页可以直接编辑清单、指令以及能力包中的 Python/YAML/JSON 等文件。
+工作区中的 `SKILL.md` 会在初始化时迁移为 `skill.yaml + instructions.md`。旧文件保留，避免覆盖用户内容。设置页内置 Skills 能力工作区：用目录树浏览能力包，以 Monaco 编辑 Python/YAML/JSON/Markdown，并支持创建、重命名、删除文件与子目录。`skill.yaml` 和 `instructions.md` 是受保护的包根文件。
 
 ## 插件包
 
@@ -205,6 +205,24 @@ DRPA Agent → OpenAI tools + messages
 - 卸载前二次确认
 
 插件状态保存在自身目录的 `state.json`。自动启动只在 sealed runtime 已经就绪时执行，不触发运行环境重建。
+
+## 插件开发工作台
+
+插件页可以创建两类本地项目：
+
+- `Tool Provider`：生成 `plugin.yaml`、JSON Schema 和可执行 Python tool。
+- `Provider Service`：生成隐藏运行的 HTTP Service、健康检查、模型列表和配置 Schema。
+
+源码保存在工作区 `plugin-projects/<id>/`。构建前会校验清单、配置 Schema 和全部入口文件；成功后输出 `build/plugins/<id>-<version>.drpa-plugin`，并可直接安装到当前 DRPA。构建器排除 `state.json`、`__pycache__`、`.pyc` 和 Host 标记，确保开发状态不会进入发布包。
+
+## Dify 连接与会话
+
+`dify-loves-hermes` 0.2 增加：
+
+- `GET /v1/provider/test`：使用 Dify `/parameters` 检查 URL、API Key 和 App 参数，并返回耗时与输入字段摘要。
+- `conversations.json`：原子持久化最近 1000 个 DRPA Session 到 Dify `conversation_id` 的映射，插件重启后继续同一会话。
+- `input_key`：把 Completion/Workflow 的对话文本写入指定 `inputs` 变量，适配不同 Dify App 的输入表单。
+- 插件页“测试 Dify 连接”按钮：区分 Bridge 已启动和上游 Dify App API 真正可用。
 
 ## 当前协议边界
 

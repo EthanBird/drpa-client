@@ -122,6 +122,14 @@ pub(crate) struct AgentSkillPackage {
     pub(crate) manifest_yaml: String,
     pub(crate) instructions_markdown: String,
     pub(crate) files: Vec<String>,
+    pub(crate) entries: Vec<AgentSkillEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentSkillEntry {
+    pub(crate) path: String,
+    pub(crate) kind: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -284,6 +292,58 @@ pub(crate) fn write_agent_skill_file(
 }
 
 #[tauri::command]
+pub(crate) fn create_agent_skill_directory(
+    name: String,
+    relative_path: String,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    let path = resolve_skill_file(&paths.workspace_root, &name, &relative_path, false)?;
+    if path.exists() {
+        return Err(format!("Skill 路径已存在：{relative_path}"));
+    }
+    fs::create_dir_all(path).map_err(|error| format!("创建 Skill 目录失败：{error}"))
+}
+
+#[tauri::command]
+pub(crate) fn rename_agent_skill_path(
+    name: String,
+    relative_path: String,
+    new_relative_path: String,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    reject_protected_skill_path(&relative_path)?;
+    reject_protected_skill_path(&new_relative_path)?;
+    let source = resolve_skill_file(&paths.workspace_root, &name, &relative_path, true)?;
+    let target = resolve_skill_file(&paths.workspace_root, &name, &new_relative_path, false)?;
+    if target.exists() {
+        return Err(format!("Skill 路径已存在：{new_relative_path}"));
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::rename(source, target).map_err(|error| format!("重命名 Skill 路径失败：{error}"))
+}
+
+#[tauri::command]
+pub(crate) fn delete_agent_skill_path(
+    name: String,
+    relative_path: String,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    reject_protected_skill_path(&relative_path)?;
+    let target = resolve_skill_file(&paths.workspace_root, &name, &relative_path, true)?;
+    let metadata = fs::symlink_metadata(&target).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("Skill 路径类型无效".to_owned());
+    }
+    if metadata.is_dir() {
+        fs::remove_dir_all(target).map_err(|error| format!("删除 Skill 目录失败：{error}"))
+    } else {
+        fs::remove_file(target).map_err(|error| format!("删除 Skill 文件失败：{error}"))
+    }
+}
+
+#[tauri::command]
 pub(crate) fn delete_agent_skill(name: String, paths: State<'_, AppPaths>) -> Result<(), String> {
     ensure_agent_workspace(&paths.workspace_root)?;
     validate_skill_name(&name)?;
@@ -434,14 +494,20 @@ pub(crate) fn read_skill_package(
         let legacy = read_bounded_text(&root.join("SKILL.md"), MAX_DOCUMENT_BYTES)?;
         (legacy_manifest(name, &legacy), legacy)
     };
-    let mut files = Vec::new();
-    collect_skill_files(&root, &root, &mut files)?;
-    files.sort();
+    let mut entries = Vec::new();
+    collect_skill_entries(&root, &root, &mut entries)?;
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    let files = entries
+        .iter()
+        .filter(|entry| entry.kind == "file")
+        .map(|entry| entry.path.clone())
+        .collect();
     Ok(AgentSkillPackage {
         name: name.to_owned(),
         manifest_yaml,
         instructions_markdown,
         files,
+        entries,
     })
 }
 
@@ -902,10 +968,10 @@ fn resolve_child_file(
     Ok(target)
 }
 
-fn collect_skill_files(
+fn collect_skill_entries(
     root: &Path,
     current: &Path,
-    output: &mut Vec<String>,
+    output: &mut Vec<AgentSkillEntry>,
 ) -> Result<(), String> {
     for entry in fs::read_dir(current).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -913,21 +979,35 @@ fn collect_skill_files(
         if kind.is_symlink() {
             continue;
         }
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|error| error.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
         if kind.is_dir() {
-            collect_skill_files(root, &entry.path(), output)?;
+            output.push(AgentSkillEntry {
+                path: relative,
+                kind: "directory".to_owned(),
+            });
+            collect_skill_entries(root, &entry.path(), output)?;
         } else if kind.is_file() {
-            output.push(
-                entry
-                    .path()
-                    .strip_prefix(root)
-                    .map_err(|error| error.to_string())?
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            );
+            output.push(AgentSkillEntry {
+                path: relative,
+                kind: "file".to_owned(),
+            });
         }
         if output.len() > 2048 {
             return Err("Skill 文件超过 2048 个".to_owned());
         }
+    }
+    Ok(())
+}
+
+fn reject_protected_skill_path(relative_path: &str) -> Result<(), String> {
+    let normalized = relative_path.replace('\\', "/");
+    if matches!(normalized.as_str(), "skill.yaml" | "instructions.md") {
+        return Err("skill.yaml 和 instructions.md 是能力包必需文件".to_owned());
     }
     Ok(())
 }
@@ -1085,6 +1165,18 @@ libraries:
         .unwrap();
         let package = read_skill_package(&workspace, "test-skill").unwrap();
         assert!(package.manifest_yaml.contains("runtime: python"));
+        assert!(
+            package
+                .entries
+                .iter()
+                .any(|entry| entry.path == "tools" && entry.kind == "directory")
+        );
+        assert!(
+            package
+                .entries
+                .iter()
+                .any(|entry| entry.path == "lib/helper.py" && entry.kind == "file")
+        );
         let definitions = skill_tool_definitions(&workspace).unwrap();
         assert_eq!(definitions[0]["function"]["name"], "skill_test-skill__echo");
         if let Some(python) = find_test_python() {
