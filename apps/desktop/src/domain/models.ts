@@ -68,6 +68,13 @@ export interface StudioCompletionResult {
   status: string;
 }
 
+export interface StudioInspectResult {
+  found: boolean;
+  data: Record<string, string>;
+  metadata: unknown;
+  status: string;
+}
+
 export interface DatabaseInfo {
   name: string;
   engine: "SQLite" | string;
@@ -97,6 +104,22 @@ export interface DatabaseQueryResult {
   durationMs: number;
   truncated: boolean;
   statementType: string;
+}
+
+export interface RemoteDatabaseProfile {
+  id: string;
+  name: string;
+  engine: "postgresql" | "mysql";
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  tlsMode: "disable" | "prefer" | "require";
+}
+
+export interface RemoteConnectionTest {
+  serverVersion: string;
+  latencyMs: number;
 }
 
 export interface RuntimeStatus {
@@ -141,6 +164,8 @@ export interface AgentTurnRequest {
   requestId: string;
   baseUrl: string;
   model: string;
+  mode?: "rpaz" | "sql";
+  databaseDialect?: "sqlite" | "postgresql" | "mysql";
   apiKey: string;
   projectId: string;
   stream: boolean;

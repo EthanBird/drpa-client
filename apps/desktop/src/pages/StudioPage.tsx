@@ -75,6 +75,125 @@ function ensurePythonCompletionProvider() {
       }
     },
   });
+  if (monaco.languages.registerHoverProvider) {
+    monaco.languages.registerHoverProvider("python", {
+      provideHover: async (model, position, token) => {
+        const target = pythonInspectionTarget(model, position);
+        if (!target) return null;
+        try {
+          const result = await desktopGateway.inspectStudioPython(target.projectId, target.code, target.cursorPos, 0);
+          const text = inspectionText(result.data);
+          if (token.isCancellationRequested || result.status !== "ok" || !result.found || !text) return null;
+          const word = model.getWordAtPosition(position);
+          return {
+            contents: [{ value: `\`\`\`text\n${text.replaceAll("```", "'''")}\n\`\`\`` }],
+            range: word ? new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn) : undefined,
+          };
+        } catch {
+          return null;
+        }
+      },
+    });
+  }
+  if (monaco.languages.registerSignatureHelpProvider) {
+    monaco.languages.registerSignatureHelpProvider("python", {
+      signatureHelpTriggerCharacters: ["(", ","],
+      signatureHelpRetriggerCharacters: [","],
+      provideSignatureHelp: async (model, position, token) => {
+        const target = pythonInspectionTarget(model, position);
+        if (!target) return null;
+        try {
+          const result = await desktopGateway.inspectStudioPython(target.projectId, target.code, target.cursorPos, 0);
+          const text = inspectionText(result.data);
+          const parsed = parsePythonSignature(text);
+          if (token.isCancellationRequested || result.status !== "ok" || !result.found || !parsed) return null;
+          return {
+            value: {
+              signatures: [{
+                label: parsed.label,
+                documentation: parsed.documentation,
+                parameters: parsed.parameters.map((label) => ({ label })),
+              }],
+              activeSignature: 0,
+              activeParameter: Math.min(activeCallParameter(target.code, target.cursorPos), Math.max(0, parsed.parameters.length - 1)),
+            },
+            dispose: () => undefined,
+          };
+        } catch {
+          return null;
+        }
+      },
+    });
+  }
+}
+
+function pythonInspectionTarget(model: monaco.editor.ITextModel, position: monaco.Position) {
+  if (model.uri.scheme !== "drpa-python") return null;
+  const projectId = decodeURIComponent(model.uri.path.split("/").filter(Boolean)[0] ?? "");
+  if (!projectId) return null;
+  const code = model.getValue();
+  const utf16Cursor = model.getOffsetAt(position);
+  return { projectId, code, cursorPos: Array.from(code.slice(0, utf16Cursor)).length };
+}
+
+function inspectionText(data: Record<string, string>): string {
+  return (data["text/plain"] ?? Object.values(data)[0] ?? "")
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .trim()
+    .slice(0, 60_000);
+}
+
+export function parsePythonSignature(text: string): { label: string; parameters: string[]; documentation: string } | null {
+  const clean = text.replace(/\u001b\[[0-9;]*m/g, "").trim();
+  const signatureLine = clean.split(/\r?\n/).find((line) => /^Signature:\s*.+\(.*\)/.test(line.trim()))?.trim();
+  if (!signatureLine) return null;
+  const label = signatureLine.replace(/^Signature:\s*/, "");
+  const opening = label.indexOf("(");
+  const closing = label.lastIndexOf(")");
+  const parameters = opening >= 0 && closing > opening
+    ? splitPythonParameters(label.slice(opening + 1, closing)).filter((parameter) => parameter !== "/" && parameter !== "*")
+    : [];
+  const documentation = clean.split(/\r?\n/).filter((line) => !line.trim().startsWith("Signature:")).join("\n").trim();
+  return { label, parameters, documentation };
+}
+
+function splitPythonParameters(value: string): string[] {
+  const parameters: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (character === quote && value[index - 1] !== "\\") quote = "";
+      continue;
+    }
+    if (character === "'" || character === '"') { quote = character; continue; }
+    if ("([{<".includes(character)) depth += 1;
+    if (")]}>".includes(character)) depth = Math.max(0, depth - 1);
+    if (character === "," && depth === 0) {
+      parameters.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  const final = value.slice(start).trim();
+  if (final) parameters.push(final);
+  return parameters;
+}
+
+function activeCallParameter(code: string, cursorPos: number): number {
+  const prefix = Array.from(code).slice(0, cursorPos).join("");
+  let depth = 0;
+  let commas = 0;
+  for (let index = prefix.length - 1; index >= 0; index -= 1) {
+    const character = prefix[index];
+    if (character === ")") depth += 1;
+    else if (character === "(") {
+      if (depth === 0) return commas;
+      depth -= 1;
+    } else if (character === "," && depth === 0) commas += 1;
+  }
+  return 0;
 }
 
 function codePointOffsetToUtf16(value: string, offset: number): number {

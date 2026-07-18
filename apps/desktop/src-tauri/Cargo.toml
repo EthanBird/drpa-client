@@ -21,10 +21,12 @@ drpa-protocol = { path = "../../../crates/drpa-protocol" }
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "any", "postgres", "mysql"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 ureq = { version = "3", features = ["json"] }
 uuid.workspace = true
+url = "2"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -198,6 +198,28 @@ class JupyterKernelBridge:
             "status": str(content.get("status", "error")),
         }
 
+    def inspect(self, request_id: str, source: str, cursor_pos: int, detail_level: int = 0) -> dict[str, Any]:
+        """Return hover/signature documentation from the live IPython namespace."""
+
+        cursor_pos = max(0, min(int(cursor_pos), len(source)))
+        detail_level = max(0, min(int(detail_level), 1))
+        message_id = self.client.inspect(source, cursor_pos=cursor_pos, detail_level=detail_level)
+        reply = self._shell_reply(message_id)
+        content = reply.get("content", {})
+        raw_data = content.get("data", {}) if content.get("status") == "ok" else {}
+        data = {
+            str(key): str(value)[:100_000]
+            for key, value in raw_data.items()
+            if isinstance(key, str) and isinstance(value, (str, int, float, bool))
+        }
+        return {
+            "request_id": request_id,
+            "found": bool(content.get("found", False)),
+            "data": data,
+            "metadata": content.get("metadata", {}),
+            "status": str(content.get("status", "error")),
+        }
+
     def _shell_reply(self, message_id: str) -> dict[str, Any]:
         while True:
             message = self.client.get_shell_msg(timeout=30)
@@ -250,6 +272,13 @@ def main() -> int:
                         str(request.get("code", "")),
                         int(request.get("cursor_pos", 0)),
                     )
+                elif request_type == "inspect":
+                    response = kernel.inspect(
+                        str(request["request_id"]),
+                        str(request.get("code", "")),
+                        int(request.get("cursor_pos", 0)),
+                        int(request.get("detail_level", 0)),
+                    )
                 else:
                     raise ValueError("unsupported kernel request")
             except BaseException as exception:  # noqa: BLE001 - keep protocol alive for malformed requests
@@ -261,6 +290,14 @@ def main() -> int:
                         "matches": [],
                         "cursor_start": cursor_pos,
                         "cursor_end": cursor_pos,
+                        "metadata": {"error": error},
+                        "status": "error",
+                    }
+                elif request_type == "inspect":
+                    response = {
+                        "request_id": str(request.get("request_id", "")),
+                        "found": False,
+                        "data": {},
                         "metadata": {"error": error},
                         "status": "error",
                     }

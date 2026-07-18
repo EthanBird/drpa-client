@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StudioPage } from "../pages/StudioPage";
+import { parsePythonSignature, StudioPage } from "../pages/StudioPage";
 import { WorkbenchPage } from "../pages/WorkbenchPage";
 import { RuntimePage } from "../pages/RuntimePage";
 import { SettingsPage } from "../pages/SettingsPage";
@@ -97,6 +97,14 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByText("发票中心")).toBeVisible();
   });
 
+  it("parses nested Python signatures for Monaco parameter hints", () => {
+    expect(parsePythonSignature("Signature: ctx.sql(query: str, params: tuple[int, str] = ())\n\n执行参数化 SQL。")).toEqual({
+      label: "ctx.sql(query: str, params: tuple[int, str] = ())",
+      parameters: ["query: str", "params: tuple[int, str] = ()"],
+      documentation: "执行参数化 SQL。",
+    });
+  });
+
   it("opens the local data workbench and loads the SQLite schema", async () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "数据工作台" }));
@@ -104,6 +112,47 @@ describe("DRPA Next desktop shell", () => {
     expect(await screen.findByRole("heading", { name: "数据工作台" })).toBeVisible();
     expect(await screen.findByText("example_tasks")).toBeVisible();
     expect(screen.getByText(/workspace\.sqlite3/)).toBeVisible();
+  });
+
+  it("generates SQL with the configured Agent and inserts it without executing", async () => {
+    const runAgent = vi.spyOn(desktopGateway, "runAgentTurn");
+    const executeSql = vi.spyOn(desktopGateway, "executeDatabaseSql");
+    useAppStore.setState({ activeNavigation: "data", agentStreamEnabled: false });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "数据工作台" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "AI 写 SQL" }));
+    const prompt = await screen.findByLabelText("描述查询需求");
+    fireEvent.change(prompt, { target: { value: "查询所有待处理任务" } });
+    fireEvent.click(screen.getByRole("button", { name: /生成 SQL/ }));
+
+    await waitFor(() => expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({ mode: "sql", projectId: "" })));
+    expect(await screen.findByText("SQL 已就绪")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "替换编辑器" }));
+
+    expect((screen.getByLabelText("mock-editor") as HTMLTextAreaElement).value).toContain("FROM example_tasks");
+    expect(executeSql).not.toHaveBeenCalled();
+  });
+
+  it("creates and connects a remote PostgreSQL profile", async () => {
+    const saveProfile = vi.spyOn(desktopGateway, "saveRemoteDatabaseProfile");
+    const testConnection = vi.spyOn(desktopGateway, "testRemoteDatabaseConnection");
+    const listTables = vi.spyOn(desktopGateway, "listRemoteDatabaseTables");
+    useAppStore.setState({ activeNavigation: "data" });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "数据工作台" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "新建数据库连接" }));
+    fireEvent.change(screen.getByLabelText("连接名称"), { target: { value: "分析库" } });
+    fireEvent.change(screen.getByLabelText("数据库"), { target: { value: "analytics" } });
+    fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "reporter" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "session-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并连接" }));
+
+    await waitFor(() => expect(testConnection).toHaveBeenCalled());
+    await waitFor(() => expect(saveProfile).toHaveBeenCalledWith(expect.objectContaining({ engine: "postgresql", database: "analytics" })));
+    await waitFor(() => expect(listTables).toHaveBeenCalledWith(expect.any(String), "session-secret"));
+    expect(await screen.findByText("public.remote_tasks")).toBeVisible();
   });
 
   it("loads persisted run details when opening the run history", async () => {

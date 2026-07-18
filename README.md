@@ -11,9 +11,9 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - 内置 CPython 3.11、完整离线 wheels、Chrome for Testing、Fixed Version WebView2 和真实 Jupyter Kernel 依赖。
 - 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
 - 工作室可新建项目、编辑源码和 Notebook、直接运行工作副本、导出 `.rpaz`，也可将已安装包复制为可编辑项目。
-- 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路，并通过标准 `complete_request` 为 Python 文件和 Notebook 提供离线补全。
-- 运行记录持久化到 Host SQLite；可进入详情查看完整时间线、参数、产物、错误回溯和重启中断状态。
-- 内置自有数据工作台：对象树、Monaco SQL 编辑器、结果网格、字段结构和查询历史；RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
+- 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路，并通过标准 `complete_request` / `inspect_request` 为 Python 文件和 Notebook 提供离线补全、悬停文档与参数提示。
+- 运行记录持久化到 Host SQLite；可进入详情查看完整时间线、筛选/复制日志、参数、产物、错误回溯和重启中断状态。
+- 内置自有数据工作台：工作区 SQLite 与 PostgreSQL/MySQL 连接、对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
 - 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model 与会话级可选 key，通过六个项目工具和三个知识库工具完成读取、写入、校验、构建和 sealed Python 辅助；支持本地会话列表、逐会话项目绑定、重命名/删除及配置面板折叠。
 - 内置本地 Markdown 知识库：支持目录树、阅读/编辑/分栏渲染、相对文档跳转、内联新建/重命名/删除、拖拽导入、原生导入导出与自动保存，并首次初始化多篇详细 RPAZ 开发指南。
 - 协议化 `.drpa-update` 差量更新，包含可视化进度、结构/大小检查、精确基线匹配、独立 Worker、失败回滚和新 Host 启动确认；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。

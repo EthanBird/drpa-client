@@ -172,6 +172,15 @@ struct StudioKernelCompletionResponse {
     status: String,
 }
 
+#[derive(Deserialize)]
+struct StudioKernelInspectResponse {
+    request_id: String,
+    found: bool,
+    data: serde_json::Value,
+    metadata: serde_json::Value,
+    status: String,
+}
+
 #[derive(Deserialize, Serialize)]
 struct StudioVariable {
     name: String,
@@ -200,6 +209,15 @@ struct StudioCompletionResult {
     matches: Vec<String>,
     cursor_start: usize,
     cursor_end: usize,
+    metadata: serde_json::Value,
+    status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioInspectResult {
+    found: bool,
+    data: serde_json::Value,
     metadata: serde_json::Value,
     status: String,
 }
@@ -803,6 +821,24 @@ async fn complete_studio_python(
     .map_err(|error| format!("执行 Python 补全任务失败：{error}"))?
 }
 
+#[tauri::command]
+async fn inspect_studio_python(
+    project_id: String,
+    code: String,
+    cursor_pos: usize,
+    detail_level: u8,
+    paths: State<'_, AppPaths>,
+    kernels: State<'_, StudioKernelManager>,
+) -> Result<StudioInspectResult, String> {
+    let paths = paths.inner().clone();
+    let kernels = kernels.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        inspect_studio_python_blocking(project_id, code, cursor_pos, detail_level, &paths, &kernels)
+    })
+    .await
+    .map_err(|error| format!("执行 Python 符号检查任务失败：{error}"))?
+}
+
 fn complete_studio_python_blocking(
     project_id: String,
     code: String,
@@ -856,6 +892,70 @@ fn complete_studio_python_blocking(
             matches: response.matches,
             cursor_start: response.cursor_start,
             cursor_end: response.cursor_end,
+            metadata: response.metadata,
+            status: response.status,
+        })
+    })();
+    if result.is_err() {
+        sessions.remove(&project_id);
+    }
+    result
+}
+
+fn inspect_studio_python_blocking(
+    project_id: String,
+    code: String,
+    cursor_pos: usize,
+    detail_level: u8,
+    paths: &AppPaths,
+    kernels: &StudioKernelManager,
+) -> Result<StudioInspectResult, String> {
+    validate_project_id(&project_id)?;
+    let mut sessions = kernels
+        .sessions
+        .lock()
+        .map_err(|_| "Studio Kernel 状态已损坏".to_owned())?;
+    if let std::collections::hash_map::Entry::Vacant(entry) = sessions.entry(project_id.clone()) {
+        entry.insert(spawn_studio_kernel(&project_id, paths)?);
+    }
+    let request_id = Uuid::new_v4().simple().to_string();
+    let result = (|| {
+        let session = sessions
+            .get_mut(&project_id)
+            .ok_or_else(|| "创建 Studio Kernel 失败".to_owned())?;
+        serde_json::to_writer(
+            &mut session.stdin,
+            &serde_json::json!({
+                "type": "inspect",
+                "request_id": request_id.clone(),
+                "code": code,
+                "cursor_pos": cursor_pos,
+                "detail_level": detail_level.min(1),
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+        session
+            .stdin
+            .write_all(b"\n")
+            .and_then(|_| session.stdin.flush())
+            .map_err(|error| format!("向 Kernel 发送符号检查请求失败：{error}"))?;
+        let mut line = String::new();
+        if session
+            .stdout
+            .read_line(&mut line)
+            .map_err(|error| format!("读取 Kernel 符号检查响应失败：{error}"))?
+            == 0
+        {
+            return Err("Studio Kernel 已意外退出".to_owned());
+        }
+        let response: StudioKernelInspectResponse = serde_json::from_str(&line)
+            .map_err(|error| format!("Kernel 返回无效符号检查响应：{error}"))?;
+        if response.request_id != request_id {
+            return Err("Kernel 符号检查响应与当前请求不匹配".to_owned());
+        }
+        Ok(StudioInspectResult {
+            found: response.found,
+            data: response.data,
             metadata: response.metadata,
             status: response.status,
         })
@@ -940,15 +1040,14 @@ async fn run_agent_turn(
     let event_name = agent::agent_stream_event_name(&request.request_id)?;
     let paths = paths.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let runtime = locate_runtime(&paths)?;
-        agent::run_agent_turn(
-            request,
-            paths.workspace_root.clone(),
-            runtime.python,
-            |event| {
-                let _ = app.emit(&event_name, event);
-            },
-        )
+        let python = if request.mode == "sql" {
+            PathBuf::new()
+        } else {
+            locate_runtime(&paths)?.python
+        };
+        agent::run_agent_turn(request, paths.workspace_root.clone(), python, |event| {
+            let _ = app.emit(&event_name, event);
+        })
     })
     .await
     .map_err(|error| format!("Agent 后台任务失败：{error}"))?
@@ -2268,12 +2367,22 @@ pub fn run() {
             prepare_studio_kernel,
             execute_studio_cell,
             complete_studio_python,
+            inspect_studio_python,
             restart_studio_kernel,
             database::get_workspace_database_info,
             database::list_database_tables,
             database::describe_database_table,
             database::execute_database_sql,
+            database::get_database_schema_context,
             database::open_workspace_database_directory,
+            database::list_remote_database_profiles,
+            database::save_remote_database_profile,
+            database::delete_remote_database_profile,
+            database::test_remote_database_connection,
+            database::list_remote_database_tables,
+            database::describe_remote_database_table,
+            database::execute_remote_database_sql,
+            database::get_remote_database_schema_context,
             run_agent_turn,
             agent_config::get_agent_workspace_config,
             agent_config::write_agent_workspace_document,

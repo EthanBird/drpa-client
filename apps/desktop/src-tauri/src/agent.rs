@@ -34,6 +34,10 @@ pub(crate) struct AgentTurnRequest {
     pub request_id: String,
     pub base_url: String,
     pub model: String,
+    #[serde(default = "default_agent_mode")]
+    pub mode: String,
+    #[serde(default = "default_database_dialect")]
+    pub database_dialect: String,
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
@@ -106,7 +110,8 @@ where
     validate_request(&request)?;
     let started = Instant::now();
     let endpoint = chat_completions_endpoint(&request.base_url)?;
-    let project_root = if request.project_id.trim().is_empty() {
+    let sql_mode = request.mode == "sql";
+    let project_root = if sql_mode || request.project_id.trim().is_empty() {
         None
     } else {
         validate_project_id(&request.project_id)?;
@@ -122,12 +127,18 @@ where
         python,
     };
 
-    let injected_context = agent_config::render_agent_context(
-        &context.workspace_root,
-        context.project_root.as_deref(),
-    )?;
-    let system = system_prompt(context.project_root.is_some(), &injected_context);
-    let tools = agent_tool_definitions(context.project_root.is_some());
+    let (system, tools) = if sql_mode {
+        (sql_system_prompt(&request.database_dialect), Vec::new())
+    } else {
+        let injected_context = agent_config::render_agent_context(
+            &context.workspace_root,
+            context.project_root.as_deref(),
+        )?;
+        (
+            system_prompt(context.project_root.is_some(), &injected_context),
+            agent_tool_definitions(context.project_root.is_some()),
+        )
+    };
     let history_start = select_history_start(&request, &system, &tools)?;
     let mut messages = vec![json!({
         "role": "system",
@@ -237,6 +248,14 @@ const fn default_context_window() -> u32 {
     128_000
 }
 
+fn default_agent_mode() -> String {
+    "rpaz".to_owned()
+}
+
+fn default_database_dialect() -> String {
+    "sqlite".to_owned()
+}
+
 const fn default_max_output_tokens() -> u32 {
     4_096
 }
@@ -259,6 +278,15 @@ pub(crate) fn agent_stream_event_name(request_id: &str) -> Result<String, String
 
 fn validate_request(request: &AgentTurnRequest) -> Result<(), String> {
     agent_stream_event_name(&request.request_id)?;
+    if !matches!(request.mode.as_str(), "rpaz" | "sql") {
+        return Err("Agent 模式无效".to_owned());
+    }
+    if !matches!(
+        request.database_dialect.as_str(),
+        "sqlite" | "postgresql" | "mysql"
+    ) {
+        return Err("数据库方言无效".to_owned());
+    }
     if request.model.trim().is_empty() || request.model.len() > 200 {
         return Err("请填写有效的模型名称".to_owned());
     }
@@ -609,6 +637,20 @@ fn system_prompt(has_project: bool, injected_context: &str) -> String {
          修改文件后应调用 rpaz_validate；需要交付归档时调用 rpaz_build。\n\
          回答使用简体中文，先给结论，再列出实际完成的文件与验证结果。\
          {injected_context}"
+    )
+}
+
+fn sql_system_prompt(dialect: &str) -> String {
+    let (database, identifier) = match dialect {
+        "postgresql" => ("PostgreSQL", "双引号"),
+        "mysql" => ("MySQL", "反引号"),
+        _ => ("SQLite 3", "双引号"),
+    };
+    format!(
+        "你是 DRPA 数据工作台内置的 {database} SQL 助手。只依据用户消息中提供的数据库结构和需求编写 SQL；\
+         不虚构表、视图或字段。回答使用简体中文，先给一句简短说明，再给且只给一个标记为 sql 的 Markdown 代码块。\
+         SQL 应兼容 {database}，标识符按需使用{identifier}，查询默认添加合理的 LIMIT。\
+         涉及 UPDATE、DELETE、DROP、ALTER 等修改或破坏性语句时，必须在说明中明确影响范围，但不要执行 SQL。"
     )
 }
 
@@ -1169,6 +1211,8 @@ mod tests {
             request_id: "req-context".to_owned(),
             base_url: "http://localhost:11434/v1".to_owned(),
             model: "local".to_owned(),
+            mode: "rpaz".to_owned(),
+            database_dialect: "sqlite".to_owned(),
             api_key: String::new(),
             project_id: String::new(),
             stream: true,
@@ -1191,6 +1235,27 @@ mod tests {
             select_history_start(&request, "short system", &[]).unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn sql_mode_has_a_dedicated_prompt_and_no_tools() {
+        let prompt = sql_system_prompt("postgresql");
+        assert!(prompt.contains("PostgreSQL SQL 助手"));
+        assert!(prompt.contains("Markdown 代码块"));
+        assert!(!prompt.contains("RPAZ"));
+    }
+
+    #[test]
+    fn older_agent_requests_default_to_rpaz_and_sqlite() {
+        let request: AgentTurnRequest = serde_json::from_value(json!({
+            "requestId": "req-defaults",
+            "baseUrl": "http://localhost:11434/v1",
+            "model": "local",
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .unwrap();
+        assert_eq!(request.mode, "rpaz");
+        assert_eq!(request.database_dialect, "sqlite");
     }
 
     #[test]

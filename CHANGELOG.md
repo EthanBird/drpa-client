@@ -10,6 +10,10 @@
 - 开发工作室和 Notebook 代码单元接入标准 Jupyter `complete_request`，通过项目级 IPython/Jedi 命名空间提供离线 Python 补全。
 - Runtime Context 新增 `ctx.sql`，支持 SQLite 参数化执行、批量写入、字典查询、标量读取、事务和嵌套 savepoint。
 - 新增自有数据工作台：本地 SQLite 对象树、表结构检查、Monaco SQL 编辑、`Ctrl+Enter`、结果网格、TSV 复制和查询历史；DBX 仅作为交互研究参考，不引入其运行时代码。
+- 数据工作台新增 PostgreSQL/MySQL 连接注册、会话级密码、TLS、连接测试、远程对象树与统一结果网格；连接文件不写入密码。
+- 数据工作台新增 AI SQL 助手：使用当前连接 schema 和全局 OpenAI-compatible 配置，支持流式 Markdown、追加/替换编辑器且不自动执行。
+- Jupyter 编辑体验新增标准 `inspect_request`，为 Python 文件与 Notebook 提供实时悬停文档和函数参数提示。
+- 运行详情日志支持全文/级别筛选、复制，产物可复制完整路径。
 
 ### Linux UOS Desktop 20 兼容包
 

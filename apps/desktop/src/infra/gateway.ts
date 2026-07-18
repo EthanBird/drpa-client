@@ -12,6 +12,8 @@ import type {
   DatabaseInfo,
   DatabaseQueryResult,
   DatabaseTable,
+  RemoteConnectionTest,
+  RemoteDatabaseProfile,
   KnowledgeEntry,
   PackageSummary,
   PlatformCapabilities,
@@ -19,6 +21,7 @@ import type {
   RunDetail,
   StudioCellResult,
   StudioCompletionResult,
+  StudioInspectResult,
   StudioProject,
   WindowsUpdateSession,
   WindowsUpdateStatus,
@@ -50,13 +53,23 @@ export interface DesktopGateway {
   runStudioProject(projectId: string, parameters: Record<string, unknown>): Promise<string>;
   executeStudioCell(projectId: string, code: string): Promise<StudioCellResult>;
   completeStudioPython(projectId: string, code: string, cursorPos: number): Promise<StudioCompletionResult>;
+  inspectStudioPython(projectId: string, code: string, cursorPos: number, detailLevel: number): Promise<StudioInspectResult>;
   prepareStudioKernel(projectId: string): Promise<void>;
   restartStudioKernel(projectId: string): Promise<void>;
   getWorkspaceDatabaseInfo(): Promise<DatabaseInfo>;
   listDatabaseTables(): Promise<DatabaseTable[]>;
   describeDatabaseTable(tableName: string): Promise<DatabaseColumn[]>;
   executeDatabaseSql(sql: string): Promise<DatabaseQueryResult>;
+  getDatabaseSchemaContext(): Promise<string>;
   openWorkspaceDatabaseDirectory(): Promise<void>;
+  listRemoteDatabaseProfiles(): Promise<RemoteDatabaseProfile[]>;
+  saveRemoteDatabaseProfile(profile: RemoteDatabaseProfile): Promise<RemoteDatabaseProfile>;
+  deleteRemoteDatabaseProfile(profileId: string): Promise<void>;
+  testRemoteDatabaseConnection(profile: RemoteDatabaseProfile, password: string): Promise<RemoteConnectionTest>;
+  listRemoteDatabaseTables(profileId: string, password: string): Promise<DatabaseTable[]>;
+  describeRemoteDatabaseTable(profileId: string, password: string, tableName: string): Promise<DatabaseColumn[]>;
+  executeRemoteDatabaseSql(profileId: string, password: string, sql: string): Promise<DatabaseQueryResult>;
+  getRemoteDatabaseSchemaContext(profileId: string, password: string): Promise<string>;
   runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResult>;
   listenAgentStream(requestId: string, onEvent: (event: AgentStreamEvent) => void): Promise<() => void>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
@@ -99,6 +112,7 @@ const mockKnowledgeContents = new Map<string, string>([
 ]);
 let mockAgentAgentsMarkdown = "# DRPA Agent 工作约定\n\n- 修改项目后运行 `rpaz_validate`。\n";
 let mockAgentMemoryMarkdown = "# Agent Memory\n\n记录稳定事实与偏好。\n";
+let mockRemoteDatabaseProfiles: RemoteDatabaseProfile[] = [];
 const mockAgentSkills = new Map<string, string>([[
   "rpaz-development",
   "---\nname: rpaz-development\ndescription: 创建、修改、校验或构建 RPAZ 脚本包时使用。\n---\n\n# RPAZ Development\n",
@@ -246,6 +260,9 @@ const mockGateway: DesktopGateway = {
     const start = code.slice(0, cursorPos).search(/[A-Za-z_][A-Za-z0-9_]*$/);
     return { matches: ["ctx", "print", "range"], cursorStart: start < 0 ? cursorPos : start, cursorEnd: cursorPos, metadata: {}, status: "ok" };
   },
+  async inspectStudioPython() {
+    return { found: true, data: { "text/plain": "Signature: ctx.progress(value: int, message: str = '')\n\n更新当前任务的进度。" }, metadata: {}, status: "ok" };
+  },
   async prepareStudioKernel() {},
   async restartStudioKernel() {},
   async getWorkspaceDatabaseInfo() {
@@ -263,10 +280,39 @@ const mockGateway: DesktopGateway = {
   async executeDatabaseSql(sql) {
     return { columns: ["preview", "characters"], rows: [["浏览器预览", sql.length]], affectedRows: 0, durationMs: 1, truncated: false, statementType: "SELECT" };
   },
+  async getDatabaseSchemaContext() {
+    return "-- SQLite 工作区数据库结构\n\nCREATE TABLE example_tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, status TEXT);\n";
+  },
   async openWorkspaceDatabaseDirectory() {},
+  async listRemoteDatabaseProfiles() { return mockRemoteDatabaseProfiles; },
+  async saveRemoteDatabaseProfile(profile) {
+    const saved = { ...profile, id: profile.id || `database-${Date.now()}` };
+    mockRemoteDatabaseProfiles = [...mockRemoteDatabaseProfiles.filter((item) => item.id !== saved.id), saved];
+    return saved;
+  },
+  async deleteRemoteDatabaseProfile(profileId) {
+    mockRemoteDatabaseProfiles = mockRemoteDatabaseProfiles.filter((item) => item.id !== profileId);
+  },
+  async testRemoteDatabaseConnection(profile) {
+    return { serverVersion: profile.engine === "postgresql" ? "PostgreSQL 17.2" : "MySQL 8.4", latencyMs: 12 };
+  },
+  async listRemoteDatabaseTables() {
+    return [{ name: "public.remote_tasks", kind: "table", rowCount: 4 }];
+  },
+  async describeRemoteDatabaseTable() {
+    return [{ ordinal: 0, name: "id", dataType: "bigint", notNull: true, primaryKey: false }];
+  },
+  async executeRemoteDatabaseSql(_profileId, _password, sql) {
+    return { columns: ["remote", "characters"], rows: [[true, sql.length]], affectedRows: 0, durationMs: 12, truncated: false, statementType: "SELECT" };
+  },
+  async getRemoteDatabaseSchemaContext() {
+    return "-- PostgreSQL 数据库结构\n\nCREATE TABLE public.remote_tasks (id bigint NOT NULL);\n";
+  },
   async runAgentTurn(request) {
     const prompt = request.messages.at(-1)?.content ?? "";
-    const message = request.projectId
+    const message = request.mode === "sql"
+      ? "已根据当前结构生成查询。\n\n```sql\nSELECT id, title, status FROM example_tasks LIMIT 100;\n```"
+      : request.projectId
       ? `已连接浏览器预览 Agent。当前问题：${prompt}`
       : `已收到问题：${prompt}\n选择一个开发项目后可启用 RPAZ 工具。`;
     const listener = mockAgentStreamListeners.get(request.requestId);
@@ -399,13 +445,23 @@ const tauriGateway: DesktopGateway = {
   runStudioProject: (projectId, parameters) => invoke<string>("run_studio_project", { projectId, parameters }),
   executeStudioCell: (projectId, code) => invoke<StudioCellResult>("execute_studio_cell", { projectId, code }),
   completeStudioPython: (projectId, code, cursorPos) => invoke<StudioCompletionResult>("complete_studio_python", { projectId, code, cursorPos }),
+  inspectStudioPython: (projectId, code, cursorPos, detailLevel) => invoke<StudioInspectResult>("inspect_studio_python", { projectId, code, cursorPos, detailLevel }),
   prepareStudioKernel: (projectId) => invoke<void>("prepare_studio_kernel", { projectId }),
   restartStudioKernel: (projectId) => invoke<void>("restart_studio_kernel", { projectId }),
   getWorkspaceDatabaseInfo: () => invoke<DatabaseInfo>("get_workspace_database_info"),
   listDatabaseTables: () => invoke<DatabaseTable[]>("list_database_tables"),
   describeDatabaseTable: (tableName) => invoke<DatabaseColumn[]>("describe_database_table", { tableName }),
   executeDatabaseSql: (sql) => invoke<DatabaseQueryResult>("execute_database_sql", { sql }),
+  getDatabaseSchemaContext: () => invoke<string>("get_database_schema_context"),
   openWorkspaceDatabaseDirectory: () => invoke<void>("open_workspace_database_directory"),
+  listRemoteDatabaseProfiles: () => invoke<RemoteDatabaseProfile[]>("list_remote_database_profiles"),
+  saveRemoteDatabaseProfile: (profile) => invoke<RemoteDatabaseProfile>("save_remote_database_profile", { profile }),
+  deleteRemoteDatabaseProfile: (profileId) => invoke<void>("delete_remote_database_profile", { profileId }),
+  testRemoteDatabaseConnection: (profile, password) => invoke<RemoteConnectionTest>("test_remote_database_connection", { profile, password }),
+  listRemoteDatabaseTables: (profileId, password) => invoke<DatabaseTable[]>("list_remote_database_tables", { profileId, password }),
+  describeRemoteDatabaseTable: (profileId, password, tableName) => invoke<DatabaseColumn[]>("describe_remote_database_table", { profileId, password, tableName }),
+  executeRemoteDatabaseSql: (profileId, password, sql) => invoke<DatabaseQueryResult>("execute_remote_database_sql", { profileId, password, sql }),
+  getRemoteDatabaseSchemaContext: (profileId, password) => invoke<string>("get_remote_database_schema_context", { profileId, password }),
   runAgentTurn: (request) => invoke<AgentTurnResult>("run_agent_turn", { request }),
   listenAgentStream: async (requestId, onEvent) => listen<AgentStreamEvent>(`agent-stream-${requestId}`, (event) => onEvent(event.payload)),
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),

@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CircleCheck,
   Clock3,
+  Copy,
   FileOutput,
   FolderOpen,
   LoaderCircle,
@@ -135,13 +136,36 @@ function RunOverview({ detail }: { detail: RunDetail }) {
 }
 
 function RunEvents({ detail }: { detail: RunDetail }) {
+  const [query, setQuery] = useState("");
+  const [level, setLevel] = useState("all");
+  const [copied, setCopied] = useState(false);
   if (detail.events.length === 0) return <div className="empty-inline">这次运行没有持久化事件。</div>;
-  return <div className="run-event-list">{detail.events.map((event) => <div className={`run-event level-${event.level ?? "info"}`} key={event.id}><time>{displayTimestamp(event.recordedAt)}</time><span>{event.level ?? event.eventType}</span><em>{event.scope ?? "runtime"}</em><p>{event.message}</p></div>)}</div>;
+  const normalized = query.trim().toLowerCase();
+  const filtered = detail.events.filter((event) => {
+    const eventLevel = event.level ?? "info";
+    return (level === "all" || eventLevel === level)
+      && (!normalized || `${event.message} ${event.scope ?? "runtime"} ${event.eventType} ${eventLevel}`.toLowerCase().includes(normalized));
+  });
+  const copyLogs = async () => {
+    const text = filtered.map((event) => `${event.recordedAt}\t${(event.level ?? event.eventType).toUpperCase()}\t${event.scope ?? "runtime"}\t${event.message}`).join("\n");
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+  return <div className="run-event-section">
+    <div className="run-event-toolbar">
+      <div><Search size={13} /><input aria-label="筛选运行日志" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选消息、范围或类型" /></div>
+      <select aria-label="运行日志级别" value={level} onChange={(event) => setLevel(event.target.value)}><option value="all">全部级别</option><option value="debug">DEBUG</option><option value="info">INFO</option><option value="warn">WARN</option><option value="error">ERROR</option></select>
+      <button type="button" onClick={() => void copyLogs()} disabled={filtered.length === 0}><Copy size={12} /> {copied ? "已复制" : "复制日志"}</button>
+    </div>
+    <div className="run-event-count">显示 {filtered.length} / {detail.events.length} 条持久化事件</div>
+    {filtered.length === 0 ? <div className="empty-inline">没有符合筛选条件的日志。</div> : <div className="run-event-list">{filtered.map((event) => <div className={`run-event level-${event.level ?? "info"}`} key={event.id}><time>{displayTimestamp(event.recordedAt)}</time><span>{event.level ?? event.eventType}</span><em>{event.scope ?? "runtime"}</em><p>{event.message}</p></div>)}</div>}
+  </div>;
 }
 
 function RunArtifacts({ detail }: { detail: RunDetail }) {
   if (detail.artifacts.length === 0) return <div className="empty-inline">这次运行没有登记产物。</div>;
-  return <div className="run-artifact-list">{detail.artifacts.map((artifact) => <div key={artifact.id}><FileOutput size={16} /><span><strong>{artifact.label}</strong><small>{artifact.path}</small></span><em>{formatBytes(artifact.size)}</em></div>)}</div>;
+  return <div className="run-artifact-list">{detail.artifacts.map((artifact) => <div key={artifact.id}><FileOutput size={16} /><span><strong>{artifact.label}</strong><small title={artifact.path}>{artifact.path}</small></span><em>{formatBytes(artifact.size)}</em><button type="button" aria-label={`复制产物路径 ${artifact.label}`} title="复制完整路径" onClick={() => void navigator.clipboard.writeText(artifact.path)}><Copy size={12} /></button></div>)}</div>;
 }
 
 function Info({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
