@@ -15,6 +15,7 @@ import {
   Minimize2,
   Minus,
   Play,
+  PlugZap,
   Search,
   Settings,
   Sparkles,
@@ -49,6 +50,7 @@ const infrastructureNavigation: Array<{
   icon: typeof Gauge;
 }> = [
   { id: "agent", label: "AI Agent", icon: Bot },
+  { id: "plugins", label: "插件", icon: PlugZap },
   { id: "runtimes", label: "运行环境", icon: Boxes },
   { id: "secrets", label: "凭据保险箱", icon: KeyRound },
 ];

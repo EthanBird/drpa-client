@@ -7,6 +7,7 @@ import type {
   AgentTurnResult,
   AgentStreamEvent,
   AgentWorkspaceConfig,
+  AgentSkillPackage,
   CurrentUser,
   DatabaseColumn,
   DatabaseInfo,
@@ -17,6 +18,8 @@ import type {
   KnowledgeEntry,
   PackageSummary,
   PlatformCapabilities,
+  PluginLogLine,
+  PluginSummary,
   RuntimeStatus,
   RunDetail,
   StudioCellResult,
@@ -86,8 +89,20 @@ export interface DesktopGateway {
   getAgentWorkspaceConfig(): Promise<AgentWorkspaceConfig>;
   writeAgentWorkspaceDocument(document: "agents" | "memory", content: string): Promise<void>;
   readAgentSkill(name: string): Promise<string>;
+  readAgentSkillPackage(name: string): Promise<AgentSkillPackage>;
   writeAgentSkill(name: string, content: string): Promise<void>;
+  writeAgentSkillPackage(name: string, manifestYaml: string, instructionsMarkdown: string): Promise<void>;
+  readAgentSkillFile(name: string, relativePath: string): Promise<string>;
+  writeAgentSkillFile(name: string, relativePath: string, content: string): Promise<void>;
   deleteAgentSkill(name: string): Promise<void>;
+  listPlugins(): Promise<PluginSummary[]>;
+  installPlugin(packagePath: string): Promise<PluginSummary>;
+  savePluginConfig(pluginId: string, config: Record<string, unknown>, autostart: boolean): Promise<void>;
+  setPluginEnabled(pluginId: string, enabled: boolean): Promise<void>;
+  startPlugin(pluginId: string): Promise<void>;
+  stopPlugin(pluginId: string): Promise<void>;
+  uninstallPlugin(pluginId: string): Promise<void>;
+  getPluginLogs(pluginId: string): Promise<PluginLogLine[]>;
   listKnowledgeEntries(): Promise<KnowledgeEntry[]>;
   readKnowledgeFile(relativePath: string): Promise<string>;
   writeKnowledgeFile(relativePath: string, content: string): Promise<void>;
@@ -117,6 +132,39 @@ const mockAgentSkills = new Map<string, string>([[
   "rpaz-development",
   "---\nname: rpaz-development\ndescription: 创建、修改、校验或构建 RPAZ 脚本包时使用。\n---\n\n# RPAZ Development\n",
 ]]);
+const mockAgentSkillManifests = new Map<string, string>([[
+  "rpaz-development",
+  "schema: 2\nid: rpaz-development\nname: RPAZ Development\nversion: 2.0.0\ndescription: 创建、修改、校验或构建 RPAZ 脚本包时使用。\ntools: []\nlibraries: []\n",
+]]);
+let mockPluginRunning = false;
+let mockPluginEnabled = false;
+let mockPluginConfig: Record<string, unknown> = {
+  base_url: "http://127.0.0.1:5001/v1",
+  api_key: "",
+  app_type: "chat",
+  model: "dify-app",
+  port: 34121,
+  tool_bridge: true,
+};
+
+function mockPlugins(): PluginSummary[] {
+  return [{
+    id: "dify-loves-hermes",
+    name: "Dify Loves Hermes",
+    version: "0.1.0",
+    description: "将 Dify App API 转换为本地 OpenAI 兼容接口，并补充外部工具调用桥。",
+    types: ["provider-adapter", "service"],
+    enabled: mockPluginEnabled,
+    autostart: false,
+    status: mockPluginRunning ? "running" : mockPluginEnabled ? "stopped" : "disabled",
+    endpoint: `http://127.0.0.1:${Number(mockPluginConfig.port ?? 34121)}/v1`,
+    toolCount: 0,
+    config: mockPluginConfig,
+    configSchema: { type: "object", properties: {} },
+    directory: "浏览器预览数据/plugins/dify-loves-hermes",
+    lastError: "",
+  }];
+}
 const mockAgentStreamListeners = new Map<string, (event: AgentStreamEvent) => void>();
 
 function mockAgentWorkspaceConfig(): AgentWorkspaceConfig {
@@ -125,7 +173,12 @@ function mockAgentWorkspaceConfig(): AgentWorkspaceConfig {
     memoryMarkdown: mockAgentMemoryMarkdown,
     skills: Array.from(mockAgentSkills, ([name, content]) => ({
       name,
+      displayName: name,
+      version: "2.0.0",
       description: content.match(/^description:\s*(.+)$/m)?.[1] ?? "未填写描述",
+      format: "skill-v2",
+      toolCount: 0,
+      libraryCount: 0,
       modifiedAt: Date.now(),
     })),
     rootDirectory: "浏览器预览数据/agent",
@@ -412,12 +465,44 @@ const mockGateway: DesktopGateway = {
     if (!content) throw new Error("Skill 不存在");
     return content;
   },
+  async readAgentSkillPackage(name) {
+    const instructionsMarkdown = mockAgentSkills.get(name);
+    if (!instructionsMarkdown) throw new Error("Skill 不存在");
+    return {
+      name,
+      manifestYaml: mockAgentSkillManifests.get(name) ?? `schema: 2\nid: ${name}\nname: ${name}\nversion: 1.0.0\ndescription: Skill\ntools: []\nlibraries: []\n`,
+      instructionsMarkdown,
+      files: ["skill.yaml", "instructions.md"],
+    };
+  },
   async writeAgentSkill(name, content) {
     mockAgentSkills.set(name, content);
   },
+  async writeAgentSkillPackage(name, manifestYaml, instructionsMarkdown) {
+    mockAgentSkillManifests.set(name, manifestYaml);
+    mockAgentSkills.set(name, instructionsMarkdown);
+  },
+  async readAgentSkillFile(name, relativePath) {
+    if (relativePath === "skill.yaml") return mockAgentSkillManifests.get(name) ?? "";
+    if (relativePath === "instructions.md") return mockAgentSkills.get(name) ?? "";
+    return "";
+  },
+  async writeAgentSkillFile(name, relativePath, content) {
+    if (relativePath === "skill.yaml") mockAgentSkillManifests.set(name, content);
+    if (relativePath === "instructions.md") mockAgentSkills.set(name, content);
+  },
   async deleteAgentSkill(name) {
     mockAgentSkills.delete(name);
+    mockAgentSkillManifests.delete(name);
   },
+  async listPlugins() { return mockPlugins(); },
+  async installPlugin() { return mockPlugins()[0]; },
+  async savePluginConfig(_pluginId, config) { mockPluginConfig = config; },
+  async setPluginEnabled(_pluginId, enabled) { mockPluginEnabled = enabled; if (!enabled) mockPluginRunning = false; },
+  async startPlugin() { mockPluginEnabled = true; mockPluginRunning = true; },
+  async stopPlugin() { mockPluginRunning = false; },
+  async uninstallPlugin() { mockPluginEnabled = false; mockPluginRunning = false; },
+  async getPluginLogs() { return mockPluginRunning ? [{ timestamp: Date.now(), stream: "stderr", message: "listening on http://127.0.0.1:34121/v1" }] : []; },
 };
 
 const tauriGateway: DesktopGateway = {
@@ -478,8 +563,20 @@ const tauriGateway: DesktopGateway = {
   getAgentWorkspaceConfig: () => invoke<AgentWorkspaceConfig>("get_agent_workspace_config"),
   writeAgentWorkspaceDocument: (document, content) => invoke<void>("write_agent_workspace_document", { document, content }),
   readAgentSkill: (name) => invoke<string>("read_agent_skill", { name }),
+  readAgentSkillPackage: (name) => invoke<AgentSkillPackage>("read_agent_skill_package", { name }),
   writeAgentSkill: (name, content) => invoke<void>("write_agent_skill", { name, content }),
+  writeAgentSkillPackage: (name, manifestYaml, instructionsMarkdown) => invoke<void>("write_agent_skill_package", { name, manifestYaml, instructionsMarkdown }),
+  readAgentSkillFile: (name, relativePath) => invoke<string>("read_agent_skill_file", { name, relativePath }),
+  writeAgentSkillFile: (name, relativePath, content) => invoke<void>("write_agent_skill_file", { name, relativePath, content }),
   deleteAgentSkill: (name) => invoke<void>("delete_agent_skill", { name }),
+  listPlugins: () => invoke<PluginSummary[]>("list_plugins"),
+  installPlugin: (packagePath) => invoke<PluginSummary>("install_plugin", { packagePath }),
+  savePluginConfig: (pluginId, config, autostart) => invoke<void>("save_plugin_config", { pluginId, config, autostart }),
+  setPluginEnabled: (pluginId, enabled) => invoke<void>("set_plugin_enabled", { pluginId, enabled }),
+  startPlugin: (pluginId) => invoke<void>("start_plugin", { pluginId }),
+  stopPlugin: (pluginId) => invoke<void>("stop_plugin", { pluginId }),
+  uninstallPlugin: (pluginId) => invoke<void>("uninstall_plugin", { pluginId }),
+  getPluginLogs: (pluginId) => invoke<PluginLogLine[]>("get_plugin_logs", { pluginId }),
   listKnowledgeEntries: () => invoke<KnowledgeEntry[]>("list_knowledge_entries"),
   readKnowledgeFile: (relativePath) => invoke<string>("read_knowledge_file", { relativePath }),
   writeKnowledgeFile: (relativePath, content) => invoke<void>("write_knowledge_file", { relativePath, content }),

@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
-use crate::{agent_config, knowledge};
+use crate::{agent_config, knowledge, plugins};
 
 const MAX_AGENT_ROUNDS: usize = 8;
 const MAX_HISTORY_MESSAGES: usize = 120;
@@ -32,6 +32,8 @@ pub(crate) struct AgentMessage {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentTurnRequest {
     pub request_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub base_url: String,
     pub model: String,
     #[serde(default = "default_agent_mode")]
@@ -98,6 +100,65 @@ struct ToolResult {
     summary: String,
 }
 
+struct ToolRegistry<'a> {
+    context: &'a AgentContext,
+    definitions: Vec<Value>,
+}
+
+impl<'a> ToolRegistry<'a> {
+    fn discover(context: &'a AgentContext) -> Result<Self, String> {
+        Ok(Self {
+            context,
+            definitions: agent_tool_definitions(
+                &context.workspace_root,
+                context.project_root.is_some(),
+            )?,
+        })
+    }
+
+    fn execute(&self, name: &str, arguments: &Value) -> Result<ToolResult, String> {
+        execute_tool(self.context, name, arguments)
+    }
+}
+
+trait ProviderAdapter {
+    fn complete(
+        &self,
+        payload: &Value,
+        stream: bool,
+        on_delta: &mut dyn FnMut(String),
+    ) -> Result<Value, String>;
+}
+
+struct OpenAiCompatibleAdapter {
+    endpoint: String,
+    api_key: String,
+}
+
+impl OpenAiCompatibleAdapter {
+    fn new(base_url: &str, api_key: &str) -> Result<Self, String> {
+        Ok(Self {
+            endpoint: chat_completions_endpoint(base_url)?,
+            api_key: api_key.to_owned(),
+        })
+    }
+}
+
+impl ProviderAdapter for OpenAiCompatibleAdapter {
+    fn complete(
+        &self,
+        payload: &Value,
+        stream: bool,
+        on_delta: &mut dyn FnMut(String),
+    ) -> Result<Value, String> {
+        if stream {
+            call_chat_completions_stream(&self.endpoint, &self.api_key, payload, on_delta)
+        } else {
+            call_chat_completions(&self.endpoint, &self.api_key, payload)
+        }
+    }
+}
+
 pub(crate) fn run_agent_turn<F>(
     request: AgentTurnRequest,
     workspace_root: PathBuf,
@@ -109,7 +170,7 @@ where
 {
     validate_request(&request)?;
     let started = Instant::now();
-    let endpoint = chat_completions_endpoint(&request.base_url)?;
+    let provider = OpenAiCompatibleAdapter::new(&request.base_url, &request.api_key)?;
     let sql_mode = request.mode == "sql";
     let project_root = if sql_mode || request.project_id.trim().is_empty() {
         None
@@ -127,6 +188,11 @@ where
         python,
     };
 
+    let tool_registry = if sql_mode {
+        None
+    } else {
+        Some(ToolRegistry::discover(&context)?)
+    };
     let (system, tools) = if sql_mode {
         (sql_system_prompt(&request.database_dialect), Vec::new())
     } else {
@@ -136,7 +202,10 @@ where
         )?;
         (
             system_prompt(context.project_root.is_some(), &injected_context),
-            agent_tool_definitions(context.project_root.is_some()),
+            tool_registry
+                .as_ref()
+                .map(|registry| registry.definitions.clone())
+                .unwrap_or_default(),
         )
     };
     let history_start = select_history_start(&request, &system, &tools)?;
@@ -161,18 +230,19 @@ where
             "temperature": request.temperature,
             "max_tokens": request.max_output_tokens,
         });
+        if !request.session_id.trim().is_empty() {
+            payload["user"] = Value::String(request.session_id.trim().to_owned());
+        }
         if !tools.is_empty() {
             payload["tools"] = Value::Array(tools.clone());
             payload["tool_choice"] = Value::String("auto".to_owned());
         }
-        let response = if request.stream {
+        if request.stream {
             payload["stream"] = Value::Bool(true);
-            call_chat_completions_stream(&endpoint, &request.api_key, &payload, |content| {
-                emit(AgentStreamEvent::Delta { content });
-            })?
-        } else {
-            call_chat_completions(&endpoint, &request.api_key, &payload)?
-        };
+        }
+        let response = provider.complete(&payload, request.stream, &mut |content| {
+            emit(AgentStreamEvent::Delta { content });
+        })?;
         accumulate_usage(&mut usage, response.get("usage"));
         let assistant = response
             .pointer("/choices/0/message")
@@ -210,7 +280,10 @@ where
                 .unwrap_or("unknown")
                 .to_owned();
             let arguments = parse_tool_arguments(call.pointer("/function/arguments"))?;
-            let executed = execute_tool(&context, &name, &arguments);
+            let executed = tool_registry
+                .as_ref()
+                .ok_or_else(|| "当前 Agent 模式没有工具注册表".to_owned())?
+                .execute(&name, &arguments);
             let (status, summary, output) = match executed {
                 Ok(result) => ("completed".to_owned(), result.summary, result.output),
                 Err(error) => (
@@ -654,7 +727,7 @@ fn sql_system_prompt(dialect: &str) -> String {
     )
 }
 
-fn agent_tool_definitions(has_project: bool) -> Vec<Value> {
+fn agent_tool_definitions(workspace_root: &Path, has_project: bool) -> Result<Vec<Value>, String> {
     let mut tools = vec![
         tool_definition(
             "agent_list_skills",
@@ -698,7 +771,9 @@ fn agent_tool_definitions(has_project: bool) -> Vec<Value> {
         ),
     ];
     if !has_project {
-        return tools;
+        tools.extend(agent_config::skill_tool_definitions(workspace_root)?);
+        tools.extend(plugins::plugin_tool_definitions(workspace_root)?);
+        return Ok(tools);
     }
     tools.extend([
         tool_definition(
@@ -732,7 +807,9 @@ fn agent_tool_definitions(has_project: bool) -> Vec<Value> {
             json!({"type":"object","properties":{"code":{"type":"string"}},"required":["code"],"additionalProperties":false}),
         ),
     ]);
-    tools
+    tools.extend(agent_config::skill_tool_definitions(workspace_root)?);
+    tools.extend(plugins::plugin_tool_definitions(workspace_root)?);
+    Ok(tools)
 }
 
 fn tool_definition(name: &str, description: &str, parameters: Value) -> Value {
@@ -751,6 +828,32 @@ fn execute_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<ToolResult, String> {
+    if let Some(executed) = agent_config::execute_skill_tool(
+        &context.workspace_root,
+        context.project_root.as_deref(),
+        &context.python,
+        name,
+        arguments,
+    ) {
+        let executed = executed?;
+        return Ok(ToolResult {
+            output: executed.output,
+            summary: executed.summary,
+        });
+    }
+    if let Some(executed) = plugins::execute_plugin_tool(
+        &context.workspace_root,
+        context.project_root.as_deref(),
+        &context.python,
+        name,
+        arguments,
+    ) {
+        let executed = executed?;
+        return Ok(ToolResult {
+            output: executed.output,
+            summary: executed.summary,
+        });
+    }
     match name {
         "agent_list_skills" => {
             let skills = agent_config::list_skills_for_agent(&context.workspace_root)?;
@@ -1209,6 +1312,7 @@ mod tests {
     fn context_budget_keeps_the_latest_turn_and_drops_oversized_older_history() {
         let request = AgentTurnRequest {
             request_id: "req-context".to_owned(),
+            session_id: "session-context".to_owned(),
             base_url: "http://localhost:11434/v1".to_owned(),
             model: "local".to_owned(),
             mode: "rpaz".to_owned(),

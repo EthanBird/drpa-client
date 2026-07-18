@@ -790,6 +790,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sqlx",
  "tauri",
  "tauri-build",

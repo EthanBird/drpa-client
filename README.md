@@ -14,7 +14,9 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路，并通过标准 `complete_request` / `inspect_request` 为 Python 文件和 Notebook 提供离线补全、悬停文档与参数提示。
 - 运行记录持久化到 Host SQLite；可进入详情查看完整时间线、筛选/复制日志、参数、产物、错误回溯和重启中断状态。
 - 内置自有数据工作台：工作区 SQLite 与 PostgreSQL/MySQL 连接、对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
-- 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model 与会话级可选 key，通过六个项目工具和三个知识库工具完成读取、写入、校验、构建和 sealed Python 辅助；支持本地会话列表、逐会话项目绑定、重命名/删除及配置面板折叠。
+- 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model 与会话级可选 key；ProviderAdapter 与 ToolRegistry 统一编排内置、Skills 2.0 和插件工具，并支持流式 Markdown、本地会话、逐会话项目绑定和完整工具事件。
+- Skills 2.0 使用 `skill.yaml + instructions.md` 能力包，可携带工作流、资源、可执行 Python/Command 工具和可调用代码库；旧版 `SKILL.md` 自动迁移。
+- 内置离线插件系统：支持 `.drpa-plugin` 安装、配置、启停、自动启动、隐藏后台进程、状态与容错日志；参考插件 Dify Loves Hermes 可把 Dify App API 转换为本地 OpenAI 兼容接口并桥接 `tool_calls`。
 - 内置本地 Markdown 知识库：支持目录树、阅读/编辑/分栏渲染、相对文档跳转、内联新建/重命名/删除、拖拽导入、原生导入导出与自动保存，并首次初始化多篇详细 RPAZ 开发指南。
 - 协议化 `.drpa-update` 差量更新，包含可视化进度、结构/大小检查、精确基线匹配、独立 Worker、失败回滚和新 Host 启动确认；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。
 
@@ -98,6 +100,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - [Jupyter 集成](docs/JUPYTER_INTEGRATION.md)：真实能力、VS Code Jupyter 对照和明确边界。
 - [数据工作台与 `ctx.sql`](docs/DATA_WORKBENCH.md)：SQLite 存储分层、Host API、脚本 API 与扩展约定。
 - [AI Agent 设计](docs/AI_AGENT_DESIGN.md)：OpenAI-compatible 对话循环、RPAZ 工具和配置边界。
+- [Skills 2.0 与插件系统](docs/SKILLS_AND_PLUGINS.md)：能力包代码工具、插件清单、进程生命周期与 Dify 工具桥。
 - [离线运行时](offline/README.md)：依赖策略、构建证明和缺包处理流程。
 - [Windows 发布说明](docs/PORTABLE_RELEASE.md)：安装、数据目录和热更新。
 - [架构设计](docs/architecture/DRPA_NEXT.md)：长期模块边界和安全原则。
@@ -108,4 +111,4 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - 当前稳定 Release 发布 Windows x64 Setup，以及 Linux x86_64 runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。UOS 包固定 X11 软件渲染以换取老显卡兼容性，仍需要系统内核和 X11 server；真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
 - 当前更新入口使用本地 `.drpa-update`，已支持逐文件差量；尚未实现在线更新源、签名信任链和大文件块级差分。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
-- AI Agent 当前是单 Agent MVP，已支持可配置流式 Markdown、上下文参数和本地会话管理，尚未提供 diff/checkpoint、会话导出或运行日志工具；自动调度、浏览器录制器、包签名和私有仓库仍处于路线阶段。
+- AI Agent 当前采用单 Orchestrator，已支持流式 Markdown、ProviderAdapter、动态 ToolRegistry、Skills 2.0、插件 Provider/Tool 与本地会话；diff/checkpoint、会话导出、长期服务双向 JSON-RPC 和 Skill evaluation 仍在后续阶段。

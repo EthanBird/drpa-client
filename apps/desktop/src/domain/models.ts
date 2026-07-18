@@ -7,6 +7,7 @@ export type NavigationId =
   | "runs"
   | "automations"
   | "agent"
+  | "plugins"
   | "docs"
   | "runtimes"
   | "secrets"
@@ -162,6 +163,7 @@ export interface AgentMessage {
 
 export interface AgentTurnRequest {
   requestId: string;
+  sessionId?: string;
   baseUrl: string;
   model: string;
   mode?: "rpaz" | "sql";
@@ -216,8 +218,20 @@ export interface AgentTurnResult {
 
 export interface AgentSkillSummary {
   name: string;
+  displayName?: string;
+  version?: string;
   description: string;
+  format?: "skill-v2" | "legacy-markdown";
+  toolCount?: number;
+  libraryCount?: number;
   modifiedAt: number;
+}
+
+export interface AgentSkillPackage {
+  name: string;
+  manifestYaml: string;
+  instructionsMarkdown: string;
+  files: string[];
 }
 
 export interface AgentWorkspaceConfig {
@@ -275,6 +289,41 @@ export interface RunSummary {
   durationMs?: number;
   progress?: number;
   exitCode?: number;
+}
+
+export interface PluginSummary {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  types: string[];
+  enabled: boolean;
+  autostart: boolean;
+  status: "disabled" | "stopped" | "running" | "error";
+  endpoint: string;
+  toolCount: number;
+  config: Record<string, unknown>;
+  configSchema: {
+    type?: string;
+    properties?: Record<string, {
+      type?: "string" | "integer" | "number" | "boolean";
+      title?: string;
+      description?: string;
+      enum?: string[];
+      secret?: boolean;
+      minimum?: number;
+      maximum?: number;
+    }>;
+    required?: string[];
+  };
+  directory: string;
+  lastError: string;
+}
+
+export interface PluginLogLine {
+  timestamp: number;
+  stream: "stdout" | "stderr";
+  message: string;
 }
 
 export interface RunEventRecord {

@@ -21,6 +21,7 @@ mod agent;
 mod agent_config;
 mod database;
 mod knowledge;
+mod plugins;
 
 const WINDOWS_UPDATE_SCHEMA: u32 = 2;
 const WINDOWS_UPDATE_HOST_PROTOCOL: u32 = 2;
@@ -1051,6 +1052,22 @@ async fn run_agent_turn(
     })
     .await
     .map_err(|error| format!("Agent 后台任务失败：{error}"))?
+}
+
+#[tauri::command]
+async fn start_plugin(
+    plugin_id: String,
+    paths: State<'_, AppPaths>,
+    manager: State<'_, plugins::PluginManager>,
+) -> Result<(), String> {
+    let python = locate_runtime(&paths)?.python;
+    let workspace_root = paths.workspace_root.clone();
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        plugins::start_plugin_inner(&workspace_root, &plugin_id, &python, &manager)
+    })
+    .await
+    .map_err(|error| format!("插件后台启动任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -2317,6 +2334,22 @@ pub fn run() {
             fs::create_dir_all(&workspace_root)?;
             knowledge::seed_default_knowledge(&workspace_root)?;
             let resource_dir = app.path().resource_dir().ok();
+            let app_paths = AppPaths {
+                workspace_root: workspace_root.clone(),
+                resource_dir,
+            };
+            let plugin_manager = plugins::PluginManager::default();
+            if let Ok(runtime) = locate_runtime(&app_paths) {
+                let autostart_workspace = workspace_root.clone();
+                let autostart_manager = plugin_manager.clone();
+                std::thread::spawn(move || {
+                    let _ = plugins::start_autostart_plugins(
+                        &autostart_workspace,
+                        &runtime.python,
+                        &autostart_manager,
+                    );
+                });
+            }
 
             #[cfg(windows)]
             {
@@ -2331,14 +2364,12 @@ pub fn run() {
                 HostState::try_new(workspace_root.clone())
                     .map_err(|error| std::io::Error::other(error.to_string()))?,
             );
-            app.manage(AppPaths {
-                workspace_root: workspace_root.clone(),
-                resource_dir,
-            });
+            app.manage(app_paths);
             app.manage(StudioKernelManager {
                 sessions: Arc::new(Mutex::new(HashMap::new())),
             });
             app.manage(RunProcessManager::default());
+            app.manage(plugin_manager);
             acknowledge_windows_update_startup(&workspace_root)?;
             Ok(())
         })
@@ -2387,8 +2418,20 @@ pub fn run() {
             agent_config::get_agent_workspace_config,
             agent_config::write_agent_workspace_document,
             agent_config::read_agent_skill,
+            agent_config::read_agent_skill_package,
             agent_config::write_agent_skill,
+            agent_config::write_agent_skill_package,
+            agent_config::read_agent_skill_file,
+            agent_config::write_agent_skill_file,
             agent_config::delete_agent_skill,
+            plugins::list_plugins,
+            plugins::install_plugin,
+            plugins::save_plugin_config,
+            plugins::set_plugin_enabled,
+            start_plugin,
+            plugins::stop_plugin,
+            plugins::uninstall_plugin,
+            plugins::get_plugin_logs,
             get_runtime_status,
             get_platform_capabilities,
             initialize_runtime,

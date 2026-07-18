@@ -1,6 +1,6 @@
 # 轻量 RPAZ AI Agent
 
-DRPA Next 在“基础设施 → AI Agent”提供面向 RPAZ 开发的单 Agent 对话入口。MVP 直接使用 OpenAI-compatible Chat Completions 与 function calling，不引入独立 Agent daemon、通用终端、浏览器控制或大型编排框架。
+DRPA Next 在“基础设施 → AI Agent”提供面向 RPAZ 开发的单 Orchestrator 对话入口。ProviderAdapter 负责模型连接，ToolRegistry 统一发现内置工具、Skills 2.0 工具和插件工具；插件服务由 Rust PluginSupervisor 管理。
 
 ## 配置与会话
 
@@ -18,13 +18,26 @@ DRPA Next 在“基础设施 → AI Agent”提供面向 RPAZ 开发的单 Agent
 ```text
 React Agent UI
   → run_agent_turn (async Tauri command)
-  → Rust blocking worker + ureq (120 s request timeout)
-  → OpenAI-compatible /chat/completions
+  → AgentOrchestrator
+      ├─ OpenAiCompatibleAdapter
+      └─ ToolRegistry
+          ├─ Built-in tools
+          ├─ Skills 2.0 executable tools
+          └─ Plugin tools
+  → OpenAI-compatible /chat/completions 或本地 Plugin Provider
   ↔ 最多 8 轮 function tool calls
   → assistant message + tool timeline + token/duration metadata
 ```
 
-工具结果以 `role=tool` 和原始 `tool_call_id` 回送模型。Host 限制最近 40 条历史、单消息 100 KiB、单工具输出 20 KiB。模型请求与本地工具执行都离开 Tauri UI 线程。
+工具结果以 `role=tool` 和原始 `tool_call_id` 回送模型。Host 最多读取最近 120 条历史，并按配置的上下文窗口估算和裁剪；单消息上限 100 KiB、单工具回送模型的输出上限 20 KiB。模型请求与本地工具执行都离开 Tauri UI 线程。
+
+## Skills 与插件
+
+- Skills 2.0 是包含 `skill.yaml`、`instructions.md`、工作流、资源、代码和测试的能力包。
+- Skill 可以直接声明 sealed Python 工具、插件内命令工具以及需要加入模块搜索路径的代码库。
+- 插件可以导出 Tool、ProviderAdapter 或长期运行的本地服务。
+- Agent 请求携带稳定的本地 Session ID，Dify 等会话型 Provider 可以据此维护远端 `conversation_id`。
+- 详细清单和执行约定见 [Skills 2.0 与插件系统](SKILLS_AND_PLUGINS.md)。
 
 ## 内置工具
 
@@ -52,8 +65,8 @@ React Agent UI
 
 ## 后续迭代
 
-1. 流式 token 和工具事件，不等待整轮返回后再展示。
-2. 写入前 diff/checkpoint、逐次撤销、会话导入导出与跨设备同步。
-3. 复用 Notebook 执行、运行日志和产物只读工具。
-4. provider profile、模型能力探测、代理与自定义 header。
-5. 固定夹具 Agent evaluation，覆盖 manifest 修复、参数生成和构建任务。
+1. 写入前 diff/checkpoint、逐次撤销、会话导入导出与跨设备同步。
+2. 复用 Notebook 执行、运行日志和产物只读工具。
+3. Provider profile、模型能力探测、代理与自定义 header。
+4. 长期服务的双向 `Content-Length` JSON-RPC 与取消/进度通知。
+5. 固定夹具 Skill/Agent evaluation，覆盖 manifest 修复、参数生成、插件崩溃和 Dify 工具桥。

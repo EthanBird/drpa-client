@@ -177,6 +177,7 @@ export function AgentPage() {
       }
       const result = await desktopGateway.runAgentTurn({
         requestId,
+        sessionId,
         baseUrl: agentBaseUrl.trim(),
         model: agentModel.trim(),
         apiKey,

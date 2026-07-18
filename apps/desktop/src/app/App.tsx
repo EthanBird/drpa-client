@@ -8,6 +8,7 @@ import { AgentPage } from "../pages/AgentPage";
 import { DocsPage } from "../pages/DocsPage";
 import { LibraryPage } from "../pages/LibraryPage";
 import { OverviewPage } from "../pages/OverviewPage";
+import { PluginsPage } from "../pages/PluginsPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
 import { RunsPage } from "../pages/RunsPage";
 import { RuntimePage } from "../pages/RuntimePage";
@@ -158,6 +159,7 @@ export function App() {
         {activeNavigation === "runs" && <RunsPage />}
         {activeNavigation === "automations" && <AutomationsPage />}
         {activeNavigation === "agent" && <AgentPage />}
+        {activeNavigation === "plugins" && <PluginsPage />}
         {activeNavigation === "docs" && <DocsPage />}
         {activeNavigation === "runtimes" && <RuntimePage />}
         {activeNavigation === "secrets" && (

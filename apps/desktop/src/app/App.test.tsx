@@ -271,6 +271,19 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByText("项目校验通过。")).toBeVisible();
   });
 
+  it("manages local service plugins and exposes a provider endpoint", async () => {
+    const startPlugin = vi.spyOn(desktopGateway, "startPlugin").mockResolvedValue();
+    useAppStore.setState({ activeNavigation: "plugins" });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "插件" })).toBeVisible();
+    expect((await screen.findAllByText("Dify Loves Hermes"))[0]).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await waitFor(() => expect(startPlugin).toHaveBeenCalledWith("dify-loves-hermes"));
+    expect(screen.getAllByText(/Dify App API 转换为本地 OpenAI 兼容接口/)[0]).toBeVisible();
+    expect(screen.getByText("http://127.0.0.1:34121/v1")).toBeVisible();
+  });
+
   it("renders streamed Agent Markdown and supports editing or regenerating the latest turn", async () => {
     useAppStore.setState({ activeNavigation: "agent" });
     let streamListener: ((event: import("../domain/models").AgentStreamEvent) => void) | undefined;
