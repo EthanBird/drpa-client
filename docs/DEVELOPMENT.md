@@ -187,7 +187,7 @@ Studio Python 补全复用同一个项目 Kernel：Monaco 调用 `complete_studi
 6. Worker 确认主程序文件锁已释放后才替换所有受管文件，从安装目录启动新主程序，并通过 `DRPA_UPDATE_SESSION_ID` 要求新 Host 在主窗口构建成功后写入 `startup-ack`。
 7. 只有收到启动确认才删除备份；新进程早退、30 秒未确认或任一替换失败时，Worker 会结束新进程、按逆序恢复全部文件、持久化失败状态并从安装目录重新启动旧版本。
 
-CI 默认执行 `update` 发布：stage 主程序、更新器、`bootstrap_runtime.py` 和当前 `drpa-runtime-python` wheel，使用 `--partial` 合并上一 Release 的完整库存，不删除 stage 未包含的 CPython、Chrome、WebView2 或文档。adapter 更新在下次运行时定位时增量安装，通常不超过数秒。只有手工 `workflow_dispatch(release_kind=full)` 才构建完整 sealed runtime、WebView2、NSIS Setup 和示例资产。
+CI 默认执行 `update` 发布：stage 主程序、更新器、`bootstrap_runtime.py` 和当前 `drpa-runtime-python` wheel，使用 `--partial` 合并上一 Release 的完整库存，不删除 stage 未包含的 CPython、Chrome、WebView2 或文档。adapter 更新在下次运行时定位时增量安装，通常不超过数秒。手工 `workflow_dispatch(release_kind=full)` 或提交信息以 `release(windows):` 开头时，才构建完整 sealed runtime、WebView2、NSIS Setup 和示例资产；Windows 稳定发布提交会跳过独立 Linux 打包与重复 sealed-runtime 预发布。
 
 完整安装 stage 禁止符号链接、Windows Junction 和其他 reparse point。`build_update_package.py` 在生成库存前会逐目录检查并直接失败，保证 `runtime/`、`webview2/` 和应用文件全部来自当前安装 stage，而不是外部目录。
 
@@ -255,7 +255,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 
 - `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查；Ubuntu 目前只做到 Host 编译，没有 GUI/runtime 最终包验收。
 - `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
-- `.github/workflows/desktop-release.yml`：push 默认发布两个轻量 update 资产；手工选择 `full` 时才组合 runtime、WebView2、Host、更新器、示例和安装器。
+- `.github/workflows/desktop-release.yml`：普通 push 默认发布两个轻量 update 资产；手工选择 `full` 或使用 `release(windows):` 提交前缀时组合 runtime、WebView2、Host、更新器、示例和安装器。
 - `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `1.0.0-2` 与 UOS deb `1.0.0-2+uos20.3`，验证 sealed runtime、私有 WebKitGTK/Mesa llvmpipe 闭包、XIM 输入桥，以及 Debian 10 与 Deepin 20.8/glibc 2.28 的真实输入点击/键入/后续交互、React/IPC、非白屏 UI、卸载和发布资产；可见文字组件由有系统字体的 Debian 10 门禁负责。
 
 发布前检查：
@@ -285,12 +285,12 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 
 1. 阅读本文件、`ROADMAP.md`、`offline/README.md` 和 `JUPYTER_INTEGRATION.md`；Linux 开发者额外完整阅读 `LINUX_DEVELOPMENT.md`。
 2. 查看分支、PR、最新提交和工作区状态，先区分当前 Tauri 实现与冻结的 PySide6 参考代码。
-3. Windows 维护者安装 `1.0.0` 到非系统盘；Linux 维护者使用隔离的 `DRPA_DATA_DIR` 启动真实 Tauri Host，确认数据目录实际位置。
+3. Windows 维护者安装 `2.0.0` 到非系统盘；Linux 维护者使用隔离的 `DRPA_DATA_DIR` 启动真实 Tauri Host，确认数据目录实际位置。
 4. 安装并运行 Bing 每日一图示例，检查实时日志、进度、输出目录和产物。
 5. 在 Studio 新建中文名称项目，运行源码、Markdown 单元和两个 Python notebook 单元。
 6. 阅读 `apps/desktop/src/infra/gateway.ts` 与 `apps/desktop/src-tauri/src/lib.rs` 的对应 command，确认参数在 Host 重新验证。
 7. 运行第 9 节全部本地检查，并对目标平台执行原生 GUI/runtime 测试。
-8. 查看最新 Windows/Linux Actions 与 `desktop-v1.0.0` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 deb manifest 版本应分别为 `1.0.0-2` 与 `1.0.0-2+uos20.3`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
+8. 查看 Windows `desktop-v2.0.0` 与 Linux `desktop-v1.0.0` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 Linux deb manifest 版本应分别为 `1.0.0-2` 与 `1.0.0-2+uos20.3`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
 9. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
 
-当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `1.0.0` 发布基线提交为 `5e6c793`；Linux `1.0.0` 由专用 Ubuntu 22.04 workflow 构建并发布，后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。
+当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `2.0.0` 发布基线由 `desktop-v2.0.0` 标签指向通过全量发布门禁的提交；Linux `1.0.0` 由专用 Ubuntu 22.04 workflow 构建并发布，后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。

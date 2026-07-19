@@ -160,7 +160,9 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "校验" }));
     await waitFor(() => expect(validate).toHaveBeenCalled());
     expect(await screen.findByText("工作流有效")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "保存工作流" }));
+    const saveWorkflow = screen.getByRole("button", { name: "保存工作流" });
+    await waitFor(() => expect(saveWorkflow).toBeEnabled());
+    fireEvent.click(saveWorkflow);
     await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
       name: "可视化工作流",
       mode: "workflow",

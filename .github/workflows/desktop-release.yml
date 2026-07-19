@@ -52,8 +52,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 1.0.0
-      RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || 'update' }}
+      DRPA_VERSION: 2.0.0
+      RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release(windows):') && 'full') || 'update' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -190,8 +190,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || 'update' }}
-      DRPA_VERSION: 1.0.0
+      RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release(windows):') && 'full') || 'update' }}
+      DRPA_VERSION: 2.0.0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -218,8 +218,8 @@ jobs:
           mapfile -t assets < <(find artifacts -type f | sort)
           if [[ "$RELEASE_KIND" == "full" ]]; then
             tag="desktop-v${DRPA_VERSION}"
-            title="DRPA Next ${DRPA_VERSION} 全量离线安装包"
-            notes="$(printf 'DRPA Next %s Windows x64 稳定版全量离线安装包。\n\n包含免注册表 Setup、封装的 Python 3.11/Chrome 运行时、Fixed Version WebView2、schema-2 安装库存和 Bing 每日一图 RPAZ 示例。后续日常版本使用轻量更新包，仅替换变化文件，并保留可视化进度、启动确认和失败回滚。' "$DRPA_VERSION")"
+            title="DRPA Next ${DRPA_VERSION} Windows x64 全量离线安装包"
+            notes="$(printf 'DRPA Next %s Windows x64 稳定版全量离线安装包。\n\n本版本新增 Local Dify 与可视化 Workflow/Chatflow 设计器、Skills 2.0 可执行能力包、离线插件服务、数据工作台与 AI SQL、持久化运行详情，以及 Python/Notebook 补全与检查。安装包包含免注册表 Setup、封装的 Python 3.11/Jupyter/Chrome 运行时、Fixed Version WebView2、schema-2 安装库存和 Bing 每日一图 RPAZ 示例。此 Release 仅发布 Windows x64 资产；后续日常版本继续使用轻量更新包。' "$DRPA_VERSION")"
           else
             tag="desktop-v${DRPA_VERSION}-preview-${GITHUB_RUN_NUMBER}"
             title="DRPA Next ${DRPA_VERSION} 轻量更新 · ${GITHUB_RUN_NUMBER}"

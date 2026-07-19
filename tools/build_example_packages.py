@@ -31,8 +31,13 @@ def main() -> int:
             target.unlink()
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(source.rglob("*")):
-                if path.is_file():
-                    archive.write(path, path.relative_to(source))
+                relative = path.relative_to(source)
+                if (
+                    path.is_file()
+                    and "__pycache__" not in relative.parts
+                    and path.suffix.lower() not in {".pyc", ".pyo"}
+                ):
+                    archive.write(path, relative)
         print(f"built {target}")
     return 0
 

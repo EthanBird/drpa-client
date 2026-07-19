@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-19
+
+> 本次正式 Release 仅发布 Windows x64 全量离线安装包；Linux 发行资产继续保持在 `desktop-v1.0.0`。
+
 ### Local Dify 开发平台
 
 - 基础设施新增“AI 应用”：本地管理 Chat/Completion 应用和 OpenAI-compatible Provider，支持 Prompt、模型参数、流式 Markdown 调试和 Provider 连接测试。

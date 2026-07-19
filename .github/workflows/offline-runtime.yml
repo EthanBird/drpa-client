@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release(windows):')
     name: Build ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -62,7 +63,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="offline-runtime-v1.0.0-dev-${GITHUB_RUN_NUMBER}"
+          tag="offline-runtime-v2.0.0-dev-${GITHUB_RUN_NUMBER}"
           mapfile -t assets < <(find artifacts -type f | sort)
           test "${#assets[@]}" -eq 2
           gh release create "$tag" "${assets[@]}" \

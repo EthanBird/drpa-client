@@ -33,6 +33,7 @@ concurrency:
 
 jobs:
   packages:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release(windows):')
     name: Ubuntu 22.04 AppImage + deb + sealed runtime
     runs-on: ubuntu-22.04
     timeout-minutes: 120

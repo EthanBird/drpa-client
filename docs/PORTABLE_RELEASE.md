@@ -38,7 +38,7 @@
 
 Host 会检查平台、schema、Host/Worker protocol、最低 Host 版本、精确基线版本、安全路径、文件数量与写入大小，不执行逐文件哈希验证。更新器只替换清单列出的应用文件，并明确保护 `data/` 和 WebView2；因此包、项目、运行历史和环境不会被日常应用更新波及。
 
-完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些大组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。push 默认只发布轻量 update：主程序、更新器、Python adapter wheel、运行时 bootstrap 和合并后的完整库存。adapter wheel 变化时客户端只原位刷新该小包，不重建 pandas、Jupyter、DrissionPage 等完整依赖。只有手工选择 full 发布时才重新生成 Setup、完整 runtime、WebView2 和示例资产。
+完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些大组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。普通 push 默认只发布轻量 update：主程序、更新器、Python adapter wheel、运行时 bootstrap 和合并后的完整库存。adapter wheel 变化时客户端只原位刷新该小包，不重建 pandas、Jupyter、DrissionPage 等完整依赖。手工选择 `full`，或使用 `release(windows):` 提交前缀准备稳定版本时，才重新生成 Setup、完整 runtime、WebView2 和示例资产。
 
 发布 stage 内的文件必须是实体文件。库存生成器拒绝 symlink、Junction 和 reparse point，防止安装包在构建机器上通过、复制到离线机器后才暴露缺失依赖。
 
@@ -57,6 +57,6 @@ Host 会检查平台、schema、Host/Worker protocol、最低 Host 版本、精�
 - `.drpa-update`。
 - `install-manifest.json`。
 
-手工 full 基线 Release 包含 Setup EXE、`install-manifest.json` 与 Bing 每日一图示例 `.rpaz`，共三个文件。全量基线不附带 `.drpa-update`；下一次日常发布才以该库存为基线生成轻量包。
+full 基线 Release 包含 Setup EXE、`install-manifest.json` 与 Bing 每日一图示例 `.rpaz`，共三个文件。全量基线不附带 `.drpa-update`；下一次日常发布才以该库存为基线生成轻量包。
 
 开发和发布流程见 [`DEVELOPMENT.md`](DEVELOPMENT.md)，完整依赖处理见 [`../offline/README.md`](../offline/README.md)。

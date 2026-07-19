@@ -367,7 +367,7 @@ cargo test -p drpa-desktop
 ./.venv/bin/python -m unittest discover -s tools/linux/tests -v
 ./.venv/bin/python -m compileall -q tools/offline tools/linux offline/bootstrap runtime/python/src
 ./.venv/bin/python tools/offline/validate_requirements.py offline/requirements/runtime.txt
-./.venv/bin/python tools/release/check_version_consistency.py --expected 1.0.0
+./.venv/bin/python tools/release/check_version_consistency.py --expected 2.0.0
 ```
 
 `tools/windows/tests` 在 Linux CI 运行的是更新包的纯 Python 格式与策略测试，不代表 Windows Worker 已在 Linux 上变成可用能力。
@@ -470,7 +470,7 @@ Linux GUI 应用不保证继承 `.bashrc`、`.profile` 等 shell 初始化文件
 
 - 主开发分支：`codex/drpa-next-platform`。
 - 当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。
-- Windows 稳定基线：`desktop-v1.0.0`，提交 `5e6c793`。
+- Windows 稳定基线：`desktop-v2.0.0`；本次只发布 Windows x64，Linux 资产仍保留在 `desktop-v1.0.0`。
 - Linux 第一优先级：保持 `Build and publish Linux x86_64 offline desktop` workflow 全绿，处理真实 Rust/Clippy/Tauri/AppImage、现代 deb 与 UOS deb 日志。
 - Linux 第二优先级：在 UOS 20/kernel 4.19 真机完成专用 deb 回归，并在 Ubuntu 22.04/24.04 干净虚拟机分别完成 X11/Wayland、断网首次启动、RPAZ、Notebook、Agent 工具、取消进程树和中文路径人工验收。
 
