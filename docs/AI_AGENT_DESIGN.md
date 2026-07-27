@@ -25,7 +25,7 @@ React Agent UI
           ├─ Skills 2.0 executable tools
           └─ Plugin tools
   → OpenAI-compatible /chat/completions 或本地 Plugin Provider
-  ↔ 最多 8 轮 function tool calls
+  ↔ 默认最多 64 轮、可配置 1–256 轮 function tool calls
   → assistant message + tool timeline + token/duration metadata
 ```
 
@@ -70,3 +70,6 @@ React Agent UI
 3. Provider profile、模型能力探测、代理与自定义 header。
 4. 长期服务的双向 `Content-Length` JSON-RPC 与取消/进度通知。
 5. 固定夹具 Skill/Agent evaluation，覆盖 manifest 修复、参数生成、插件崩溃和 Dify 工具桥。
+
+Agent 执行预算、持久 Jupyter Kernel 与 DrissionPage 浏览器调试的具体改造方案见
+[`AI_AGENT_JUPYTER_BROWSER_DESIGN.md`](AI_AGENT_JUPYTER_BROWSER_DESIGN.md)。

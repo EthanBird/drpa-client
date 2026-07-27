@@ -111,7 +111,7 @@ export interface DatabaseQueryResult {
 export interface RemoteDatabaseProfile {
   id: string;
   name: string;
-  engine: "postgresql" | "mysql";
+  engine: "postgresql" | "mysql" | "sqlite" | "excel";
   host: string;
   port: number;
   database: string;
@@ -358,6 +358,7 @@ export interface AgentTurnRequest {
   stream: boolean;
   contextWindow: number;
   maxOutputTokens: number;
+  maxRounds: number;
   temperature: number;
   messages: AgentMessage[];
 }

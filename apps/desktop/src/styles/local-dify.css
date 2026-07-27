@@ -130,11 +130,23 @@
 .local-dify-empty, .local-dify-no-selection { display: grid; place-items: center; align-content: center; gap: 6px; color: var(--text-3); text-align: center; }
 .local-dify-empty { min-height: 150px; padding: 18px; }.local-dify-empty strong { color: var(--text-2); font-size: calc(8px * var(--font-scale)); }.local-dify-empty span { font-size: calc(7px * var(--font-scale)); }
 .local-dify-no-selection h2 { margin: 4px 0 0; color: var(--text-1); }.local-dify-no-selection p { max-width: 440px; margin: 0 0 9px; font-size: calc(9px * var(--font-scale)); line-height: 1.6; }
-.dify-create-dialog { width: min(470px, calc(100vw - 32px)); }
+.local-dify-page .confirm-dialog { display: grid; width: min(440px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 48px)); overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-0); box-shadow: 0 24px 70px rgba(0,0,0,.28); }
+.local-dify-page .confirm-dialog > header { display: flex; align-items: center; min-height: 58px; padding: 11px 14px; border-bottom: 1px solid var(--border-subtle); }
+.local-dify-page .confirm-dialog > header > div { display: flex; align-items: center; gap: 8px; }
+.local-dify-page .confirm-dialog > header h2 { margin: 0; font-size: calc(13px * var(--font-scale)); }
+.local-dify-page .confirm-dialog > header svg { color: var(--accent); }
+.local-dify-page .confirm-dialog > header > button { display: grid; place-items: center; width: 29px; height: 29px; margin-left: auto; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-3); cursor: pointer; }
+.local-dify-page .confirm-dialog > header > button:hover { background: var(--surface-2); color: var(--text-1); }
+.local-dify-page .confirm-dialog > p { margin: 0; padding: 12px 14px 0; color: var(--text-3); font-size: calc(8px * var(--font-scale)); line-height: 1.55; }
+.local-dify-page .confirm-dialog > footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 55px; margin-top: 14px; padding: 9px 14px; border-top: 1px solid var(--border-subtle); background: var(--surface-1); }
+.dify-create-dialog { width: min(500px, calc(100vw - 32px)); }
 .dify-create-dialog > label { display: grid; gap: 5px; margin: 12px 0; color: var(--text-2); font-size: calc(8px * var(--font-scale)); }
-.dify-create-dialog > label input { height: 35px; padding: 0 9px; border: 1px solid var(--border-subtle); border-radius: 6px; outline: 0; background: var(--surface-0); color: var(--text-1); }
-.dify-mode-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.dify-mode-picker > button { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 2px 7px; padding: 10px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface-1); color: var(--text-2); text-align: left; }
+.dify-create-dialog > label { padding: 0 14px; }
+.dify-create-dialog > label input { height: 37px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; outline: 0; background: var(--surface-1); color: var(--text-1); }
+.dify-create-dialog > label input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.dify-mode-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 14px; }
+.dify-mode-picker > button { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 2px 7px; min-height: 66px; padding: 10px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface-1); color: var(--text-2); cursor: pointer; text-align: left; }
+.dify-mode-picker > button:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--surface-2); }
 .dify-mode-picker > button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }.dify-mode-picker svg { grid-row: 1 / 3; }.dify-mode-picker strong { font-size: calc(8px * var(--font-scale)); }.dify-mode-picker span { color: var(--text-3); font-size: calc(6px * var(--font-scale)); }
 .dify-provider-backdrop { padding-top: 7vh; }
 .dify-provider-dialog { display: grid; grid-template-columns: 210px minmax(0, 1fr); width: min(820px, calc(100vw - 40px)); max-height: 82vh; overflow: hidden; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-0); box-shadow: var(--shadow-lg); }

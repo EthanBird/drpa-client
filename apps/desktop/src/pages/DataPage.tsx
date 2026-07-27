@@ -90,8 +90,10 @@ export function DataPage() {
       const nextTables = await desktopGateway.listRemoteDatabaseTables(activeProfile.id, password);
       setDatabase({
         name: activeProfile.name,
-        engine: activeProfile.engine === "postgresql" ? "PostgreSQL" : "MySQL",
-        path: `${activeProfile.host}:${activeProfile.port}/${activeProfile.database}`,
+        engine: databaseEngineLabel(activeProfile.engine),
+        path: isFileDatabase(activeProfile.engine)
+          ? activeProfile.database
+          : `${activeProfile.host}:${activeProfile.port}/${activeProfile.database}`,
         sizeBytes: 0,
       });
       setTables(nextTables);
@@ -246,12 +248,15 @@ export function DataPage() {
         baseUrl: config.agentBaseUrl.trim(),
         model: config.agentModel.trim(),
         mode: "sql",
-        databaseDialect: activeProfile?.engine ?? "sqlite",
+        databaseDialect: activeProfile?.engine === "postgresql" || activeProfile?.engine === "mysql"
+          ? activeProfile.engine
+          : "sqlite",
         apiKey: config.agentApiKey,
         projectId: "",
         stream: config.agentStreamEnabled,
         contextWindow: config.agentContextWindow,
         maxOutputTokens: config.agentMaxOutputTokens,
+        maxRounds: config.agentMaxRounds,
         temperature: config.agentTemperature,
         messages: [{
           role: "user",
@@ -292,6 +297,14 @@ export function DataPage() {
     setConnectionTest(null);
   };
 
+  const pickConnectionFile = async () => {
+    if (!connectionDraft || !isFileDatabase(connectionDraft.engine)) return;
+    const selected = await desktopGateway.selectDatabaseSourceFile(connectionDraft.engine);
+    if (selected) {
+      setConnectionDraft({ ...connectionDraft, database: selected });
+    }
+  };
+
   const testConnection = async () => {
     if (!connectionDraft || connectionBusy) return;
     setConnectionBusy(true);
@@ -328,7 +341,7 @@ export function DataPage() {
   };
 
   const selectRemoteConnection = (profile: RemoteDatabaseProfile) => {
-    if (!(profile.id in connectionPasswords)) {
+    if (!isFileDatabase(profile.engine) && !(profile.id in connectionPasswords)) {
       editConnection(profile);
       return;
     }
@@ -362,7 +375,7 @@ export function DataPage() {
     <div className="page data-page">
       <header className="page-header data-header">
         <div>
-          <div className="eyebrow">SQLite · PostgreSQL · MySQL · AI SQL</div>
+          <div className="eyebrow">SQLite · PostgreSQL · MySQL · Excel · AI SQL</div>
           <h1>数据工作台</h1>
           <p>连接本地或远程数据库、浏览结构并直接编写和执行 SQL。</p>
         </div>
@@ -376,7 +389,7 @@ export function DataPage() {
 
       <div className="data-workspace">
         <aside className="data-schema-pane">
-          <div className="data-pane-title"><Database size={15} /> 连接 <button type="button" aria-label="新建数据库连接" title="新建 PostgreSQL / MySQL 连接" onClick={() => editConnection()}><Plus size={13} /></button></div>
+          <div className="data-pane-title"><Database size={15} /> 连接 <button type="button" aria-label="新建数据库连接" title="新建 PostgreSQL / MySQL / SQLite / Excel 数据源" onClick={() => editConnection()}><Plus size={13} /></button></div>
           <div className="database-connections-list">
             <button className={`database-connection ${activeConnectionId === "local" ? "active" : ""}`} type="button" onClick={() => { setActiveConnectionId("local"); setResult(null); setError(""); }}>
               <span className="database-icon"><Database size={16} /></span>
@@ -387,8 +400,8 @@ export function DataPage() {
               <div className={`remote-connection-row ${activeConnectionId === profile.id ? "active" : ""}`} key={profile.id}>
                 <button className="remote-connection-select" type="button" onClick={() => selectRemoteConnection(profile)}>
                   <span className="database-icon remote"><Cable size={15} /></span>
-                  <span><strong>{profile.name}</strong><small>{profile.engine === "postgresql" ? "PostgreSQL" : "MySQL"} · {profile.host}:{profile.port}</small></span>
-                  <span className={`connection-state ${profile.id in connectionPasswords ? "" : "idle"}`} title={profile.id in connectionPasswords ? "本次会话已连接" : "需要输入密码"} />
+                  <span><strong>{profile.name}</strong><small>{databaseEngineLabel(profile.engine)} · {connectionLocation(profile)}</small></span>
+                  <span className={`connection-state ${isFileDatabase(profile.engine) || profile.id in connectionPasswords ? "" : "idle"}`} title={isFileDatabase(profile.engine) || profile.id in connectionPasswords ? "本次会话已连接" : "需要输入密码"} />
                 </button>
                 <button className="remote-connection-settings" type="button" aria-label={`编辑数据库连接 ${profile.name}`} onClick={() => editConnection(profile)}><Settings2 size={12} /></button>
               </div>
@@ -482,22 +495,31 @@ export function DataPage() {
           <form className="database-dialog" role="dialog" aria-modal="true" aria-labelledby="database-dialog-title" onSubmit={(event) => { event.preventDefault(); void saveAndConnect(); }}>
             <header>
               <span className="sql-ai-icon"><Cable size={17} /></span>
-              <div><h2 id="database-dialog-title">{remoteProfiles.some((profile) => profile.id === connectionDraft.id) ? "编辑数据库连接" : "新建数据库连接"}</h2><p>连接信息保存在工作区，密码仅保留到本次应用退出。</p></div>
+              <div><h2 id="database-dialog-title">{remoteProfiles.some((profile) => profile.id === connectionDraft.id) ? "编辑数据源" : "新建数据源"}</h2><p>{isFileDatabase(connectionDraft.engine) ? "文件路径保存在工作区；Excel 工作簿以只读方式查询。" : "连接信息保存在工作区，密码仅保留到本次应用退出。"}</p></div>
               <button type="button" aria-label="关闭数据库连接设置" onClick={() => setConnectionDraft(null)} disabled={connectionBusy}><X size={16} /></button>
             </header>
             <div className="database-dialog-fields">
               <label><span>连接名称</span><input required maxLength={80} value={connectionDraft.name} onChange={(event) => setConnectionDraft({ ...connectionDraft, name: event.target.value })} placeholder="例如：业务分析库" /></label>
-              <div className="database-field-row">
-                <label><span>数据库类型</span><select value={connectionDraft.engine} onChange={(event) => { const engine = event.target.value as RemoteDatabaseProfile["engine"]; setConnectionDraft({ ...connectionDraft, engine, port: engine === "postgresql" ? 5432 : 3306 }); }}><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option></select></label>
-                <label><span>TLS</span><select value={connectionDraft.tlsMode} onChange={(event) => setConnectionDraft({ ...connectionDraft, tlsMode: event.target.value as RemoteDatabaseProfile["tlsMode"] })}><option value="require">必须</option><option value="prefer">优先</option><option value="disable">关闭</option></select></label>
+              <div className={`database-field-row ${isFileDatabase(connectionDraft.engine) ? "single" : ""}`}>
+                <label><span>数据源类型</span><select value={connectionDraft.engine} onChange={(event) => { const engine = event.target.value as RemoteDatabaseProfile["engine"]; setConnectionDraft({ ...connectionDraft, engine, port: engine === "postgresql" ? 5432 : engine === "mysql" ? 3306 : 0, host: isFileDatabase(engine) ? "" : connectionDraft.host || "localhost", username: isFileDatabase(engine) ? "" : connectionDraft.username, database: "" }); setConnectionTest(null); setConnectionError(""); }}><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite 文件</option><option value="excel">Excel 工作簿（只读）</option></select></label>
+                {!isFileDatabase(connectionDraft.engine) && <label><span>TLS</span><select value={connectionDraft.tlsMode} onChange={(event) => setConnectionDraft({ ...connectionDraft, tlsMode: event.target.value as RemoteDatabaseProfile["tlsMode"] })}><option value="require">必须</option><option value="prefer">优先</option><option value="disable">关闭</option></select></label>}
               </div>
-              <div className="database-field-row host-row">
-                <label><span>主机</span><input required value={connectionDraft.host} onChange={(event) => setConnectionDraft({ ...connectionDraft, host: event.target.value })} placeholder="db.example.com" /></label>
-                <label><span>端口</span><input required type="number" min={1} max={65535} value={connectionDraft.port} onChange={(event) => setConnectionDraft({ ...connectionDraft, port: Number(event.target.value) })} /></label>
-              </div>
-              <label><span>数据库</span><input required value={connectionDraft.database} onChange={(event) => setConnectionDraft({ ...connectionDraft, database: event.target.value })} placeholder="database_name" /></label>
-              <label><span>用户名</span><input required value={connectionDraft.username} onChange={(event) => setConnectionDraft({ ...connectionDraft, username: event.target.value })} autoComplete="username" /></label>
-              <label><span>密码</span><input type="password" value={connectionPassword} onChange={(event) => setConnectionPassword(event.target.value)} autoComplete="current-password" placeholder="仅保存在内存中" /></label>
+              {isFileDatabase(connectionDraft.engine) ? (
+                <>
+                  <label><span>{connectionDraft.engine === "excel" ? "工作簿文件" : "SQLite 数据库文件"}</span><div className="database-file-input"><input required value={connectionDraft.database} onChange={(event) => setConnectionDraft({ ...connectionDraft, database: event.target.value })} placeholder={connectionDraft.engine === "excel" ? "选择 .xls / .xlsx / .xlsb / .ods 文件" : "选择 .db / .sqlite / .sqlite3 文件"} /><button className="button secondary" type="button" onClick={() => void pickConnectionFile()}><FolderOpen size={14} /> 浏览</button></div></label>
+                  <div className="database-source-note"><Database size={14} /><span>{connectionDraft.engine === "excel" ? "首行作为字段名，每个工作表映射为一张只读表，可使用 SELECT 查询。" : "直接连接已有 SQLite 文件，支持结构浏览和 SQL 读写。"}</span></div>
+                </>
+              ) : (
+                <>
+                  <div className="database-field-row host-row">
+                    <label><span>主机</span><input required value={connectionDraft.host} onChange={(event) => setConnectionDraft({ ...connectionDraft, host: event.target.value })} placeholder="db.example.com" /></label>
+                    <label><span>端口</span><input required type="number" min={1} max={65535} value={connectionDraft.port} onChange={(event) => setConnectionDraft({ ...connectionDraft, port: Number(event.target.value) })} /></label>
+                  </div>
+                  <label><span>数据库</span><input required value={connectionDraft.database} onChange={(event) => setConnectionDraft({ ...connectionDraft, database: event.target.value })} placeholder="database_name" /></label>
+                  <label><span>用户名</span><input required value={connectionDraft.username} onChange={(event) => setConnectionDraft({ ...connectionDraft, username: event.target.value })} autoComplete="username" /></label>
+                  <label><span>密码</span><input type="password" value={connectionPassword} onChange={(event) => setConnectionPassword(event.target.value)} autoComplete="current-password" placeholder="仅保存在内存中" /></label>
+                </>
+              )}
               {connectionTest && <div className="database-test-success"><Check size={14} /><span><strong>连接成功 · {connectionTest.latencyMs} ms</strong><small>{connectionTest.serverVersion}</small></span></div>}
               {connectionError && <div className="sql-ai-error">{connectionError}</div>}
             </div>
@@ -582,6 +604,24 @@ function createRemoteProfile(): RemoteDatabaseProfile {
     username: "",
     tlsMode: "prefer",
   };
+}
+
+function isFileDatabase(engine: RemoteDatabaseProfile["engine"]): engine is "sqlite" | "excel" {
+  return engine === "sqlite" || engine === "excel";
+}
+
+function databaseEngineLabel(engine: RemoteDatabaseProfile["engine"]): string {
+  if (engine === "postgresql") return "PostgreSQL";
+  if (engine === "mysql") return "MySQL";
+  if (engine === "excel") return "Excel";
+  return "SQLite";
+}
+
+function connectionLocation(profile: RemoteDatabaseProfile): string {
+  if (isFileDatabase(profile.engine)) {
+    return profile.database.split(/[\\/]/).filter(Boolean).at(-1) ?? profile.database;
+  }
+  return `${profile.host}:${profile.port}`;
 }
 
 function formatCell(value: unknown): string {

@@ -14,7 +14,8 @@ use zip::write::SimpleFileOptions;
 
 use crate::{agent_config, knowledge, plugins};
 
-const MAX_AGENT_ROUNDS: usize = 8;
+const DEFAULT_MAX_AGENT_ROUNDS: usize = 64;
+const MAX_CONFIGURABLE_AGENT_ROUNDS: usize = 256;
 const MAX_HISTORY_MESSAGES: usize = 120;
 const MAX_MESSAGE_BYTES: usize = 100_000;
 const MAX_TOOL_OUTPUT_BYTES: usize = 20_000;
@@ -50,6 +51,8 @@ pub(crate) struct AgentTurnRequest {
     pub context_window: u32,
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u32,
+    #[serde(default = "default_max_agent_rounds")]
+    pub max_rounds: usize,
     #[serde(default = "default_temperature")]
     pub temperature: f32,
     pub messages: Vec<AgentMessage>,
@@ -220,7 +223,7 @@ where
     let mut events = Vec::new();
     let mut usage = AgentUsage::default();
 
-    for round in 0..MAX_AGENT_ROUNDS {
+    for round in 0..request.max_rounds {
         if request.stream {
             emit(AgentStreamEvent::RoundStarted { round: round + 1 });
         }
@@ -313,7 +316,8 @@ where
     }
 
     Err(format!(
-        "Agent 工具调用超过 {MAX_AGENT_ROUNDS} 轮，请缩小任务范围后重试"
+        "Agent 模型/工具循环达到本次配置上限 {} 轮；可在 Agent 设置中提高上限后继续",
+        request.max_rounds
     ))
 }
 
@@ -331,6 +335,10 @@ fn default_database_dialect() -> String {
 
 const fn default_max_output_tokens() -> u32 {
     4_096
+}
+
+const fn default_max_agent_rounds() -> usize {
+    DEFAULT_MAX_AGENT_ROUNDS
 }
 
 const fn default_temperature() -> f32 {
@@ -370,6 +378,11 @@ fn validate_request(request: &AgentTurnRequest) -> Result<(), String> {
         || request.max_output_tokens >= request.context_window
     {
         return Err("最大输出 tokens 必须小于上下文窗口，且位于 64 到 131072 之间".to_owned());
+    }
+    if !(1..=MAX_CONFIGURABLE_AGENT_ROUNDS).contains(&request.max_rounds) {
+        return Err(format!(
+            "Agent 最大模型/工具循环必须在 1 到 {MAX_CONFIGURABLE_AGENT_ROUNDS} 之间"
+        ));
     }
     if !request.temperature.is_finite() || !(0.0..=2.0).contains(&request.temperature) {
         return Err("Temperature 必须在 0 到 2 之间".to_owned());
@@ -1322,6 +1335,7 @@ mod tests {
             stream: true,
             context_window: 2_000,
             max_output_tokens: 512,
+            max_rounds: DEFAULT_MAX_AGENT_ROUNDS,
             temperature: 0.2,
             messages: vec![
                 AgentMessage {
@@ -1360,6 +1374,24 @@ mod tests {
         .unwrap();
         assert_eq!(request.mode, "rpaz");
         assert_eq!(request.database_dialect, "sqlite");
+        assert_eq!(request.max_rounds, DEFAULT_MAX_AGENT_ROUNDS);
+    }
+
+    #[test]
+    fn agent_round_limit_is_configurable_and_host_bounded() {
+        let mut request: AgentTurnRequest = serde_json::from_value(json!({
+            "requestId": "req-rounds",
+            "baseUrl": "http://localhost:11434/v1",
+            "model": "local",
+            "maxRounds": 128,
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .unwrap();
+        assert_eq!(request.max_rounds, 128);
+        assert!(validate_request(&request).is_ok());
+
+        request.max_rounds = MAX_CONFIGURABLE_AGENT_ROUNDS + 1;
+        assert!(validate_request(&request).is_err());
     }
 
     #[test]

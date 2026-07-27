@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { mockSnapshot } from "../data/mockSnapshot";
 import type {
@@ -81,6 +82,7 @@ export interface DesktopGateway {
   executeDatabaseSql(sql: string): Promise<DatabaseQueryResult>;
   getDatabaseSchemaContext(): Promise<string>;
   openWorkspaceDatabaseDirectory(): Promise<void>;
+  selectDatabaseSourceFile(engine: "sqlite" | "excel"): Promise<string | null>;
   listRemoteDatabaseProfiles(): Promise<RemoteDatabaseProfile[]>;
   saveRemoteDatabaseProfile(profile: RemoteDatabaseProfile): Promise<RemoteDatabaseProfile>;
   deleteRemoteDatabaseProfile(profileId: string): Promise<void>;
@@ -464,6 +466,7 @@ const mockGateway: DesktopGateway = {
     return "-- SQLite 工作区数据库结构\n\nCREATE TABLE example_tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, status TEXT);\n";
   },
   async openWorkspaceDatabaseDirectory() {},
+  async selectDatabaseSourceFile() { return null; },
   async listRemoteDatabaseProfiles() { return mockRemoteDatabaseProfiles; },
   async saveRemoteDatabaseProfile(profile) {
     const saved = { ...profile, id: profile.id || `database-${Date.now()}` };
@@ -474,7 +477,13 @@ const mockGateway: DesktopGateway = {
     mockRemoteDatabaseProfiles = mockRemoteDatabaseProfiles.filter((item) => item.id !== profileId);
   },
   async testRemoteDatabaseConnection(profile) {
-    return { serverVersion: profile.engine === "postgresql" ? "PostgreSQL 17.2" : "MySQL 8.4", latencyMs: 12 };
+    const versions: Record<RemoteDatabaseProfile["engine"], string> = {
+      postgresql: "PostgreSQL 17.2",
+      mysql: "MySQL 8.4",
+      sqlite: "SQLite 3.49",
+      excel: "Excel 工作簿 · 2 个工作表（只读）",
+    };
+    return { serverVersion: versions[profile.engine], latencyMs: 12 };
   },
   async listRemoteDatabaseTables() {
     return [{ name: "public.remote_tasks", kind: "table", rowCount: 4 }];
@@ -861,6 +870,18 @@ const tauriGateway: DesktopGateway = {
   executeDatabaseSql: (sql) => invoke<DatabaseQueryResult>("execute_database_sql", { sql }),
   getDatabaseSchemaContext: () => invoke<string>("get_database_schema_context"),
   openWorkspaceDatabaseDirectory: () => invoke<void>("open_workspace_database_directory"),
+  selectDatabaseSourceFile: async (engine) => {
+    const excel = engine === "excel";
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{
+        name: excel ? "Excel 工作簿" : "SQLite 数据库",
+        extensions: excel ? ["xls", "xlsx", "xlsb", "ods"] : ["db", "sqlite", "sqlite3"],
+      }],
+    });
+    return typeof selected === "string" ? selected : null;
+  },
   listRemoteDatabaseProfiles: () => invoke<RemoteDatabaseProfile[]>("list_remote_database_profiles"),
   saveRemoteDatabaseProfile: (profile) => invoke<RemoteDatabaseProfile>("save_remote_database_profile", { profile }),
   deleteRemoteDatabaseProfile: (profileId) => invoke<void>("delete_remote_database_profile", { profileId }),

@@ -145,7 +145,7 @@ RunAttempt
 
 ## 4. AI Agent 辅助开发
 
-> 状态：轻量 MVP 已实现。当前具备 OpenAI-compatible URL/model/可选会话 key、项目绑定、最多 8 轮工具循环，以及 `rpaz_list_files/read_file/write_file/validate/build/python` 六个 Host 工具。流式输出、diff/checkpoint、日志/Notebook 工具和长期会话仍按本节后续门槛演进。实现说明见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
+> 状态：轻量 MVP 已实现。当前具备 OpenAI-compatible URL/model/可选会话 key、项目绑定、默认 64 轮且可配置 1–256 轮的工具循环，以及 `rpaz_list_files/read_file/write_file/validate/build/python` 六个 Host 工具。流式输出、diff/checkpoint、日志/Notebook 工具和长期会话仍按本节后续门槛演进。实现说明见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
 
 ### 4.1 参考与取舍
 

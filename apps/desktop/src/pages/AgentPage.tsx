@@ -74,13 +74,24 @@ function latestUserIndex(messages: AgentConversationMessage[]): number {
   return -1;
 }
 
-export function AgentPage() {
+interface AgentPageProps {
+  embedded?: boolean;
+  embeddedProjectId?: string;
+  embeddedProjectName?: string;
+}
+
+export function AgentPage({
+  embedded = false,
+  embeddedProjectId = "",
+  embeddedProjectName = "",
+}: AgentPageProps = {}) {
   const agentBaseUrl = useAppStore((state) => state.agentBaseUrl);
   const agentModel = useAppStore((state) => state.agentModel);
   const apiKey = useAppStore((state) => state.agentApiKey);
   const agentStreamEnabled = useAppStore((state) => state.agentStreamEnabled);
   const agentContextWindow = useAppStore((state) => state.agentContextWindow);
   const agentMaxOutputTokens = useAppStore((state) => state.agentMaxOutputTokens);
+  const agentMaxRounds = useAppStore((state) => state.agentMaxRounds);
   const agentTemperature = useAppStore((state) => state.agentTemperature);
   const agentInspectorOpen = useAppStore((state) => state.agentInspectorOpen);
   const agentSessions = useAppStore((state) => state.agentSessions);
@@ -91,6 +102,7 @@ export function AgentPage() {
   const setAgentStreamEnabled = useAppStore((state) => state.setAgentStreamEnabled);
   const setAgentContextWindow = useAppStore((state) => state.setAgentContextWindow);
   const setAgentMaxOutputTokens = useAppStore((state) => state.setAgentMaxOutputTokens);
+  const setAgentMaxRounds = useAppStore((state) => state.setAgentMaxRounds);
   const setAgentTemperature = useAppStore((state) => state.setAgentTemperature);
   const toggleAgentInspector = useAppStore((state) => state.toggleAgentInspector);
   const createAgentConversation = useAppStore((state) => state.createAgentConversation);
@@ -121,6 +133,16 @@ export function AgentPage() {
   const agentProjectId = activeSession?.projectId ?? "";
 
   useEffect(() => {
+    if (embedded && activeSession && activeSession.projectId !== embeddedProjectId) {
+      setAgentConversationProject(activeSession.id, embeddedProjectId);
+    }
+  }, [activeSession, embedded, embeddedProjectId, setAgentConversationProject]);
+
+  useEffect(() => {
+    if (embedded) {
+      setProjects([]);
+      return;
+    }
     let active = true;
     void desktopGateway.listStudioProjects().then((items) => {
       if (!active) return;
@@ -130,7 +152,7 @@ export function AgentPage() {
       }
     }).catch((reason: unknown) => setError(`读取开发项目失败：${String(reason)}`));
     return () => { active = false; };
-  }, [activeSession?.id, agentProjectId, setAgentConversationProject]);
+  }, [activeSession?.id, agentProjectId, embedded, setAgentConversationProject]);
 
   useEffect(() => {
     const target = transcriptRef.current;
@@ -138,9 +160,17 @@ export function AgentPage() {
   }, [messages, busy, streamingContent, streamingTools]);
 
   const selectedProject = useMemo(
-    () => projects.find((project) => project.id === agentProjectId),
-    [agentProjectId, projects],
+    () => embedded
+      ? projects.find((project) => project.id === embeddedProjectId)
+        ?? (embeddedProjectId ? { id: embeddedProjectId, name: embeddedProjectName, files: [] } as StudioProject : undefined)
+      : projects.find((project) => project.id === agentProjectId),
+    [agentProjectId, embedded, embeddedProjectId, embeddedProjectName, projects],
   );
+
+  const createBoundConversation = () => {
+    const sessionId = createAgentConversation();
+    if (embeddedProjectId) setAgentConversationProject(sessionId, embeddedProjectId);
+  };
 
   const confirmConversationAction = () => {
     if (!confirmation) return;
@@ -181,10 +211,13 @@ export function AgentPage() {
         baseUrl: agentBaseUrl.trim(),
         model: agentModel.trim(),
         apiKey,
-        projectId: agentSessions.find((session) => session.id === sessionId)?.projectId ?? agentProjectId,
+        projectId: embedded
+          ? embeddedProjectId
+          : agentSessions.find((session) => session.id === sessionId)?.projectId ?? agentProjectId,
         stream: agentStreamEnabled,
         contextWindow: agentContextWindow,
         maxOutputTokens: agentMaxOutputTokens,
+        maxRounds: agentMaxRounds,
         temperature: agentTemperature,
         messages: history.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
       });
@@ -237,6 +270,79 @@ export function AgentPage() {
   const lastUserIndex = latestUserIndex(messages);
   const latestUserMessageId = lastUserIndex >= 0 ? messages[lastUserIndex].id : undefined;
 
+  if (embedded) {
+    return (
+      <section className="studio-agent agent-conversation" aria-label="开发工作室 AI Agent">
+        <header className="studio-agent-header">
+          <div><Bot size={15} /><span><strong>AI Agent</strong><small>{selectedProject ? "当前项目已绑定" : "未选择项目"}</small></span></div>
+          <select aria-label="工作室 Agent 对话" value={activeSession?.id ?? ""} onChange={(event) => selectAgentConversation(event.target.value)} disabled={busy}>
+            {agentSessions.map((session) => <option value={session.id} key={session.id}>{session.title}</option>)}
+          </select>
+          <button type="button" title="新建对话" aria-label="新建工作室 Agent 对话" onClick={createBoundConversation} disabled={busy}><Plus size={13} /></button>
+          <button type="button" title="清空当前对话" aria-label="清空工作室 Agent 对话" onClick={() => activeSession && setConfirmation({ kind: "clear", sessionId: activeSession.id, title: activeSession.title })} disabled={busy || messages.length === 0}><Trash2 size={13} /></button>
+        </header>
+        <div className="agent-transcript studio-agent-transcript" ref={transcriptRef} aria-live="polite">
+          {messages.length === 0 && !busy && (
+            <div className="agent-welcome studio-agent-welcome">
+              <div className="agent-orbit"><Sparkles size={20} /></div>
+              <h2>和 Agent 一起开发</h2>
+              <p>{selectedProject ? `已绑定“${selectedProject.name}”，可直接读取、修改、校验和构建当前项目。` : "选择一个开发项目后，Agent 会自动绑定当前工作区。"}</p>
+              <div className="agent-suggestions">{suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => void send(suggestion)}><MessageSquarePlus size={13} /><span>{suggestion}</span></button>)}</div>
+            </div>
+          )}
+          {messages.map((message, index) => (
+            <article className={`agent-message ${message.role}`} key={message.id}>
+              <div className="agent-message-avatar">{message.role === "assistant" ? <Bot size={14} /> : "你"}</div>
+              <div className="agent-message-body">
+                <header>
+                  <strong>{message.role === "assistant" ? "DRPA Agent" : "你"}</strong>
+                  {message.role === "assistant" && <span>{message.durationMs} ms · {message.tokens ?? 0} tokens</span>}
+                  <span className="agent-message-actions">
+                    {message.role === "user" && message.id === latestUserMessageId && <button type="button" aria-label="编辑最新消息" onClick={() => { setEditingMessageId(message.id); setEditingDraft(message.content); }} disabled={busy}><Pencil size={12} /></button>}
+                    {((message.role === "assistant" && index === messages.length - 1) || (message.role === "user" && message.id === latestUserMessageId && index === messages.length - 1)) && <button type="button" aria-label="重新生成回复" onClick={() => void regenerate()} disabled={busy}><RotateCcw size={12} /></button>}
+                  </span>
+                </header>
+                {message.tools && message.tools.length > 0 && <div className="agent-tool-events">{message.tools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
+                {editingMessageId === message.id ? (
+                  <div className="agent-message-editor">
+                    <textarea aria-label="编辑最新用户消息" autoFocus value={editingDraft} onChange={(event) => setEditingDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void submitEditedMessage(); } }} />
+                    <footer><button className="button ghost small" type="button" onClick={() => setEditingMessageId("")}>取消</button><button className="button primary small" type="button" onClick={() => void submitEditedMessage()} disabled={!editingDraft.trim()}>重新生成</button></footer>
+                  </div>
+                ) : <AgentMarkdown content={message.content} />}
+              </div>
+            </article>
+          ))}
+          {busy && (
+            <article className="agent-message assistant pending">
+              <div className="agent-message-avatar"><Bot size={14} /></div>
+              <div className="agent-message-body">
+                <header><strong>DRPA Agent</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
+                {streamingTools.length > 0 && <div className="agent-tool-events">{streamingTools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
+                {streamingContent ? <AgentMarkdown content={streamingContent} streaming /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
+              </div>
+            </article>
+          )}
+        </div>
+        <div className="agent-composer-wrap studio-agent-composer-wrap">
+          {error && <div className="agent-error"><CircleAlert size={13} />{error}<button type="button" onClick={() => setError("")}>×</button></div>}
+          <div className="agent-composer">
+            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void send(); } }} placeholder={selectedProject ? `向 Agent 描述“${selectedProject.name}”的开发任务…` : "先选择左侧开发项目…"} disabled={busy || !selectedProject} />
+            <footer><span><Code2 size={12} /> {selectedProject ? "当前项目" : "未绑定项目"}</span><small>Ctrl + Enter</small><button type="button" aria-label="发送工作室 Agent 消息" onClick={() => void send()} disabled={busy || !draft.trim() || !selectedProject}><Send size={14} /></button></footer>
+          </div>
+        </div>
+        {confirmation && (
+          <div className="knowledge-confirm-overlay studio-agent-confirm" role="dialog" aria-modal="true" aria-label="确认清空对话">
+            <section className="knowledge-confirm">
+              <div className="knowledge-confirm-icon"><CircleAlert size={18} /></div>
+              <div><h2>清空当前对话？</h2><p>“{confirmation.title}”的全部消息将被清空，会话本身会保留。</p></div>
+              <footer><button className="button secondary" type="button" onClick={() => setConfirmation(null)}>取消</button><button className="button danger" type="button" onClick={confirmConversationAction}>确认清空</button></footer>
+            </section>
+          </div>
+        )}
+      </section>
+    );
+  }
+
   return (
     <div className="page agent-page">
       <header className="agent-header">
@@ -253,7 +359,7 @@ export function AgentPage() {
 
       <div className={`agent-layout ${agentInspectorOpen ? "" : "config-hidden"}`}>
         <aside className="agent-sessions" aria-label="Agent 对话列表">
-          <header><div><MessageSquarePlus size={14} /><strong>对话</strong></div><button type="button" aria-label="新建 Agent 对话" onClick={() => createAgentConversation()} disabled={busy}><Plus size={14} /></button></header>
+          <header><div><MessageSquarePlus size={14} /><strong>对话</strong></div><button type="button" aria-label="新建 Agent 对话" onClick={createBoundConversation} disabled={busy}><Plus size={14} /></button></header>
           <div className="agent-session-list">
             {agentSessions.map((session) => (
               <div className={`agent-session-row ${session.id === activeSession?.id ? "active" : ""}`} key={session.id}>
@@ -366,6 +472,7 @@ export function AgentPage() {
               <label className="agent-switch-label"><span>流式输出</span><button className={`switch ${agentStreamEnabled ? "on" : ""}`} type="button" role="switch" aria-label="Agent 流式输出" aria-checked={agentStreamEnabled} onClick={() => setAgentStreamEnabled(!agentStreamEnabled)}><span /></button><small>开启后按增量实时渲染 Markdown。</small></label>
               <label><span>上下文窗口</span><input aria-label="Agent 上下文窗口" type="number" min={1024} max={2000000} step={1024} value={agentContextWindow} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentContextWindow(event.currentTarget.valueAsNumber); }} /><small>按模型 token 上限裁剪较早对话，默认 128K。</small></label>
               <label><span>最大输出 tokens</span><input aria-label="Agent 最大输出 tokens" type="number" min={64} max={131072} step={64} value={agentMaxOutputTokens} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentMaxOutputTokens(event.currentTarget.valueAsNumber); }} /></label>
+              <label><span>最大模型/工具循环</span><input aria-label="Agent 最大模型工具循环" type="number" min={1} max={256} step={1} value={agentMaxRounds} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentMaxRounds(event.currentTarget.valueAsNumber); }} /><small>单次请求默认 64 轮，可配置 1–256。</small></label>
               <label><span>Temperature</span><input aria-label="Agent Temperature" type="number" min={0} max={2} step={0.1} value={agentTemperature} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentTemperature(event.currentTarget.valueAsNumber); }} /></label>
             </section>
 
@@ -380,7 +487,7 @@ export function AgentPage() {
               <div className="agent-tool-list">{Object.entries(toolLabels).map(([name, label]) => { const active = name.startsWith("agent_") || name.startsWith("knowledge_") || Boolean(agentProjectId); return <div className={active ? "active" : ""} key={name}><CheckCircle2 size={12} /><span><strong>{label}</strong><code>{name}</code></span></div>; })}</div>
             </section>
           </div>
-          <footer><span className="agent-limit-dot" /> 单 Agent · 最多 8 轮工具调用 · Python 30 秒</footer>
+          <footer><span className="agent-limit-dot" /> 单 Agent · 最多 {agentMaxRounds} 轮模型/工具循环 · Python 30 秒</footer>
         </aside>}
       </div>
       {confirmation && (

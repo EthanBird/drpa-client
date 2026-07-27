@@ -33,6 +33,7 @@ interface AppStore {
   agentStreamEnabled: boolean;
   agentContextWindow: number;
   agentMaxOutputTokens: number;
+  agentMaxRounds: number;
   agentTemperature: number;
   agentProjectId: string;
   agentInspectorOpen: boolean;
@@ -57,6 +58,7 @@ interface AppStore {
   setAgentStreamEnabled: (enabled: boolean) => void;
   setAgentContextWindow: (tokens: number) => void;
   setAgentMaxOutputTokens: (tokens: number) => void;
+  setAgentMaxRounds: (rounds: number) => void;
   setAgentTemperature: (temperature: number) => void;
   setAgentProjectId: (projectId: string) => void;
   toggleAgentInspector: () => void;
@@ -83,6 +85,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   agentStreamEnabled: true,
   agentContextWindow: 128000,
   agentMaxOutputTokens: 4096,
+  agentMaxRounds: 64,
   agentTemperature: 0.2,
   agentProjectId: "",
   agentInspectorOpen: true,
@@ -111,6 +114,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setAgentStreamEnabled: (agentStreamEnabled) => set({ agentStreamEnabled }),
   setAgentContextWindow: (agentContextWindow) => set({ agentContextWindow }),
   setAgentMaxOutputTokens: (agentMaxOutputTokens) => set({ agentMaxOutputTokens }),
+  setAgentMaxRounds: (agentMaxRounds) => set({ agentMaxRounds }),
   setAgentTemperature: (agentTemperature) => set({ agentTemperature }),
   setAgentProjectId: (agentProjectId) => set({ agentProjectId }),
   toggleAgentInspector: () => set((state) => ({ agentInspectorOpen: !state.agentInspectorOpen })),
@@ -168,6 +172,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     agentStreamEnabled: state.agentStreamEnabled,
     agentContextWindow: state.agentContextWindow,
     agentMaxOutputTokens: state.agentMaxOutputTokens,
+    agentMaxRounds: state.agentMaxRounds,
     agentTemperature: state.agentTemperature,
     agentProjectId: state.agentProjectId,
     agentInspectorOpen: state.agentInspectorOpen,

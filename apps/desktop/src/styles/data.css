@@ -135,7 +135,12 @@
 .database-dialog-fields input, .database-dialog-fields select { box-sizing: border-box; width: 100%; height: 34px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; outline: none; background: var(--surface-2); color: var(--text-1); font: calc(9px * var(--font-scale)) var(--font-sans); }
 .database-dialog-fields input:focus, .database-dialog-fields select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .database-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.database-field-row.single { grid-template-columns: 1fr; }
 .database-field-row.host-row { grid-template-columns: minmax(0, 1fr) 112px; }
+.database-file-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.database-file-input .button { height: 34px; white-space: nowrap; }
+.database-source-note { display: flex; align-items: flex-start; gap: 8px; margin: -1px 0 12px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border-subtle)); border-radius: 7px; background: var(--accent-soft); color: var(--text-2); font-size: calc(8px * var(--font-scale)); line-height: 1.5; }
+.database-source-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--accent); }
 .database-test-success { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--success) 25%, var(--border)); border-radius: 7px; background: var(--success-soft); color: var(--success); }
 .database-test-success strong, .database-test-success small { display: block; }
 .database-test-success strong { font-size: calc(9px * var(--font-scale)); }

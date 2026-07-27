@@ -52,6 +52,7 @@ describe("DRPA Next desktop shell", () => {
       agentStreamEnabled: true,
       agentContextWindow: 128000,
       agentMaxOutputTokens: 4096,
+      agentMaxRounds: 64,
       agentTemperature: 0.2,
       agentProjectId: "",
       agentInspectorOpen: true,
@@ -149,6 +150,9 @@ describe("DRPA Next desktop shell", () => {
 
     expect(await screen.findByRole("heading", { name: "AI 应用" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "新建应用" }));
+    expect(document.querySelector(".dify-create-dialog")).toBeVisible();
+    expect(document.querySelector(".dify-create-dialog > header")).toBeVisible();
+    expect(document.querySelector(".dify-create-dialog > footer")).toBeVisible();
     fireEvent.change(screen.getByLabelText("新建 AI 应用名称"), { target: { value: "可视化工作流" } });
     fireEvent.click(screen.getByRole("button", { name: /Workflow.*自动化与批处理工作流/ }));
     fireEvent.click(screen.getByRole("button", { name: "创建应用" }));
@@ -209,6 +213,29 @@ describe("DRPA Next desktop shell", () => {
     await waitFor(() => expect(saveProfile).toHaveBeenCalledWith(expect.objectContaining({ engine: "postgresql", database: "analytics" })));
     await waitFor(() => expect(listTables).toHaveBeenCalledWith(expect.any(String), "session-secret"));
     expect(await screen.findByText("public.remote_tasks")).toBeVisible();
+  });
+
+  it("creates SQLite and Excel file data sources from the workbench", async () => {
+    const saveProfile = vi.spyOn(desktopGateway, "saveRemoteDatabaseProfile");
+    useAppStore.setState({ activeNavigation: "data" });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "数据工作台" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "新建数据库连接" }));
+    fireEvent.change(screen.getByLabelText("数据源类型"), { target: { value: "sqlite" } });
+    fireEvent.change(screen.getByLabelText("连接名称"), { target: { value: "本地分析库" } });
+    fireEvent.change(screen.getByLabelText("SQLite 数据库文件"), { target: { value: "D:\\data\\analytics.sqlite3" } });
+    expect(screen.queryByLabelText("密码")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存并连接" }));
+    await waitFor(() => expect(saveProfile).toHaveBeenCalledWith(expect.objectContaining({
+      engine: "sqlite",
+      database: "D:\\data\\analytics.sqlite3",
+    })));
+
+    fireEvent.click(screen.getByRole("button", { name: "新建数据库连接" }));
+    fireEvent.change(screen.getByLabelText("数据源类型"), { target: { value: "excel" } });
+    expect(screen.getByLabelText("工作簿文件")).toBeVisible();
+    expect(screen.getByText(/每个工作表映射为一张只读表/)).toBeVisible();
   });
 
   it("loads persisted run details when opening the run history", async () => {
@@ -364,6 +391,9 @@ describe("DRPA Next desktop shell", () => {
       .mockResolvedValue(result);
     render(<App />);
 
+    const maxRounds = await screen.findByLabelText("Agent 最大模型工具循环");
+    expect(maxRounds).toHaveValue(64);
+    fireEvent.change(maxRounds, { target: { value: "96" } });
     const composer = await screen.findByPlaceholderText(/询问 RPAZ/);
     fireEvent.change(composer, { target: { value: "生成 Markdown" } });
     fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
@@ -382,6 +412,7 @@ describe("DRPA Next desktop shell", () => {
       stream: true,
       contextWindow: 128000,
       maxOutputTokens: 4096,
+      maxRounds: 96,
       temperature: 0.2,
       requestId: expect.stringMatching(/^req-/),
     }));
@@ -456,6 +487,31 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "新建项目" }));
 
     expect(await screen.findByText(/内部 ID 已自动生成/)).toBeVisible();
+  });
+
+  it("runs the shared AI Agent from the Studio right panel with the selected project", async () => {
+    const project = { id: "project-000000000000000000000042", name: "右侧 Agent 项目", files: ["main.py"] };
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
+    vi.spyOn(desktopGateway, "readProjectFile").mockResolvedValue("def main(ctx): pass\n");
+    const runAgent = vi.spyOn(desktopGateway, "runAgentTurn").mockResolvedValue({
+      message: "已检查当前项目。",
+      tools: [],
+      usage: { promptTokens: 10, completionTokens: 6 },
+      durationMs: 12,
+    });
+    render(<StudioPage />);
+
+    expect(await screen.findByRole("region", { name: "开发工作室 AI Agent" })).toBeVisible();
+    const composer = await screen.findByPlaceholderText(/向 Agent 描述“右侧 Agent 项目”/);
+    fireEvent.change(composer, { target: { value: "检查 main.py" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送工作室 Agent 消息" }));
+
+    await waitFor(() => expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: project.id,
+      maxRounds: 64,
+      messages: [expect.objectContaining({ role: "user", content: "检查 main.py" })],
+    })));
+    expect(await screen.findByText("已检查当前项目。")).toBeVisible();
   });
 
   it("opens the RPAZ build directory after exporting", async () => {

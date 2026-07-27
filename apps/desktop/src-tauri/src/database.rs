@@ -2,8 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use calamine::{Data, Reader, open_workbook_auto};
+use rusqlite::types::Value as SqliteValue;
 use rusqlite::types::ValueRef as SqliteValueRef;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use sqlx::any::{AnyPoolOptions, AnyRow};
 use sqlx::{AnyPool, Column, Row, TypeInfo, ValueRef as SqlxValueRef};
@@ -20,6 +22,10 @@ const SCHEMA_CONTEXT_BYTE_LIMIT: usize = 100 * 1024;
 const REMOTE_CONNECTION_LIMIT: usize = 50;
 const REMOTE_TABLE_LIMIT: usize = 2_000;
 const SCHEMA_TABLE_LIMIT: usize = 200;
+const EXCEL_FILE_BYTE_LIMIT: u64 = 100 * 1024 * 1024;
+const EXCEL_SHEET_LIMIT: usize = 100;
+const EXCEL_ROW_LIMIT: usize = 100_000;
+const EXCEL_COLUMN_LIMIT: usize = 512;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,6 +189,24 @@ pub(crate) async fn test_remote_database_connection(
 ) -> Result<RemoteConnectionTest, String> {
     validate_remote_profile(&profile)?;
     let started = Instant::now();
+    if profile.engine == "sqlite" {
+        let connection = open_external_database(Path::new(&profile.database))?;
+        let version = connection
+            .query_row("SELECT sqlite_version()", [], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("读取 SQLite 版本失败：{error}"))?;
+        return Ok(RemoteConnectionTest {
+            server_version: format!("SQLite {version}"),
+            latency_ms: started.elapsed().as_millis() as u64,
+        });
+    }
+    if profile.engine == "excel" {
+        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+        let sheet_count = list_tables_with_connection(&connection)?.len();
+        return Ok(RemoteConnectionTest {
+            server_version: format!("Excel 工作簿 · {sheet_count} 个工作表（只读）"),
+            latency_ms: started.elapsed().as_millis() as u64,
+        });
+    }
     let pool = connect_remote_database(&profile, &password).await?;
     let version_sql = match profile.engine.as_str() {
         "postgresql" => "SELECT version()",
@@ -207,6 +231,13 @@ pub(crate) async fn list_remote_database_tables(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<DatabaseTable>, String> {
     let profile = load_remote_profile(&remote_profiles_path(&paths), &profile_id)?;
+    if profile.engine == "sqlite" {
+        return list_tables_external(Path::new(&profile.database));
+    }
+    if profile.engine == "excel" {
+        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+        return list_tables_with_connection(&connection);
+    }
     let pool = connect_remote_database(&profile, &password).await?;
     let result = list_remote_tables_with_pool(&profile, &pool).await;
     pool.close().await;
@@ -221,6 +252,13 @@ pub(crate) async fn describe_remote_database_table(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<DatabaseColumn>, String> {
     let profile = load_remote_profile(&remote_profiles_path(&paths), &profile_id)?;
+    if profile.engine == "sqlite" {
+        return describe_table_external(Path::new(&profile.database), &table_name);
+    }
+    if profile.engine == "excel" {
+        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+        return describe_table_with_connection(&connection, &table_name);
+    }
     let pool = connect_remote_database(&profile, &password).await?;
     let result = describe_remote_table_with_pool(&profile, &pool, &table_name).await;
     pool.close().await;
@@ -235,6 +273,22 @@ pub(crate) async fn execute_remote_database_sql(
     paths: State<'_, AppPaths>,
 ) -> Result<DatabaseQueryResult, String> {
     let profile = load_remote_profile(&remote_profiles_path(&paths), &profile_id)?;
+    if profile.engine == "sqlite" {
+        return execute_sql_external(Path::new(&profile.database), &sql);
+    }
+    if profile.engine == "excel" {
+        let statement_type = first_sql_keyword(&sql);
+        if !matches!(
+            statement_type.as_str(),
+            "SELECT" | "WITH" | "EXPLAIN" | "PRAGMA"
+        ) {
+            return Err(
+                "Excel 工作簿是只读数据源，仅支持 SELECT、WITH、EXPLAIN 或 PRAGMA 查询".to_owned(),
+            );
+        }
+        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+        return execute_sql_with_connection(&connection, &sql);
+    }
     let pool = connect_remote_database(&profile, &password).await?;
     let result = execute_remote_sql_with_pool(&pool, &sql).await;
     pool.close().await;
@@ -248,6 +302,16 @@ pub(crate) async fn get_remote_database_schema_context(
     paths: State<'_, AppPaths>,
 ) -> Result<String, String> {
     let profile = load_remote_profile(&remote_profiles_path(&paths), &profile_id)?;
+    if profile.engine == "sqlite" {
+        return schema_context_external(Path::new(&profile.database), "SQLite 外部数据库结构");
+    }
+    if profile.engine == "excel" {
+        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+        return schema_context_with_connection(
+            &connection,
+            "Excel 工作簿结构（工作表映射为只读表）",
+        );
+    }
     let pool = connect_remote_database(&profile, &password).await?;
     let result = remote_schema_context_with_pool(&profile, &pool).await;
     pool.close().await;
@@ -323,8 +387,35 @@ fn validate_remote_profile(profile: &RemoteDatabaseProfile) -> Result<(), String
     if profile.name.trim().is_empty() || profile.name.chars().count() > 80 {
         return Err("连接名称应为 1 到 80 个字符".to_owned());
     }
-    if !matches!(profile.engine.as_str(), "postgresql" | "mysql") {
-        return Err("仅支持 PostgreSQL 或 MySQL 连接".to_owned());
+    if !matches!(
+        profile.engine.as_str(),
+        "postgresql" | "mysql" | "sqlite" | "excel"
+    ) {
+        return Err("仅支持 PostgreSQL、MySQL、SQLite 或 Excel 数据源".to_owned());
+    }
+    if matches!(profile.engine.as_str(), "sqlite" | "excel") {
+        let source = profile.database.trim();
+        if source.is_empty() || source.len() > 32_767 {
+            return Err("数据源文件路径无效".to_owned());
+        }
+        let extension = Path::new(source)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let valid_extension = if profile.engine == "sqlite" {
+            matches!(extension.as_str(), "db" | "sqlite" | "sqlite3")
+        } else {
+            matches!(extension.as_str(), "xls" | "xlsx" | "xlsb" | "ods")
+        };
+        if !valid_extension {
+            return Err(if profile.engine == "sqlite" {
+                "SQLite 文件应使用 .db、.sqlite 或 .sqlite3 扩展名".to_owned()
+            } else {
+                "工作簿应使用 .xls、.xlsx、.xlsb 或 .ods 扩展名".to_owned()
+            });
+        }
+        return Ok(());
     }
     if profile.host.trim().is_empty()
         || profile.host.len() > 253
@@ -774,8 +865,32 @@ fn open_database(path: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
+fn open_external_database(path: &Path) -> Result<Connection, String> {
+    if !path.is_file() {
+        return Err(format!("数据源文件不存在：{}", path.display()));
+    }
+    let connection =
+        Connection::open(path).map_err(|error| format!("打开 SQLite 失败：{error}"))?;
+    connection
+        .busy_timeout(std::time::Duration::from_secs(30))
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|error| format!("初始化 SQLite 失败：{error}"))?;
+    Ok(connection)
+}
+
 fn list_tables_at(path: &Path) -> Result<Vec<DatabaseTable>, String> {
     let connection = open_database(path)?;
+    list_tables_with_connection(&connection)
+}
+
+fn list_tables_external(path: &Path) -> Result<Vec<DatabaseTable>, String> {
+    let connection = open_external_database(path)?;
+    list_tables_with_connection(&connection)
+}
+
+fn list_tables_with_connection(connection: &Connection) -> Result<Vec<DatabaseTable>, String> {
     let mut statement = connection
         .prepare(
             "SELECT name, type FROM sqlite_schema \
@@ -801,10 +916,22 @@ fn list_tables_at(path: &Path) -> Result<Vec<DatabaseTable>, String> {
 }
 
 fn describe_table_at(path: &Path, table_name: &str) -> Result<Vec<DatabaseColumn>, String> {
+    let connection = open_database(path)?;
+    describe_table_with_connection(&connection, table_name)
+}
+
+fn describe_table_external(path: &Path, table_name: &str) -> Result<Vec<DatabaseColumn>, String> {
+    let connection = open_external_database(path)?;
+    describe_table_with_connection(&connection, table_name)
+}
+
+fn describe_table_with_connection(
+    connection: &Connection,
+    table_name: &str,
+) -> Result<Vec<DatabaseColumn>, String> {
     if table_name.trim().is_empty() {
         return Err("请选择数据表".to_owned());
     }
-    let connection = open_database(path)?;
     let mut statement = connection
         .prepare(
             "SELECT cid, name, type, \"notnull\", dflt_value, pk \
@@ -833,6 +960,15 @@ fn describe_table_at(path: &Path, table_name: &str) -> Result<Vec<DatabaseColumn
 
 fn schema_context_at(path: &Path) -> Result<String, String> {
     let connection = open_database(path)?;
+    schema_context_with_connection(&connection, "SQLite 工作区数据库结构")
+}
+
+fn schema_context_external(path: &Path, title: &str) -> Result<String, String> {
+    let connection = open_external_database(path)?;
+    schema_context_with_connection(&connection, title)
+}
+
+fn schema_context_with_connection(connection: &Connection, title: &str) -> Result<String, String> {
     let mut statement = connection
         .prepare(
             "SELECT type, name, sql FROM sqlite_schema \
@@ -851,7 +987,7 @@ fn schema_context_at(path: &Path) -> Result<String, String> {
         })
         .map_err(|error| error.to_string())?;
 
-    let mut output = String::from("-- SQLite 工作区数据库结构\n");
+    let mut output = format!("-- {title}\n");
     for definition in definitions {
         let (kind, name, sql) = definition.map_err(|error| error.to_string())?;
         let block = format!("\n-- {kind}: {name}\n{};\n", sql.trim_end_matches(';'));
@@ -868,12 +1004,24 @@ fn schema_context_at(path: &Path) -> Result<String, String> {
 }
 
 fn execute_sql_at(path: &Path, sql: &str) -> Result<DatabaseQueryResult, String> {
+    let connection = open_database(path)?;
+    execute_sql_with_connection(&connection, sql)
+}
+
+fn execute_sql_external(path: &Path, sql: &str) -> Result<DatabaseQueryResult, String> {
+    let connection = open_external_database(path)?;
+    execute_sql_with_connection(&connection, sql)
+}
+
+fn execute_sql_with_connection(
+    connection: &Connection,
+    sql: &str,
+) -> Result<DatabaseQueryResult, String> {
     let sql = sql.trim();
     if sql.is_empty() {
         return Err("请输入要执行的 SQL".to_owned());
     }
     let started = Instant::now();
-    let connection = open_database(path)?;
     let mut statement = connection
         .prepare(sql)
         .map_err(|error| format!("SQL 编译失败：{error}"))?;
@@ -936,6 +1084,158 @@ fn execute_sql_at(path: &Path, sql: &str) -> Result<DatabaseQueryResult, String>
         truncated,
         statement_type,
     })
+}
+
+fn open_excel_as_sqlite(path: &Path) -> Result<Connection, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("读取工作簿失败（{}）：{error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("工作簿文件不存在：{}", path.display()));
+    }
+    if metadata.len() > EXCEL_FILE_BYTE_LIMIT {
+        return Err(format!(
+            "工作簿超过 {} MB 的读取限制",
+            EXCEL_FILE_BYTE_LIMIT / 1024 / 1024
+        ));
+    }
+    let mut workbook =
+        open_workbook_auto(path).map_err(|error| format!("打开工作簿失败：{error}"))?;
+    let sheet_names = workbook.sheet_names().to_owned();
+    if sheet_names.len() > EXCEL_SHEET_LIMIT {
+        return Err(format!("工作表数量超过 {EXCEL_SHEET_LIMIT} 个的读取限制"));
+    }
+    let mut connection =
+        Connection::open_in_memory().map_err(|error| format!("创建工作簿查询环境失败：{error}"))?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("初始化工作簿查询环境失败：{error}"))?;
+
+    for sheet_name in sheet_names {
+        let range = workbook
+            .worksheet_range(&sheet_name)
+            .map_err(|error| format!("读取工作表“{sheet_name}”失败：{error}"))?;
+        let rows = range.rows().collect::<Vec<_>>();
+        let column_count = rows
+            .iter()
+            .map(|row| row.len())
+            .max()
+            .unwrap_or(0)
+            .min(EXCEL_COLUMN_LIMIT);
+        if column_count == 0 {
+            continue;
+        }
+        if rows.len().saturating_sub(1) > EXCEL_ROW_LIMIT {
+            return Err(format!(
+                "工作表“{sheet_name}”超过 {EXCEL_ROW_LIMIT} 行的读取限制"
+            ));
+        }
+        let headers = excel_headers(rows[0], column_count);
+        let types = infer_excel_column_types(&rows[1..], column_count);
+        let definitions = headers
+            .iter()
+            .zip(types.iter())
+            .map(|(name, data_type)| format!("{} {data_type}", quote_sqlite_identifier(name)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        transaction
+            .execute(
+                &format!(
+                    "CREATE TABLE {} ({definitions})",
+                    quote_sqlite_identifier(&sheet_name)
+                ),
+                [],
+            )
+            .map_err(|error| format!("映射工作表“{sheet_name}”失败：{error}"))?;
+        let placeholders = (1..=column_count)
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let insert_sql = format!(
+            "INSERT INTO {} VALUES ({placeholders})",
+            quote_sqlite_identifier(&sheet_name)
+        );
+        let mut insert = transaction
+            .prepare(&insert_sql)
+            .map_err(|error| format!("准备导入工作表“{sheet_name}”失败：{error}"))?;
+        for row in rows.iter().skip(1) {
+            let values = (0..column_count)
+                .map(|index| row.get(index).map_or(SqliteValue::Null, excel_value))
+                .collect::<Vec<_>>();
+            insert
+                .execute(params_from_iter(values))
+                .map_err(|error| format!("导入工作表“{sheet_name}”失败：{error}"))?;
+        }
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("提交工作簿查询环境失败：{error}"))?;
+    Ok(connection)
+}
+
+fn excel_headers(row: &[Data], column_count: usize) -> Vec<String> {
+    let mut used = std::collections::HashSet::new();
+    (0..column_count)
+        .map(|index| {
+            let base = row
+                .get(index)
+                .map(excel_display_value)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| format!("column_{}", index + 1));
+            let mut candidate = base.clone();
+            let mut suffix = 2;
+            while !used.insert(candidate.to_lowercase()) {
+                candidate = format!("{base}_{suffix}");
+                suffix += 1;
+            }
+            candidate
+        })
+        .collect()
+}
+
+fn infer_excel_column_types(rows: &[&[Data]], column_count: usize) -> Vec<&'static str> {
+    let mut types = vec!["INTEGER"; column_count];
+    for row in rows.iter().take(1_000) {
+        for (index, cell) in row.iter().take(column_count).enumerate() {
+            types[index] = match cell {
+                Data::Empty => types[index],
+                Data::Int(_) | Data::Bool(_) if types[index] == "INTEGER" => "INTEGER",
+                Data::Int(_) | Data::Float(_) | Data::Bool(_)
+                    if matches!(types[index], "INTEGER" | "REAL") =>
+                {
+                    "REAL"
+                }
+                _ => "TEXT",
+            };
+        }
+    }
+    types
+}
+
+fn excel_value(value: &Data) -> SqliteValue {
+    match value {
+        Data::Empty => SqliteValue::Null,
+        Data::Int(value) => SqliteValue::Integer(*value),
+        Data::Float(value) => SqliteValue::Real(*value),
+        Data::Bool(value) => SqliteValue::Integer(i64::from(*value)),
+        _ => SqliteValue::Text(excel_display_value(value)),
+    }
+}
+
+fn excel_display_value(value: &Data) -> String {
+    match value {
+        Data::Empty => String::new(),
+        Data::String(value) => value.clone(),
+        Data::Float(value) => value.to_string(),
+        Data::Int(value) => value.to_string(),
+        Data::Bool(value) => value.to_string(),
+        Data::Error(value) => format!("#{value:?}"),
+        Data::DateTime(value) => value.to_string(),
+        Data::DateTimeIso(value) | Data::DurationIso(value) => value.clone(),
+    }
+}
+
+fn quote_sqlite_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 fn sqlite_value_to_json(value: SqliteValueRef<'_>) -> (serde_json::Value, bool) {
@@ -1018,6 +1318,8 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
 
     #[test]
     fn creates_schema_and_returns_query_rows() {
@@ -1084,5 +1386,115 @@ mod tests {
         assert!(url.contains("sslmode=require"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn opens_external_sqlite_and_excel_sources() {
+        let root = std::env::temp_dir().join(format!("drpa-file-data-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+
+        let sqlite_path = root.join("analytics.sqlite3");
+        execute_sql_at(
+            &sqlite_path,
+            "CREATE TABLE metrics (name TEXT NOT NULL, value INTEGER)",
+        )
+        .unwrap();
+        execute_sql_at(
+            &sqlite_path,
+            "INSERT INTO metrics(name, value) VALUES ('orders', 42)",
+        )
+        .unwrap();
+        let external =
+            execute_sql_external(&sqlite_path, "SELECT name, value FROM metrics").unwrap();
+        assert_eq!(external.rows[0][0], "orders");
+        assert_eq!(external.rows[0][1], 42);
+
+        let workbook_path = root.join("report.xlsx");
+        write_test_xlsx(&workbook_path);
+        let workbook = open_excel_as_sqlite(&workbook_path).unwrap();
+        let tables = list_tables_with_connection(&workbook).unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].name, "Metrics");
+        let columns = describe_table_with_connection(&workbook, "Metrics").unwrap();
+        assert_eq!(
+            columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["name", "value"]
+        );
+        let result =
+            execute_sql_with_connection(&workbook, "SELECT name, value FROM \"Metrics\"").unwrap();
+        assert_eq!(result.rows[0][0], "orders");
+        assert_eq!(result.rows[0][1], 42.0);
+        let schema = schema_context_with_connection(&workbook, "Excel 工作簿结构").unwrap();
+        assert!(schema.contains("CREATE TABLE \"Metrics\""));
+
+        let profile = RemoteDatabaseProfile {
+            id: "database-excel".to_owned(),
+            name: "Excel 报表".to_owned(),
+            engine: "excel".to_owned(),
+            host: String::new(),
+            port: 0,
+            database: workbook_path.to_string_lossy().into_owned(),
+            username: String::new(),
+            tls_mode: "prefer".to_owned(),
+        };
+        validate_remote_profile(&profile).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn write_test_xlsx(path: &Path) {
+        let file = fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        let entries = [
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#,
+            ),
+            (
+                "xl/workbook.xml",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Metrics" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData>
+<row r="1"><c r="A1" t="inlineStr"><is><t>name</t></is></c><c r="B1" t="inlineStr"><is><t>value</t></is></c></row>
+<row r="2"><c r="A2" t="inlineStr"><is><t>orders</t></is></c><c r="B2"><v>42</v></c></row>
+</sheetData>
+</worksheet>"#,
+            ),
+        ];
+        for (name, content) in entries {
+            archive.start_file(name, options).unwrap();
+            archive.write_all(content.as_bytes()).unwrap();
+        }
+        archive.finish().unwrap();
     }
 }

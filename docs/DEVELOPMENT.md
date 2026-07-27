@@ -193,7 +193,9 @@ CI 默认执行 `update` 发布：stage 主程序、更新器、`bootstrap_runti
 
 ## 8. AI Agent
 
-Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker 调用 OpenAI-compatible Chat Completions，并执行最多 8 轮 function tools。三个知识库工具始终可用；绑定项目后再启用六个项目文件、manifest、构建和 30 秒 sealed Python 工具。API key 只保存在前端会话内。前端持久化最多 50 个本地对话及每个对话最近 120 条消息，支持逐会话项目绑定和配置面板折叠。实现与约束见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
+Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker 调用 OpenAI-compatible Chat Completions；单次请求默认最多执行 64 轮 function tools，用户可在 Agent 页面或全局设置中配置 1–256 轮，Rust Host 会再次校验范围。三个知识库工具始终可用；绑定项目后再启用六个项目文件、manifest、构建和 30 秒 sealed Python 工具。API key 只保存在前端会话内。前端持久化最多 50 个本地对话及每个对话最近 120 条消息，支持逐会话项目绑定和配置面板折叠。实现与约束见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
+
+这里的循环上限是单次用户请求内部的模型/工具循环，不是整段对话的消息数限制。进一步加入取消、时间/工具预算、持久 Jupyter Kernel 和 DrissionPage 调试会话的设计见 [`AI_AGENT_JUPYTER_BROWSER_DESIGN.md`](AI_AGENT_JUPYTER_BROWSER_DESIGN.md)。
 
 “知识文档”使用安装数据目录 `knowledge/` 作为 Markdown 工作区。Rust Host 提供列表、UTF-8 读写、内联创建、重命名、递归删除、导入和导出命令，并对相对路径、扩展名、符号链接和 8 MiB 单文档上限做校验；写入使用同目录临时文件和替换。`apps/desktop/src-tauri/knowledge_seed/` 通过 `include_str!` 编译进 Host，首次初始化为 `RPAZ 开发指南/`，marker 存在后不覆盖用户修改。前端 `DocsPage.tsx` 提供树、搜索、自动保存、预览/编辑/分栏、GFM 渲染、相对文档跳转和拖拽导入。
 

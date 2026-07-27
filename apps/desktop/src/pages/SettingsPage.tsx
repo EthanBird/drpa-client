@@ -55,6 +55,7 @@ export function SettingsPage() {
   const agentStreamEnabled = useAppStore((state) => state.agentStreamEnabled);
   const agentContextWindow = useAppStore((state) => state.agentContextWindow);
   const agentMaxOutputTokens = useAppStore((state) => state.agentMaxOutputTokens);
+  const agentMaxRounds = useAppStore((state) => state.agentMaxRounds);
   const agentTemperature = useAppStore((state) => state.agentTemperature);
   const setTheme = useAppStore((state) => state.setTheme);
   const setFontScale = useAppStore((state) => state.setFontScale);
@@ -64,6 +65,7 @@ export function SettingsPage() {
   const setAgentStreamEnabled = useAppStore((state) => state.setAgentStreamEnabled);
   const setAgentContextWindow = useAppStore((state) => state.setAgentContextWindow);
   const setAgentMaxOutputTokens = useAppStore((state) => state.setAgentMaxOutputTokens);
+  const setAgentMaxRounds = useAppStore((state) => state.setAgentMaxRounds);
   const setAgentTemperature = useAppStore((state) => state.setAgentTemperature);
   const [dataDirectory, setDataDirectory] = useState("正在读取…");
   const [platform, setPlatform] = useState<PlatformCapabilities | null>(null);
@@ -224,6 +226,7 @@ export function SettingsPage() {
             <label className="agent-settings-switch"><span>流式输出</span><button className={`switch ${agentStreamEnabled ? "on" : ""}`} type="button" role="switch" aria-label="设置 Agent 流式输出" aria-checked={agentStreamEnabled} onClick={() => setAgentStreamEnabled(!agentStreamEnabled)}><span /></button></label>
             <label><span>上下文窗口（tokens）</span><input aria-label="设置 Agent 上下文窗口" type="number" min={1024} max={2000000} step={1024} value={agentContextWindow} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentContextWindow(event.currentTarget.valueAsNumber); }} /></label>
             <label><span>最大输出（tokens）</span><input aria-label="设置 Agent 最大输出" type="number" min={64} max={131072} step={64} value={agentMaxOutputTokens} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentMaxOutputTokens(event.currentTarget.valueAsNumber); }} /></label>
+            <label><span>最大模型/工具循环</span><input aria-label="设置 Agent 最大模型工具循环" type="number" min={1} max={256} step={1} value={agentMaxRounds} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentMaxRounds(event.currentTarget.valueAsNumber); }} /></label>
             <label><span>Temperature</span><input aria-label="设置 Agent Temperature" type="number" min={0} max={2} step={0.1} value={agentTemperature} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentTemperature(event.currentTarget.valueAsNumber); }} /></label>
           </div>
         </section>

@@ -13,8 +13,8 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - 工作室可新建项目、编辑源码和 Notebook、直接运行工作副本、导出 `.rpaz`，也可将已安装包复制为可编辑项目。
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路，并通过标准 `complete_request` / `inspect_request` 为 Python 文件和 Notebook 提供离线补全、悬停文档与参数提示。
 - 运行记录持久化到 Host SQLite；可进入详情查看完整时间线、筛选/复制日志、参数、产物、错误回溯和重启中断状态。
-- 内置自有数据工作台：工作区 SQLite 与 PostgreSQL/MySQL 连接、对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
-- 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model 与会话级可选 key；ProviderAdapter 与 ToolRegistry 统一编排内置、Skills 2.0 和插件工具，并支持流式 Markdown、本地会话、逐会话项目绑定和完整工具事件。
+- 内置自有数据工作台：工作区 SQLite、外部 SQLite、PostgreSQL/MySQL 与只读 Excel 工作簿数据源，对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；Excel sheet 会映射为可查询表，RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
+- 基础设施内置轻量 RPAZ AI Agent：可配置 OpenAI-compatible URL、model、会话级可选 key 与 1–256 轮模型/工具循环（默认 64）；ProviderAdapter 与 ToolRegistry 统一编排内置、Skills 2.0 和插件工具，并支持流式 Markdown、本地会话、逐会话项目绑定和完整工具事件。开发工作室右侧复用同一 Agent 会话与工具链，并自动绑定当前项目。
 - 内置 DRPA Local Dify：管理 Chat/Completion/Workflow/Chatflow 应用和 OpenAI-compatible Provider；提供可视化工作流画布、节点连线与属性、图校验、本地节点执行、流式 Markdown 调试、SQLite 运行轨迹、Dify YAML DSL 导入导出，以及带独立应用 Token 的本地 Dify Service API；`dify-loves-hermes` 可继续把本地应用转换成 OpenAI 接口。
 - Skills 2.0 使用 `skill.yaml + instructions.md` 能力包，可携带工作流、资源、可执行 Python/Command 工具和可调用代码库；设置页提供目录树、Monaco 编辑及文件/目录创建、重命名、删除，旧版 `SKILL.md` 自动迁移。
 - 内置离线插件系统：支持 `.drpa-plugin` 安装、配置、启停、自动启动、隐藏后台进程、状态与容错日志；插件开发工作台可生成 Tool/Service 模板并验证、构建、安装。Dify Loves Hermes 可把 Dify App API 转换为本地 OpenAI 兼容接口，桥接 `tool_calls`，测试上游连接并跨重启保留会话映射。

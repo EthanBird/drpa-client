@@ -16,6 +16,8 @@ import {
   FolderTree,
   LoaderCircle,
   PackageCheck,
+  PanelRightClose,
+  PanelRightOpen,
   Pencil,
   Play,
   Plus,
@@ -33,6 +35,7 @@ import remarkGfm from "remark-gfm";
 import { useAppStore } from "../app/store";
 import type { StudioProject, StudioVariable } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
+import { AgentPage } from "./AgentPage";
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
@@ -286,6 +289,7 @@ export function StudioPage() {
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenu | null>(null);
   const [inlineDraft, setInlineDraft] = useState<InlineDraft | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [agentOpen, setAgentOpen] = useState(true);
 
   const selected = useMemo(() => projects.find((item) => item.id === selectedId), [projects, selectedId]);
   const packages = snapshot?.packages ?? [];
@@ -523,6 +527,7 @@ export function StudioPage() {
       <header className="page-header studio-header">
         <div><div className="eyebrow">RPaz + Notebook 集成开发环境</div><h1>开发工作室</h1><p>编辑源码、直接运行项目，并使用持久 Python Kernel 交互调试。</p></div>
         <div className="header-actions">
+          <button className="button secondary" type="button" onClick={() => setAgentOpen((current) => !current)} aria-pressed={agentOpen}>{agentOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />} {agentOpen ? "收起 Agent" : "打开 Agent"}</button>
           <button className="button secondary" type="button" onClick={save} disabled={!selectedId || busy || selectedFile.endsWith("/")}><Save size={15} /> 保存</button>
           <button className="button secondary" type="button" onClick={exportProject} disabled={!selectedId || busy}><PackageCheck size={15} /> 导出 RPAZ</button>
           <button className="button primary" type="button" onClick={runProject} disabled={!selectedId || busy}><Play size={15} fill="currentColor" /> {busy ? "处理中…" : "直接运行"}</button>
@@ -539,7 +544,7 @@ export function StudioPage() {
         <button className="button secondary" type="button" onClick={openInstalled} disabled={!installedPackageId || busy}><FolderInput size={15} /> 打开已安装包</button>
         <details className="studio-run-config"><summary>运行参数</summary><textarea aria-label="Studio 运行参数 JSON" value={runParameters} onChange={(event) => setRunParameters(event.target.value)} /></details>
       </div>
-      <div className={notebook ? "studio-layout notebook-active" : "studio-layout"}>
+      <div className={`${notebook ? "studio-layout notebook-active" : "studio-layout"} ${agentOpen ? "agent-open" : ""}`}>
         <aside className="studio-projects">
           <div className="studio-pane-title"><FolderTree size={15} /> 项目</div>
           {projects.length === 0 && <p className="empty-hint">尚无项目，请在上方新建。</p>}
@@ -638,6 +643,7 @@ export function StudioPage() {
             <><div className="editor-tab"><FileCode2 size={14} /> {selectedFile || "未选择文件"}<span>{language}</span></div><Editor beforeMount={ensurePythonCompletionProvider} path={language === "python" && selectedId ? pythonModelPath(selectedId, selectedFile) : undefined} height="100%" language={language} value={content} onChange={(value) => setContent(value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 14, minimap: { enabled: false }, automaticLayout: true, tabSize: 4, wordWrap: "on", quickSuggestions: { other: true, comments: false, strings: false }, suggestOnTriggerCharacters: true }} /></>
           )}
         </section>
+        {agentOpen && <aside className="studio-agent-pane"><AgentPage embedded embeddedProjectId={selected?.id ?? ""} embeddedProjectName={selected?.name ?? ""} /></aside>}
         <footer className="studio-console"><TerminalSquare size={15} /><strong>任务输出</strong><span>{notice}</span></footer>
       </div>
       {pendingDelete && (
