@@ -18,6 +18,15 @@ function createAgentSession(projectId = ""): AgentConversationSession {
 }
 
 const initialAgentSession = createAgentSession();
+const initialWorkspaceId = typeof window === "undefined"
+  ? "personal"
+  : localStorage.getItem("drpa-active-workspace-id") ?? "personal";
+
+interface AgentWorkspaceState {
+  sessions: AgentConversationSession[];
+  activeSessionId: string;
+  projectId: string;
+}
 
 interface AppStore {
   activeNavigation: NavigationId;
@@ -37,6 +46,9 @@ interface AppStore {
   agentTemperature: number;
   agentProjectId: string;
   agentInspectorOpen: boolean;
+  activeWorkspaceId: string;
+  workspaceScopeLoaded: boolean;
+  agentWorkspaceStates: Record<string, AgentWorkspaceState>;
   agentSessions: AgentConversationSession[];
   activeAgentSessionId: string;
   selectedPackageId: string;
@@ -62,6 +74,7 @@ interface AppStore {
   setAgentTemperature: (temperature: number) => void;
   setAgentProjectId: (projectId: string) => void;
   toggleAgentInspector: () => void;
+  setWorkspaceScope: (workspaceId: string) => void;
   createAgentConversation: () => string;
   selectAgentConversation: (sessionId: string) => void;
   deleteAgentConversation: (sessionId: string) => void;
@@ -89,6 +102,9 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   agentTemperature: 0.2,
   agentProjectId: "",
   agentInspectorOpen: true,
+  activeWorkspaceId: initialWorkspaceId,
+  workspaceScopeLoaded: false,
+  agentWorkspaceStates: {},
   agentSessions: [initialAgentSession],
   activeAgentSessionId: initialAgentSession.id,
   selectedPackageId: "",
@@ -118,6 +134,44 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setAgentTemperature: (agentTemperature) => set({ agentTemperature }),
   setAgentProjectId: (agentProjectId) => set({ agentProjectId }),
   toggleAgentInspector: () => set((state) => ({ agentInspectorOpen: !state.agentInspectorOpen })),
+  setWorkspaceScope: (workspaceId) => {
+    localStorage.setItem("drpa-active-workspace-id", workspaceId);
+    set((state) => {
+      if (!state.workspaceScopeLoaded && state.activeWorkspaceId === workspaceId) {
+        return { workspaceScopeLoaded: true };
+      }
+      const agentWorkspaceStates = {
+        ...state.agentWorkspaceStates,
+        [state.activeWorkspaceId]: {
+          sessions: state.agentSessions,
+          activeSessionId: state.activeAgentSessionId,
+          projectId: state.agentProjectId,
+        },
+      };
+      const target = agentWorkspaceStates[workspaceId];
+      if (target?.sessions.length) {
+        const active = target.sessions.find((session) => session.id === target.activeSessionId)
+          ?? target.sessions[0];
+        return {
+          activeWorkspaceId: workspaceId,
+          workspaceScopeLoaded: true,
+          agentWorkspaceStates,
+          agentSessions: target.sessions,
+          activeAgentSessionId: active.id,
+          agentProjectId: active.projectId,
+        };
+      }
+      const session = createAgentSession();
+      return {
+        activeWorkspaceId: workspaceId,
+        workspaceScopeLoaded: true,
+        agentWorkspaceStates,
+        agentSessions: [session],
+        activeAgentSessionId: session.id,
+        agentProjectId: "",
+      };
+    });
+  },
   createAgentConversation: () => {
     const session = createAgentSession();
     set((state) => ({
@@ -163,7 +217,23 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   })),
 }), {
   name: "drpa-ui-preferences",
-  version: 2,
+  version: 3,
+  migrate: (persistedState, version) => {
+    const state = (persistedState ?? {}) as Partial<AppStore>;
+    if (version < 3 && state.agentSessions?.length) {
+      return {
+        ...state,
+        agentWorkspaceStates: {
+          personal: {
+            sessions: state.agentSessions,
+            activeSessionId: state.activeAgentSessionId ?? state.agentSessions[0].id,
+            projectId: state.agentProjectId ?? "",
+          },
+        },
+      } as never;
+    }
+    return state as never;
+  },
   partialize: (state) => ({
     theme: state.theme,
     fontScale: state.fontScale,
@@ -176,6 +246,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     agentTemperature: state.agentTemperature,
     agentProjectId: state.agentProjectId,
     agentInspectorOpen: state.agentInspectorOpen,
+    agentWorkspaceStates: state.agentWorkspaceStates,
     agentSessions: state.agentSessions,
     activeAgentSessionId: state.activeAgentSessionId,
   }),

@@ -18,10 +18,37 @@ button:disabled { cursor: not-allowed; opacity: 0.58; }
 .brand-mark { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid rgba(124, 156, 255, 0.3); border-radius: 8px; color: var(--accent-strong); background: linear-gradient(145deg, rgba(124, 156, 255, 0.2), rgba(124, 156, 255, 0.04)); box-shadow: inset 0 1px rgba(255,255,255,.08); }
 .brand-name { font-size: calc(13px * var(--font-scale)); font-weight: 760; letter-spacing: .11em; }
 .release-chip { padding: 2px 5px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-strong); font-size: calc(8px * var(--font-scale)); font-weight: 800; letter-spacing: .12em; }
+.workspace-control { position: relative; }
 .workspace-switcher, .sync-state { display: flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--text-2); font-size: calc(12px * var(--font-scale)); cursor: pointer; }
-.workspace-switcher { height: 28px; padding: 0 9px; border-radius: 6px; }
-.workspace-switcher:hover, .sync-state:hover { background: var(--surface-2); color: var(--text-1); }
+.workspace-switcher { max-width: 220px; height: 28px; padding: 0 9px; border-radius: 6px; }
+.workspace-switcher > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-switcher:hover, .workspace-switcher.active, .sync-state:hover { background: var(--surface-2); color: var(--text-1); }
 .workspace-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--violet); box-shadow: 0 0 0 3px rgba(214,149,255,.1); }
+.workspace-menu { position: absolute; z-index: 500; top: 34px; left: 0; display: grid; width: 330px; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-0); color: var(--text-1); box-shadow: var(--shadow-float); user-select: text; }
+.workspace-menu > header { display: flex; align-items: center; min-height: 57px; padding: 9px 10px 9px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-1); }
+.workspace-menu > header > div { display: grid; flex: 1; gap: 3px; }
+.workspace-menu > header strong { font-size: calc(11px * var(--font-scale)); }
+.workspace-menu > header span { color: var(--text-3); font-size: calc(8px * var(--font-scale)); }
+.workspace-menu > header button { display: grid; place-items: center; width: 29px; height: 29px; border: 0; border-radius: 6px; background: var(--accent-soft); color: var(--accent-strong); cursor: pointer; }
+.workspace-list { display: grid; max-height: 260px; overflow: auto; padding: 6px; }
+.workspace-list > button { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 49px; padding: 6px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-2); cursor: pointer; text-align: left; }
+.workspace-list > button:hover { background: var(--surface-2); color: var(--text-1); }
+.workspace-list > button.active { border-color: color-mix(in srgb, var(--accent) 24%, var(--border-subtle)); background: color-mix(in srgb, var(--surface-1) 90%, var(--accent)); color: var(--text-1); }
+.workspace-avatar { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 7px; background: color-mix(in srgb, var(--surface-3) 82%, var(--violet)); color: var(--text-1); font-size: calc(10px * var(--font-scale)); font-weight: 760; }
+.workspace-list > button > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
+.workspace-list strong, .workspace-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-list strong { font-size: calc(10px * var(--font-scale)); }
+.workspace-list small { color: var(--text-3); font-size: calc(8px * var(--font-scale)); }
+.workspace-current { padding: 3px 6px; border-radius: 999px; background: var(--success-soft); color: var(--success); font-size: calc(7px * var(--font-scale)); font-weight: 700; }
+.workspace-add { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; margin: 0 6px 6px; border: 1px dashed var(--border); border-radius: 7px; background: var(--surface-1); color: var(--text-2); cursor: pointer; font-size: calc(9px * var(--font-scale)); }
+.workspace-add:hover { border-color: var(--accent); color: var(--accent-strong); }
+.workspace-create { display: grid; gap: 7px; padding: 10px; border-top: 1px solid var(--border-subtle); background: var(--surface-1); }
+.workspace-create label { color: var(--text-2); font-size: calc(8px * var(--font-scale)); font-weight: 650; }
+.workspace-create > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.workspace-create input { min-width: 0; height: 31px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; outline: 0; background: var(--surface-0); color: var(--text-1); font-size: calc(9px * var(--font-scale)); }
+.workspace-create input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.workspace-create > button { justify-self: start; padding: 0; border: 0; background: transparent; color: var(--text-3); cursor: pointer; font-size: calc(8px * var(--font-scale)); }
+.workspace-error { margin: 0; padding: 7px 10px; border-top: 1px solid color-mix(in srgb, var(--danger) 24%, var(--border-subtle)); background: color-mix(in srgb, var(--surface-1) 92%, var(--danger)); color: var(--danger); font-size: calc(8px * var(--font-scale)); line-height: 1.4; }
 .titlebar-spacer { flex: 1; }
 .sync-state { margin-right: 10px; padding: 6px 9px; }
 .pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }

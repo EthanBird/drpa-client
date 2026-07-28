@@ -7,6 +7,7 @@
   --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   --font-scale: 1;
   --canvas: #f4f6f8;
+  --surface-0: #fbfcfd;
   --surface-1: #ffffff;
   --surface-2: #f7f9fb;
   --surface-3: #edf1f5;
@@ -46,6 +47,7 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --canvas: #090b10;
+  --surface-0: #0b0e14;
   --surface-1: #0f1219;
   --surface-2: #151a23;
   --surface-3: #1c2330;

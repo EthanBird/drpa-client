@@ -11,10 +11,12 @@ import {
   KeyRound,
   Library,
   ListTodo,
+  LoaderCircle,
   Maximize2,
   Minimize2,
   Minus,
   Play,
+  Plus,
   PlugZap,
   Search,
   Settings,
@@ -24,9 +26,9 @@ import {
   Zap,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useState, type MouseEvent, type PropsWithChildren } from "react";
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type PropsWithChildren } from "react";
 
-import type { NavigationId } from "../domain/models";
+import type { NavigationId, WorkspaceInfo } from "../domain/models";
 import { useAppStore } from "../app/store";
 import { desktopGateway } from "../infra/gateway";
 
@@ -61,9 +63,20 @@ export function AppShell({ children }: PropsWithChildren) {
   const activeNavigation = useAppStore((state) => state.activeNavigation);
   const setActiveNavigation = useAppStore((state) => state.setActiveNavigation);
   const setCommandOpen = useAppStore((state) => state.setCommandOpen);
+  const setWorkspaceScope = useAppStore((state) => state.setWorkspaceScope);
   const inDesktopHost = "__TAURI_INTERNALS__" in window;
   const [maximized, setMaximized] = useState(false);
   const [currentUser, setCurrentUser] = useState({ displayName: "本地用户", accountName: "local", initials: "本地" });
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
+  const workspaceControlRef = useRef<HTMLDivElement>(null);
+  const currentWorkspace = workspaces.find((workspace) => workspace.active)
+    ?? workspaces[0]
+    ?? { id: "personal", name: "个人工作区", path: "", active: true, createdAt: 0 };
 
   useEffect(() => {
     if (!inDesktopHost) return;
@@ -73,6 +86,81 @@ export function AppShell({ children }: PropsWithChildren) {
   useEffect(() => {
     void desktopGateway.getCurrentUser().then(setCurrentUser).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void desktopGateway.listWorkspaces()
+      .then((items) => {
+        if (!active) return;
+        setWorkspaces(items);
+        const selected = items.find((workspace) => workspace.active) ?? items[0];
+        if (selected) setWorkspaceScope(selected.id);
+      })
+      .catch((reason: unknown) => { if (active) setWorkspaceError(String(reason)); });
+    return () => { active = false; };
+  }, [setWorkspaceScope]);
+
+  useEffect(() => {
+    if (!workspaceMenuOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!workspaceControlRef.current?.contains(event.target as Node)) setWorkspaceMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setWorkspaceMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutsideClick);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutsideClick);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [workspaceMenuOpen]);
+
+  const switchWorkspace = async (workspace: WorkspaceInfo) => {
+    if (workspace.active || workspaceBusy) {
+      setWorkspaceMenuOpen(false);
+      return;
+    }
+    const previous = currentWorkspace;
+    setWorkspaceBusy(true);
+    setWorkspaceError("");
+    setWorkspaceScope(workspace.id);
+    try {
+      await desktopGateway.switchWorkspace(workspace.id);
+      const items = await desktopGateway.listWorkspaces();
+      setWorkspaces(items);
+      setWorkspaceMenuOpen(false);
+    } catch (reason) {
+      setWorkspaceScope(previous.id);
+      setWorkspaceError(String(reason));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
+
+  const createWorkspace = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!workspaceName.trim() || workspaceBusy) return;
+    const previous = currentWorkspace;
+    setWorkspaceBusy(true);
+    setWorkspaceError("");
+    try {
+      const created = await desktopGateway.createWorkspace(workspaceName);
+      setWorkspaces((items) => [...items, created]);
+      setWorkspaceName("");
+      setCreatingWorkspace(false);
+      setWorkspaceScope(created.id);
+      await desktopGateway.switchWorkspace(created.id);
+      const items = await desktopGateway.listWorkspaces();
+      setWorkspaces(items);
+      setWorkspaceMenuOpen(false);
+    } catch (reason) {
+      setWorkspaceScope(previous.id);
+      setWorkspaceError(String(reason));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  };
 
   const controlWindow = async (action: "minimize" | "maximize" | "close") => {
     if (!inDesktopHost) return;
@@ -102,11 +190,70 @@ export function AppShell({ children }: PropsWithChildren) {
           <span className="brand-name">DRPA</span>
           <span className="release-chip">NEXT</span>
         </div>
-        <button className="workspace-switcher" type="button" disabled title="当前版本使用单一离线工作区">
-          <span className="workspace-dot" />
-          个人工作区
-          <ChevronDown size={14} />
-        </button>
+        <div className="workspace-control" ref={workspaceControlRef}>
+          <button
+            className={workspaceMenuOpen ? "workspace-switcher active" : "workspace-switcher"}
+            type="button"
+            title={currentWorkspace.path || currentWorkspace.name}
+            aria-haspopup="dialog"
+            aria-expanded={workspaceMenuOpen}
+            onClick={() => { setWorkspaceMenuOpen((open) => !open); setWorkspaceError(""); }}
+          >
+            <span className="workspace-dot" />
+            <span>{currentWorkspace.name}</span>
+            <ChevronDown size={14} />
+          </button>
+          {workspaceMenuOpen && (
+            <section className="workspace-menu" role="dialog" aria-label="切换工作区" onMouseDown={(event) => event.stopPropagation()}>
+              <header>
+                <div><strong>工作区</strong><span>数据、项目与任务完全隔离</span></div>
+                <button type="button" aria-label="新建工作区" onClick={() => setCreatingWorkspace(true)}><Plus size={15} /></button>
+              </header>
+              <div className="workspace-list" role="listbox" aria-label="工作区列表">
+                {workspaces.map((workspace) => (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={workspace.active}
+                    className={workspace.active ? "active" : ""}
+                    key={workspace.id}
+                    disabled={workspaceBusy}
+                    title={workspace.path}
+                    onClick={() => void switchWorkspace(workspace)}
+                  >
+                    <span className="workspace-avatar">{workspace.name.trim().slice(0, 1).toUpperCase()}</span>
+                    <span><strong>{workspace.name}</strong><small>{workspace.id === "personal" ? "兼容原有本地数据" : "独立数据目录"}</small></span>
+                    {workspace.active && <span className="workspace-current">当前</span>}
+                  </button>
+                ))}
+              </div>
+              {creatingWorkspace ? (
+                <form className="workspace-create" onSubmit={(event) => void createWorkspace(event)}>
+                  <label htmlFor="workspace-name">新建隔离工作区</label>
+                  <div>
+                    <input
+                      id="workspace-name"
+                      autoFocus
+                      maxLength={60}
+                      placeholder="例如：客户 A / 测试环境"
+                      value={workspaceName}
+                      onChange={(event) => setWorkspaceName(event.target.value)}
+                    />
+                    <button className="button primary small" type="submit" disabled={!workspaceName.trim() || workspaceBusy}>
+                      {workspaceBusy ? <LoaderCircle className="spin" size={14} /> : "创建并进入"}
+                    </button>
+                  </div>
+                  <button type="button" onClick={() => { setCreatingWorkspace(false); setWorkspaceName(""); }}>取消</button>
+                </form>
+              ) : (
+                <button className="workspace-add" type="button" onClick={() => setCreatingWorkspace(true)}>
+                  <Plus size={14} /> 新建工作区
+                </button>
+              )}
+              {workspaceError && <p className="workspace-error">{workspaceError}</p>}
+            </section>
+          )}
+        </div>
         <div className="titlebar-spacer" data-tauri-drag-region />
         <button className="sync-state" type="button" aria-label="Host 状态" onClick={() => setActiveNavigation("runtimes")}>
           <span className="pulse-dot" />

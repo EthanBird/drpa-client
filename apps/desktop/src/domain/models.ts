@@ -333,6 +333,14 @@ export interface CurrentUser {
   initials: string;
 }
 
+export interface WorkspaceInfo {
+  id: string;
+  name: string;
+  path: string;
+  active: boolean;
+  createdAt: number;
+}
+
 export interface KnowledgeEntry {
   path: string;
   name: string;

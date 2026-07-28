@@ -128,7 +128,7 @@ export function DataPage() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("drpa-data-query-history", JSON.stringify(history.slice(0, 30)));
+    localStorage.setItem(queryHistoryStorageKey(), JSON.stringify(history.slice(0, 30)));
   }, [history]);
 
   const inspectTable = async (table: DatabaseTable) => {
@@ -580,11 +580,22 @@ export function extractSqlBlock(markdown: string): string {
 
 function loadQueryHistory(): QueryHistoryEntry[] {
   try {
-    const value = JSON.parse(localStorage.getItem("drpa-data-query-history") ?? "[]");
+    const key = queryHistoryStorageKey();
+    let source = localStorage.getItem(key);
+    if (source === null && key.endsWith(":personal")) {
+      source = localStorage.getItem("drpa-data-query-history");
+      if (source !== null) localStorage.setItem(key, source);
+    }
+    const value = JSON.parse(source ?? "[]");
     return Array.isArray(value) ? value.slice(0, 30) : [];
   } catch {
     return [];
   }
+}
+
+function queryHistoryStorageKey(): string {
+  const workspaceId = localStorage.getItem("drpa-active-workspace-id") ?? "personal";
+  return `drpa-data-query-history:${workspaceId}`;
 }
 
 function quoteTableIdentifier(value: string, engine?: RemoteDatabaseProfile["engine"]): string {

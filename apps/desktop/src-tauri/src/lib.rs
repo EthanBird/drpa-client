@@ -24,6 +24,7 @@ mod knowledge;
 mod local_dify;
 mod local_dify_workflow;
 mod plugins;
+mod workspaces;
 
 const WINDOWS_UPDATE_SCHEMA: u32 = 2;
 const WINDOWS_UPDATE_HOST_PROTOCOL: u32 = 2;
@@ -31,6 +32,7 @@ const WINDOWS_UPDATE_WORKER_PROTOCOL: u32 = 2;
 
 #[derive(Clone)]
 pub(crate) struct AppPaths {
+    pub(crate) data_root: PathBuf,
     pub(crate) workspace_root: PathBuf,
     resource_dir: Option<PathBuf>,
 }
@@ -1378,10 +1380,7 @@ fn apply_windows_update(
     }
 
     let session_id = Uuid::new_v4().simple().to_string();
-    let session_root = paths
-        .workspace_root
-        .join("updates/sessions")
-        .join(&session_id);
+    let session_root = paths.data_root.join("updates/sessions").join(&session_id);
     let stage = session_root.join("stage");
     let status_path = session_root.join("status.json");
     let restart_request = session_root.join("restart-requested");
@@ -1532,7 +1531,7 @@ fn get_windows_update_status(
     validate_update_session_id(&session_id)?;
     let source = fs::read_to_string(
         paths
-            .workspace_root
+            .data_root
             .join("updates/sessions")
             .join(&session_id)
             .join("status.json"),
@@ -1545,7 +1544,7 @@ fn get_windows_update_status(
 fn get_latest_windows_update_status(
     paths: State<'_, AppPaths>,
 ) -> Result<Option<WindowsUpdateStatus>, String> {
-    let sessions = paths.workspace_root.join("updates/sessions");
+    let sessions = paths.data_root.join("updates/sessions");
     if !sessions.is_dir() {
         return Ok(None);
     }
@@ -1585,10 +1584,7 @@ fn restart_for_windows_update(
     paths: State<'_, AppPaths>,
 ) -> Result<(), String> {
     validate_update_session_id(&session_id)?;
-    let session_root = paths
-        .workspace_root
-        .join("updates/sessions")
-        .join(&session_id);
+    let session_root = paths.data_root.join("updates/sessions").join(&session_id);
     let source = fs::read_to_string(session_root.join("status.json"))
         .map_err(|error| format!("读取更新进度失败：{error}"))?;
     let status: WindowsUpdateStatus =
@@ -1616,17 +1612,17 @@ fn validate_update_session_id(session_id: &str) -> Result<(), String> {
     }
 }
 
-fn update_session_root(workspace_root: &Path, session_id: &str) -> Result<PathBuf, String> {
+fn update_session_root(data_root: &Path, session_id: &str) -> Result<PathBuf, String> {
     validate_update_session_id(session_id)?;
-    Ok(workspace_root.join("updates/sessions").join(session_id))
+    Ok(data_root.join("updates/sessions").join(session_id))
 }
 
-fn acknowledge_windows_update_startup(workspace_root: &Path) -> std::io::Result<()> {
+fn acknowledge_windows_update_startup(data_root: &Path) -> std::io::Result<()> {
     let Some(session_id) = std::env::var_os("DRPA_UPDATE_SESSION_ID") else {
         return Ok(());
     };
     let session_id = session_id.to_string_lossy();
-    let Ok(session_root) = update_session_root(workspace_root, &session_id) else {
+    let Ok(session_root) = update_session_root(data_root, &session_id) else {
         return Ok(());
     };
     if !session_root.join("status.json").is_file() {
@@ -1737,7 +1733,7 @@ fn repair_runtime(
         .lock()
         .map_err(|_| "无法停止 Studio Kernel".to_owned())?
         .clear();
-    let generated = paths.workspace_root.join("runtime-environment");
+    let generated = paths.data_root.join("runtime-environment");
     if generated.is_dir() {
         fs::remove_dir_all(&generated)
             .map_err(|error| format!("无法清理损坏的运行环境：{error}"))?;
@@ -1966,7 +1962,7 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
         if !root.join("manifest.json").is_file() {
             continue;
         }
-        let environment = paths.workspace_root.join("runtime-environment");
+        let environment = paths.data_root.join("runtime-environment");
         let python = prepare_sealed_runtime(&root, &environment)?;
         let manifest = read_offline_runtime_manifest(&root)?;
         return Ok(RuntimeEnvironment {
@@ -2041,7 +2037,7 @@ fn inspect_runtime_status(paths: &AppPaths) -> Result<RuntimeStatus, String> {
         .ok_or_else(|| "未找到与当前平台匹配的封装运行时".to_owned())?;
     let manifest = read_offline_runtime_manifest(&root)?;
     let browser = resolve_runtime_manifest_path(&root, &manifest.browser_executable)?;
-    let environment_root = paths.workspace_root.join("runtime-environment/environment");
+    let environment_root = paths.data_root.join("runtime-environment/environment");
     let python = environment_python_path(&environment_root);
     let marker = environment_root.join(".drpa-runtime.json");
     let pyvenv = environment_root.join("pyvenv.cfg");
@@ -2322,7 +2318,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
-            let workspace_root = if let Some(path) = std::env::var_os("DRPA_DATA_DIR") {
+            let data_root = if let Some(path) = std::env::var_os("DRPA_DATA_DIR") {
                 PathBuf::from(path)
             } else {
                 #[cfg(windows)]
@@ -2337,10 +2333,13 @@ pub fn run() {
                     app.path().app_local_data_dir()?.join("workspace")
                 }
             };
-            fs::create_dir_all(&workspace_root)?;
+            fs::create_dir_all(&data_root)?;
+            let workspace_root =
+                workspaces::resolve_active_workspace(&data_root).map_err(std::io::Error::other)?;
             knowledge::seed_default_knowledge(&workspace_root)?;
             let resource_dir = app.path().resource_dir().ok();
             let app_paths = AppPaths {
+                data_root: data_root.clone(),
                 workspace_root: workspace_root.clone(),
                 resource_dir,
             };
@@ -2359,7 +2358,7 @@ pub fn run() {
 
             #[cfg(windows)]
             {
-                let webview_data = workspace_root.join("webview2-user-data");
+                let webview_data = data_root.join("webview2-user-data");
                 fs::create_dir_all(&webview_data)?;
                 tauri::WebviewWindowBuilder::from_config(app, &main_window_config)?
                     .data_directory(webview_data)
@@ -2377,7 +2376,7 @@ pub fn run() {
             app.manage(RunProcessManager::default());
             app.manage(plugin_manager);
             app.manage(local_dify::LocalDifyServiceManager::default());
-            acknowledge_windows_update_startup(&workspace_root)?;
+            acknowledge_windows_update_startup(&data_root)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2486,7 +2485,10 @@ pub fn run() {
             knowledge::rename_knowledge_entry,
             knowledge::delete_knowledge_entry,
             knowledge::import_knowledge_files,
-            knowledge::export_knowledge_file
+            knowledge::export_knowledge_file,
+            workspaces::list_workspaces,
+            workspaces::create_workspace,
+            workspaces::switch_workspace
         ])
         .run(context)
         .expect("failed to run DRPA Next desktop host");
@@ -2530,6 +2532,7 @@ mod tests {
         let resource_dir =
             std::env::temp_dir().join(format!("drpa-resource-test-{}", Uuid::new_v4()));
         let paths = AppPaths {
+            data_root: std::env::temp_dir(),
             workspace_root: std::env::temp_dir(),
             resource_dir: Some(resource_dir.clone()),
         };

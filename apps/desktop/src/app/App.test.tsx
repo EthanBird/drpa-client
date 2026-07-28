@@ -56,6 +56,9 @@ describe("DRPA Next desktop shell", () => {
       agentTemperature: 0.2,
       agentProjectId: "",
       agentInspectorOpen: true,
+      activeWorkspaceId: "personal",
+      workspaceScopeLoaded: false,
+      agentWorkspaceStates: {},
       agentSessions: [agentSession],
       activeAgentSessionId: agentSession.id,
     });
@@ -69,6 +72,34 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByText("本地脚本包")).toBeVisible();
     expect(screen.getByRole("button", { name: "运行任务" })).toBeEnabled();
     await waitFor(() => expect(reportUiReady).toHaveBeenCalledOnce());
+  });
+
+  it("creates and enters an isolated workspace from the title bar", async () => {
+    const personal = { id: "personal", name: "个人工作区", path: "D:\\DRPA\\data", active: true, createdAt: 1 };
+    const created = {
+      id: "workspace-00000000000000000000000000000001",
+      name: "客户 A",
+      path: "D:\\DRPA\\data\\.drpa\\workspaces\\workspace-00000000000000000000000000000001",
+      active: false,
+      createdAt: 2,
+    };
+    vi.spyOn(desktopGateway, "listWorkspaces")
+      .mockResolvedValueOnce([personal])
+      .mockResolvedValueOnce([{ ...personal, active: false }, { ...created, active: true }]);
+    const createWorkspace = vi.spyOn(desktopGateway, "createWorkspace").mockResolvedValue(created);
+    const switchWorkspace = vi.spyOn(desktopGateway, "switchWorkspace").mockResolvedValue();
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /个人工作区/ }));
+    expect(screen.getByRole("dialog", { name: "切换工作区" })).toBeVisible();
+    fireEvent.click(screen.getAllByRole("button", { name: "新建工作区" })[0]);
+    fireEvent.change(screen.getByLabelText("新建隔离工作区"), { target: { value: "客户 A" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并进入" }));
+
+    await waitFor(() => expect(createWorkspace).toHaveBeenCalledWith("客户 A"));
+    await waitFor(() => expect(switchWorkspace).toHaveBeenCalledWith(created.id));
+    await waitFor(() => expect(screen.getByRole("button", { name: /客户 A/ })).toBeVisible());
+    expect(localStorage.getItem("drpa-active-workspace-id")).toBe(created.id);
   });
 
   it("opens the command palette with the platform shortcut", async () => {

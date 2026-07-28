@@ -2682,6 +2682,7 @@ mod tests {
 
     fn test_paths() -> AppPaths {
         AppPaths {
+            data_root: std::env::temp_dir(),
             workspace_root: std::env::temp_dir()
                 .join(format!("drpa-local-dify-test-{}", Uuid::new_v4())),
             resource_dir: None,

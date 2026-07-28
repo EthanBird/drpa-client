@@ -45,10 +45,14 @@ import type {
   StudioProject,
   WindowsUpdateSession,
   WindowsUpdateStatus,
+  WorkspaceInfo,
   WorkspaceSnapshot,
 } from "../domain/models";
 
 export interface DesktopGateway {
+  listWorkspaces(): Promise<WorkspaceInfo[]>;
+  createWorkspace(name: string): Promise<WorkspaceInfo>;
+  switchWorkspace(workspaceId: string): Promise<void>;
   getWorkspaceSnapshot(): Promise<WorkspaceSnapshot>;
   reportUiReady(): Promise<void>;
   reportUiInputReady(): Promise<void>;
@@ -165,6 +169,14 @@ function isTauriHost(): boolean {
 }
 
 const mockStudioProjects: StudioProject[] = [];
+let mockActiveWorkspaceId = "personal";
+let mockWorkspaces: WorkspaceInfo[] = [{
+  id: "personal",
+  name: "个人工作区",
+  path: "浏览器预览数据（内存）",
+  active: true,
+  createdAt: Date.now(),
+}];
 const mockStudioContents = new Map<string, Map<string, string>>();
 const mockKnowledgeDirectories = new Set(["RPAZ 开发指南"]);
 const mockKnowledgeContents = new Map<string, string>([
@@ -336,6 +348,30 @@ function addMockProject(project: StudioProject): StudioProject {
 }
 
 const mockGateway: DesktopGateway = {
+  async listWorkspaces() {
+    return structuredClone(mockWorkspaces.map((workspace) => ({
+      ...workspace,
+      active: workspace.id === mockActiveWorkspaceId,
+    })));
+  },
+  async createWorkspace(name) {
+    const normalized = name.trim();
+    if (!normalized) throw new Error("请输入工作区名称");
+    if (mockWorkspaces.some((workspace) => workspace.name === normalized)) throw new Error("已存在同名工作区");
+    const workspace: WorkspaceInfo = {
+      id: `workspace-${Date.now().toString(16).padStart(32, "0").slice(-32)}`,
+      name: normalized,
+      path: `浏览器预览数据（内存）/${normalized}`,
+      active: false,
+      createdAt: Date.now(),
+    };
+    mockWorkspaces = [...mockWorkspaces, workspace];
+    return structuredClone(workspace);
+  },
+  async switchWorkspace(workspaceId) {
+    if (!mockWorkspaces.some((workspace) => workspace.id === workspaceId)) throw new Error("目标工作区不存在");
+    mockActiveWorkspaceId = workspaceId;
+  },
   async getWorkspaceSnapshot() {
     return structuredClone(mockSnapshot);
   },
@@ -837,6 +873,9 @@ const mockGateway: DesktopGateway = {
 };
 
 const tauriGateway: DesktopGateway = {
+  listWorkspaces: () => invoke<WorkspaceInfo[]>("list_workspaces"),
+  createWorkspace: (name) => invoke<WorkspaceInfo>("create_workspace", { name }),
+  switchWorkspace: (workspaceId) => invoke<void>("switch_workspace", { workspaceId }),
   getWorkspaceSnapshot: () => invoke<WorkspaceSnapshot>("get_workspace_snapshot"),
   reportUiReady: () => invoke<void>("report_ui_ready"),
   reportUiInputReady: () => invoke<void>("report_ui_input_ready"),
