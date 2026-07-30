@@ -5,10 +5,10 @@ use std::time::Instant;
 use calamine::{Data, Reader, open_workbook_auto};
 use rusqlite::types::Value as SqliteValue;
 use rusqlite::types::ValueRef as SqliteValueRef;
-use rusqlite::{Connection, params, params_from_iter};
+use rusqlite::{Connection, OpenFlags, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use sqlx::any::{AnyPoolOptions, AnyRow};
-use sqlx::{AnyPool, Column, Row, TypeInfo, ValueRef as SqlxValueRef};
+use sqlx::{AnyConnection, AnyPool, Column, Row, TypeInfo, ValueRef as SqlxValueRef};
 use tauri::State;
 use url::Url;
 use uuid::Uuid;
@@ -30,14 +30,14 @@ const EXCEL_COLUMN_LIMIT: usize = 512;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RemoteDatabaseProfile {
-    id: String,
-    name: String,
-    engine: String,
-    host: String,
-    port: u16,
-    database: String,
-    username: String,
-    tls_mode: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) engine: String,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) database: String,
+    pub(crate) username: String,
+    pub(crate) tls_mode: String,
 }
 
 #[derive(Serialize)]
@@ -81,7 +81,7 @@ pub(crate) struct DatabaseColumn {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DatabaseQueryResult {
     columns: Vec<String>,
-    rows: Vec<Vec<serde_json::Value>>,
+    pub(crate) rows: Vec<Vec<serde_json::Value>>,
     affected_rows: usize,
     duration_ms: u64,
     truncated: bool,
@@ -142,14 +142,34 @@ pub(crate) fn list_remote_database_profiles(
 
 #[tauri::command]
 pub(crate) fn save_remote_database_profile(
-    mut profile: RemoteDatabaseProfile,
+    profile: RemoteDatabaseProfile,
     paths: State<'_, AppPaths>,
+) -> Result<RemoteDatabaseProfile, String> {
+    save_remote_profile_at(&paths.workspace_root, profile)
+}
+
+pub(crate) fn agent_list_database_profiles(
+    workspace_root: &Path,
+) -> Result<Vec<RemoteDatabaseProfile>, String> {
+    load_remote_profiles(&remote_profiles_path_at(workspace_root))
+}
+
+pub(crate) fn agent_save_database_profile(
+    workspace_root: &Path,
+    profile: RemoteDatabaseProfile,
+) -> Result<RemoteDatabaseProfile, String> {
+    save_remote_profile_at(workspace_root, profile)
+}
+
+fn save_remote_profile_at(
+    workspace_root: &Path,
+    mut profile: RemoteDatabaseProfile,
 ) -> Result<RemoteDatabaseProfile, String> {
     if profile.id.trim().is_empty() {
         profile.id = format!("database-{}", Uuid::new_v4().simple());
     }
     validate_remote_profile(&profile)?;
-    let path = remote_profiles_path(&paths);
+    let path = remote_profiles_path_at(workspace_root);
     let mut profiles = load_remote_profiles(&path)?;
     if let Some(existing) = profiles.iter_mut().find(|item| item.id == profile.id) {
         *existing = profile.clone();
@@ -164,6 +184,58 @@ pub(crate) fn save_remote_database_profile(
     profiles.sort_by_key(|profile| profile.name.to_lowercase());
     write_remote_profiles(&path, &profiles)?;
     Ok(profile)
+}
+
+pub(crate) async fn agent_get_database_schema(
+    workspace_root: &Path,
+    profile_id: &str,
+    password: &str,
+) -> Result<String, String> {
+    if profile_id == "workspace" {
+        return schema_context_read_only_at(&workspace_database_path_at(workspace_root));
+    }
+    let profile = load_remote_profile(&remote_profiles_path_at(workspace_root), profile_id)?;
+    if profile.engine == "sqlite" {
+        let connection = open_external_database_read_only(Path::new(&profile.database))?;
+        return schema_context_with_connection(&connection, "SQLite 外部数据库结构");
+    }
+    if profile.engine == "excel" {
+        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+        return schema_context_with_connection(
+            &connection,
+            "Excel 工作簿结构（工作表映射为只读表）",
+        );
+    }
+    let pool = connect_remote_database(&profile, password).await?;
+    let result = remote_schema_context_with_pool(&profile, &pool).await;
+    pool.close().await;
+    result
+}
+
+pub(crate) async fn agent_execute_read_only_query(
+    workspace_root: &Path,
+    profile_id: &str,
+    password: &str,
+    sql: &str,
+) -> Result<DatabaseQueryResult, String> {
+    ensure_read_only_sql(sql)?;
+    if profile_id == "workspace" {
+        let connection = open_database_read_only(&workspace_database_path_at(workspace_root))?;
+        return execute_sql_with_connection_mode(&connection, sql, true);
+    }
+    let profile = load_remote_profile(&remote_profiles_path_at(workspace_root), profile_id)?;
+    if profile.engine == "sqlite" {
+        let connection = open_external_database_read_only(Path::new(&profile.database))?;
+        return execute_sql_with_connection_mode(&connection, sql, true);
+    }
+    if profile.engine == "excel" {
+        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+        return execute_sql_with_connection_mode(&connection, sql, true);
+    }
+    let pool = connect_remote_database(&profile, password).await?;
+    let result = execute_remote_read_only_with_pool(&profile, &pool, sql).await;
+    pool.close().await;
+    result
 }
 
 #[tauri::command]
@@ -329,10 +401,11 @@ pub(crate) fn open_workspace_database_directory(paths: State<'_, AppPaths>) -> R
 }
 
 fn remote_profiles_path(paths: &AppPaths) -> PathBuf {
-    paths
-        .workspace_root
-        .join("databases")
-        .join("connections.json")
+    remote_profiles_path_at(&paths.workspace_root)
+}
+
+fn remote_profiles_path_at(workspace_root: &Path) -> PathBuf {
+    workspace_root.join("databases").join("connections.json")
 }
 
 fn load_remote_profiles(path: &Path) -> Result<Vec<RemoteDatabaseProfile>, String> {
@@ -712,6 +785,64 @@ async fn execute_remote_sql_with_pool(
         .fetch_all(pool)
         .await
         .map_err(|error| format!("SQL 查询失败：{error}"))?;
+    Ok(remote_rows_to_result(
+        remote_rows,
+        statement_type,
+        started.elapsed().as_millis() as u64,
+    ))
+}
+
+async fn execute_remote_read_only_with_pool(
+    profile: &RemoteDatabaseProfile,
+    pool: &AnyPool,
+    sql: &str,
+) -> Result<DatabaseQueryResult, String> {
+    ensure_read_only_sql(sql)?;
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|error| format!("获取只读数据库连接失败：{error}"))?;
+    let begin = match profile.engine.as_str() {
+        "postgresql" => "BEGIN READ ONLY",
+        "mysql" => "START TRANSACTION READ ONLY",
+        _ => return Err("远程数据库类型无效".to_owned()),
+    };
+    sqlx::query(begin)
+        .execute(&mut *connection)
+        .await
+        .map_err(|error| format!("启动只读事务失败：{error}"))?;
+    let started = Instant::now();
+    let query_result = execute_remote_read_only_with_connection(&mut connection, sql).await;
+    let rollback_result = sqlx::query("ROLLBACK")
+        .execute(&mut *connection)
+        .await
+        .map_err(|error| format!("回滚只读事务失败：{error}"));
+    match (query_result, rollback_result) {
+        (Ok(rows), Ok(_)) => Ok(remote_rows_to_result(
+            rows,
+            first_sql_keyword(sql),
+            started.elapsed().as_millis() as u64,
+        )),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
+}
+
+async fn execute_remote_read_only_with_connection(
+    connection: &mut AnyConnection,
+    sql: &str,
+) -> Result<Vec<AnyRow>, String> {
+    sqlx::query(sql)
+        .fetch_all(connection)
+        .await
+        .map_err(|error| format!("只读 SQL 查询失败：{error}"))
+}
+
+fn remote_rows_to_result(
+    remote_rows: Vec<AnyRow>,
+    statement_type: String,
+    duration_ms: u64,
+) -> DatabaseQueryResult {
     let columns = remote_rows
         .first()
         .map(|row| {
@@ -745,14 +876,14 @@ async fn execute_remote_sql_with_pool(
         }
         rows.push(values);
     }
-    Ok(DatabaseQueryResult {
+    DatabaseQueryResult {
         columns,
         rows,
         affected_rows: 0,
-        duration_ms: started.elapsed().as_millis() as u64,
+        duration_ms,
         truncated,
         statement_type,
-    })
+    }
 }
 
 fn remote_value_to_json(row: &AnyRow, index: usize) -> serde_json::Value {
@@ -844,10 +975,11 @@ fn truncate_remote_text(value: String) -> serde_json::Value {
 }
 
 fn workspace_database_path(paths: &AppPaths) -> PathBuf {
-    paths
-        .workspace_root
-        .join("databases")
-        .join("workspace.sqlite3")
+    workspace_database_path_at(&paths.workspace_root)
+}
+
+fn workspace_database_path_at(workspace_root: &Path) -> PathBuf {
+    workspace_root.join("databases").join("workspace.sqlite3")
 }
 
 fn open_database(path: &Path) -> Result<Connection, String> {
@@ -878,6 +1010,25 @@ fn open_external_database(path: &Path) -> Result<Connection, String> {
         .execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|error| format!("初始化 SQLite 失败：{error}"))?;
     Ok(connection)
+}
+
+fn open_database_read_only(path: &Path) -> Result<Connection, String> {
+    if !path.is_file() {
+        return Err(format!("数据源文件不存在：{}", path.display()));
+    }
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| format!("以只读方式打开 SQLite 失败：{error}"))?;
+    connection
+        .busy_timeout(std::time::Duration::from_secs(30))
+        .map_err(|error| error.to_string())?;
+    Ok(connection)
+}
+
+fn open_external_database_read_only(path: &Path) -> Result<Connection, String> {
+    open_database_read_only(path)
 }
 
 fn list_tables_at(path: &Path) -> Result<Vec<DatabaseTable>, String> {
@@ -963,6 +1114,11 @@ fn schema_context_at(path: &Path) -> Result<String, String> {
     schema_context_with_connection(&connection, "SQLite 工作区数据库结构")
 }
 
+fn schema_context_read_only_at(path: &Path) -> Result<String, String> {
+    let connection = open_database_read_only(path)?;
+    schema_context_with_connection(&connection, "SQLite 工作区数据库结构（只读）")
+}
+
 fn schema_context_external(path: &Path, title: &str) -> Result<String, String> {
     let connection = open_external_database(path)?;
     schema_context_with_connection(&connection, title)
@@ -1017,6 +1173,14 @@ fn execute_sql_with_connection(
     connection: &Connection,
     sql: &str,
 ) -> Result<DatabaseQueryResult, String> {
+    execute_sql_with_connection_mode(connection, sql, false)
+}
+
+fn execute_sql_with_connection_mode(
+    connection: &Connection,
+    sql: &str,
+    read_only: bool,
+) -> Result<DatabaseQueryResult, String> {
     let sql = sql.trim();
     if sql.is_empty() {
         return Err("请输入要执行的 SQL".to_owned());
@@ -1025,6 +1189,9 @@ fn execute_sql_with_connection(
     let mut statement = connection
         .prepare(sql)
         .map_err(|error| format!("SQL 编译失败：{error}"))?;
+    if read_only && !statement.readonly() {
+        return Err("Agent 数据工具只允许只读查询，当前 SQL 可能修改数据库".to_owned());
+    }
     let statement_type = first_sql_keyword(sql);
 
     if statement.column_count() == 0 {
@@ -1305,6 +1472,134 @@ fn first_sql_keyword(sql: &str) -> String {
     }
 }
 
+fn ensure_read_only_sql(sql: &str) -> Result<(), String> {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return Err("请输入要执行的 SQL".to_owned());
+    }
+    let without_trailing = trimmed.strip_suffix(';').unwrap_or(trimmed);
+    if without_trailing.contains(';') {
+        return Err("Agent 数据工具一次只允许执行一条只读 SQL".to_owned());
+    }
+    let tokens = sql_keyword_tokens(without_trailing);
+    let first = tokens.first().map(String::as_str).unwrap_or("");
+    if !matches!(
+        first,
+        "SELECT" | "WITH" | "EXPLAIN" | "SHOW" | "DESCRIBE" | "DESC" | "VALUES"
+    ) {
+        return Err(
+            "Agent 数据工具仅支持 SELECT、WITH、EXPLAIN、SHOW、DESCRIBE 或 VALUES".to_owned(),
+        );
+    }
+    const FORBIDDEN: &[&str] = &[
+        "ALTER", "ANALYZE", "ATTACH", "CALL", "COPY", "CREATE", "DELETE", "DETACH", "DROP", "EXEC",
+        "EXECUTE", "GRANT", "IMPORT", "INSERT", "INTO", "LOAD", "LOCK", "MERGE", "PRAGMA",
+        "REINDEX", "REPLACE", "RESET", "REVOKE", "SET", "TRUNCATE", "UPDATE", "UPSERT", "VACUUM",
+    ];
+    if let Some(keyword) = tokens
+        .iter()
+        .find(|token| FORBIDDEN.contains(&token.as_str()))
+    {
+        return Err(format!(
+            "Agent 数据工具禁止可能修改数据库的关键字：{keyword}"
+        ));
+    }
+    Ok(())
+}
+
+fn sql_keyword_tokens(sql: &str) -> Vec<String> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Normal,
+        SingleQuote,
+        DoubleQuote,
+        Backtick,
+        LineComment,
+        BlockComment,
+    }
+    let characters = sql.chars().collect::<Vec<_>>();
+    let mut state = State::Normal;
+    let mut index = 0;
+    let mut word = String::new();
+    let mut tokens = Vec::new();
+    let flush = |word: &mut String, tokens: &mut Vec<String>| {
+        if !word.is_empty() {
+            tokens.push(std::mem::take(word).to_ascii_uppercase());
+        }
+    };
+    while index < characters.len() {
+        let character = characters[index];
+        let next = characters.get(index + 1).copied();
+        match state {
+            State::Normal => {
+                if character == '-' && next == Some('-') {
+                    flush(&mut word, &mut tokens);
+                    state = State::LineComment;
+                    index += 1;
+                } else if character == '/' && next == Some('*') {
+                    flush(&mut word, &mut tokens);
+                    state = State::BlockComment;
+                    index += 1;
+                } else if character == '\'' {
+                    flush(&mut word, &mut tokens);
+                    state = State::SingleQuote;
+                } else if character == '"' {
+                    flush(&mut word, &mut tokens);
+                    state = State::DoubleQuote;
+                } else if character == '`' {
+                    flush(&mut word, &mut tokens);
+                    state = State::Backtick;
+                } else if character.is_ascii_alphanumeric() || character == '_' {
+                    word.push(character);
+                } else {
+                    flush(&mut word, &mut tokens);
+                }
+            }
+            State::SingleQuote => {
+                if character == '\'' {
+                    if next == Some('\'') {
+                        index += 1;
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::DoubleQuote => {
+                if character == '"' {
+                    if next == Some('"') {
+                        index += 1;
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::Backtick => {
+                if character == '`' {
+                    if next == Some('`') {
+                        index += 1;
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::LineComment => {
+                if matches!(character, '\r' | '\n') {
+                    state = State::Normal;
+                }
+            }
+            State::BlockComment => {
+                if character == '*' && next == Some('/') {
+                    state = State::Normal;
+                    index += 1;
+                }
+            }
+        }
+        index += 1;
+    }
+    flush(&mut word, &mut tokens);
+    tokens
+}
+
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -1320,6 +1615,25 @@ mod tests {
     use super::*;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn agent_sql_policy_accepts_queries_and_rejects_mutations() {
+        assert!(ensure_read_only_sql("SELECT id, name FROM items LIMIT 10").is_ok());
+        assert!(
+            ensure_read_only_sql("WITH recent AS (SELECT * FROM items) SELECT * FROM recent")
+                .is_ok()
+        );
+        assert!(ensure_read_only_sql("SELECT 'update is text' AS note").is_ok());
+        assert!(ensure_read_only_sql("UPDATE items SET name = 'changed'").is_err());
+        assert!(
+            ensure_read_only_sql(
+                "WITH changed AS (DELETE FROM items RETURNING *) SELECT * FROM changed"
+            )
+            .is_err()
+        );
+        assert!(ensure_read_only_sql("SELECT * INTO copied_items FROM items").is_err());
+        assert!(ensure_read_only_sql("SELECT 1; SELECT 2").is_err());
+    }
 
     #[test]
     fn creates_schema_and_returns_query_rows() {

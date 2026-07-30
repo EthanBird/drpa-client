@@ -77,7 +77,10 @@ def runtime_adapter_is_healthy(python: Path) -> bool:
                 "-I",
                 "-c",
                 "from drpa_runner.context import RuntimeContext; "
-                "assert hasattr(RuntimeContext, 'open_output_directory')",
+                "from drpa_runner import document_worker; "
+                "import docx, openpyxl, pptx, pypdf, reportlab; "
+                "assert hasattr(RuntimeContext, 'open_output_directory'); "
+                "assert document_worker.PROTOCOL_VERSION == 1",
             ],
             check=False,
             stdout=subprocess.DEVNULL,

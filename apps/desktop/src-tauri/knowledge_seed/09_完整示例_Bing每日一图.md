@@ -1,6 +1,6 @@
 # 完整示例：Bing 每日一图
 
-该示例只使用 Python 标准库，不依赖浏览器。它验证 manifest 默认参数、Unicode 事件流、网络请求、JSON 解析、二进制下载、产物登记和进度报告，是检查新安装 runtime 的优先脚本包。
+该示例只使用 Python 标准库，不依赖浏览器。它验证 manifest 默认参数、Unicode 事件流、网络请求、JSON 解析、二进制下载、产物登记和进度报告，是检查新安装 runtime 的优先 RPAZ 包。
 
 ## 1. 目录
 

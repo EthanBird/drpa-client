@@ -1,6 +1,7 @@
 import {
   Blocks,
   Bot,
+  BookOpenCheck,
   Boxes,
   ChevronDown,
   CircleHelp,
@@ -31,6 +32,7 @@ import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type Prop
 import type { NavigationId, WorkspaceInfo } from "../domain/models";
 import { useAppStore } from "../app/store";
 import { desktopGateway } from "../infra/gateway";
+import { SidebarToggle, useSidebarCollapsed } from "./SidebarToggle";
 
 const primaryNavigation: Array<{
   id: NavigationId;
@@ -39,7 +41,7 @@ const primaryNavigation: Array<{
   shortcut?: string;
 }> = [
   { id: "overview", label: "总览", icon: Gauge },
-  { id: "library", label: "脚本包", icon: Library },
+  { id: "library", label: "RPAZ 包", icon: Library },
   { id: "studio", label: "开发工作室", icon: Code2 },
   { id: "data", label: "数据工作台", icon: Database },
   { id: "workbench", label: "运行工作台", icon: Blocks, shortcut: "⌘1" },
@@ -52,8 +54,9 @@ const infrastructureNavigation: Array<{
   label: string;
   icon: typeof Gauge;
 }> = [
-  { id: "localDify", label: "AI 应用", icon: Workflow },
+  { id: "localDify", label: "流程设计", icon: Workflow },
   { id: "agent", label: "AI Agent", icon: Bot },
+  { id: "knowledgeBase", label: "知识库", icon: BookOpenCheck },
   { id: "plugins", label: "插件", icon: PlugZap },
   { id: "runtimes", label: "运行环境", icon: Boxes },
   { id: "secrets", label: "凭据保险箱", icon: KeyRound },
@@ -64,6 +67,7 @@ export function AppShell({ children }: PropsWithChildren) {
   const setActiveNavigation = useAppStore((state) => state.setActiveNavigation);
   const setCommandOpen = useAppStore((state) => state.setCommandOpen);
   const setWorkspaceScope = useAppStore((state) => state.setWorkspaceScope);
+  const navigationCollapsed = useSidebarCollapsed("app-navigation");
   const inDesktopHost = "__TAURI_INTERNALS__" in window;
   const [maximized, setMaximized] = useState(false);
   const [currentUser, setCurrentUser] = useState({ displayName: "本地用户", accountName: "local", initials: "本地" });
@@ -124,14 +128,21 @@ export function AppShell({ children }: PropsWithChildren) {
     const previous = currentWorkspace;
     setWorkspaceBusy(true);
     setWorkspaceError("");
-    setWorkspaceScope(workspace.id);
+    let switched = false;
     try {
       await desktopGateway.switchWorkspace(workspace.id);
-      const items = await desktopGateway.listWorkspaces();
-      setWorkspaces(items);
+      switched = true;
+      if (!inDesktopHost) {
+        setWorkspaceScope(workspace.id);
+        const items = await desktopGateway.listWorkspaces();
+        setWorkspaces(items);
+      }
       setWorkspaceMenuOpen(false);
     } catch (reason) {
-      setWorkspaceScope(previous.id);
+      if (switched) {
+        await desktopGateway.switchWorkspace(previous.id).catch(() => undefined);
+      }
+      if (!inDesktopHost && switched) setWorkspaceScope(previous.id);
       setWorkspaceError(String(reason));
     } finally {
       setWorkspaceBusy(false);
@@ -144,18 +155,25 @@ export function AppShell({ children }: PropsWithChildren) {
     const previous = currentWorkspace;
     setWorkspaceBusy(true);
     setWorkspaceError("");
+    let switched = false;
     try {
       const created = await desktopGateway.createWorkspace(workspaceName);
       setWorkspaces((items) => [...items, created]);
       setWorkspaceName("");
       setCreatingWorkspace(false);
-      setWorkspaceScope(created.id);
       await desktopGateway.switchWorkspace(created.id);
-      const items = await desktopGateway.listWorkspaces();
-      setWorkspaces(items);
+      switched = true;
+      if (!inDesktopHost) {
+        setWorkspaceScope(created.id);
+        const items = await desktopGateway.listWorkspaces();
+        setWorkspaces(items);
+      }
       setWorkspaceMenuOpen(false);
     } catch (reason) {
-      setWorkspaceScope(previous.id);
+      if (switched) {
+        await desktopGateway.switchWorkspace(previous.id).catch(() => undefined);
+      }
+      if (!inDesktopHost && switched) setWorkspaceScope(previous.id);
       setWorkspaceError(String(reason));
     } finally {
       setWorkspaceBusy(false);
@@ -181,7 +199,7 @@ export function AppShell({ children }: PropsWithChildren) {
   };
 
   return (
-    <div className="shell">
+    <div className={navigationCollapsed ? "shell navigation-collapsed" : "shell"}>
       <header className="titlebar" data-tauri-drag-region onMouseDown={startWindowDrag} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, select, textarea, summary, a")) void controlWindow("maximize"); }}>
         <div className="brand-lockup" data-tauri-drag-region>
           <div className="brand-mark" aria-hidden="true">
@@ -189,6 +207,7 @@ export function AppShell({ children }: PropsWithChildren) {
           </div>
           <span className="brand-name">DRPA</span>
           <span className="release-chip">NEXT</span>
+          {!navigationCollapsed && <SidebarToggle id="app-navigation" side="left" label="主侧边栏" />}
         </div>
         <div className="workspace-control" ref={workspaceControlRef}>
           <button
@@ -266,8 +285,18 @@ export function AppShell({ children }: PropsWithChildren) {
         </div>
       </header>
 
-      <aside className="sidebar">
-        <button className="command-trigger" type="button" onClick={() => setCommandOpen(true)}>
+      <aside
+        className={navigationCollapsed ? "sidebar navigation-rail" : "sidebar"}
+        aria-label={navigationCollapsed ? "主导航图标栏" : "主侧边栏"}
+      >
+        {navigationCollapsed && <SidebarToggle id="app-navigation" side="left" label="主侧边栏" restore />}
+        <button
+          className="command-trigger"
+          type="button"
+          aria-label="搜索或运行命令"
+          title={navigationCollapsed ? "搜索或运行命令" : undefined}
+          onClick={() => setCommandOpen(true)}
+        >
           <Search size={15} />
           <span>搜索或运行命令</span>
           <kbd>⌘ K</kbd>
@@ -278,29 +307,37 @@ export function AppShell({ children }: PropsWithChildren) {
             items={primaryNavigation}
             activeId={activeNavigation}
             onSelect={setActiveNavigation}
+            compact={navigationCollapsed}
           />
-          <div className="nav-label">基础设施</div>
+          <div className="nav-label" aria-hidden={navigationCollapsed}>基础设施</div>
           <NavigationGroup
             items={infrastructureNavigation}
             activeId={activeNavigation}
             onSelect={setActiveNavigation}
+            compact={navigationCollapsed}
           />
         </nav>
 
         <div className="sidebar-spacer" />
-        <button className="quick-run-card" type="button" onClick={() => setActiveNavigation("library")}>
+        <button
+          className="quick-run-card"
+          type="button"
+          aria-label="快速安装 RPAZ 包"
+          title={navigationCollapsed ? "快速安装 RPAZ 包" : undefined}
+          onClick={() => setActiveNavigation("library")}
+        >
           <div className="quick-run-icon"><Sparkles size={16} /></div>
           <div>
             <strong>快速安装</strong>
-            <span>导入 rpaz 脚本包</span>
+            <span>导入 RPAZ 包</span>
           </div>
           <Play size={14} fill="currentColor" />
         </button>
         <div className="sidebar-utility">
-          <button type="button" onClick={() => setActiveNavigation("docs")}><CircleHelp size={16} /><span>知识文档</span></button>
-          <button type="button" onClick={() => setActiveNavigation("settings")}><Settings size={16} /><span>设置</span></button>
+          <button type="button" aria-label="知识文档" title={navigationCollapsed ? "知识文档" : undefined} onClick={() => setActiveNavigation("docs")}><CircleHelp size={16} /><span>知识文档</span></button>
+          <button type="button" aria-label="设置" title={navigationCollapsed ? "设置" : undefined} onClick={() => setActiveNavigation("settings")}><Settings size={16} /><span>设置</span></button>
         </div>
-        <div className="account-card">
+        <div className="account-card" title={navigationCollapsed ? currentUser.displayName : undefined}>
           <div className="avatar">{currentUser.initials}</div>
           <div><strong>{currentUser.displayName}</strong><span title={currentUser.accountName}>本机用户</span></div>
           <ChevronDown size={14} />
@@ -316,9 +353,10 @@ interface NavigationGroupProps {
   items: Array<{ id: NavigationId; label: string; icon: typeof Gauge; shortcut?: string }>;
   activeId: NavigationId;
   onSelect: (id: NavigationId) => void;
+  compact?: boolean;
 }
 
-function NavigationGroup({ items, activeId, onSelect }: NavigationGroupProps) {
+function NavigationGroup({ items, activeId, onSelect, compact = false }: NavigationGroupProps) {
   return (
     <div className="nav-group">
       {items.map((item) => {
@@ -328,6 +366,8 @@ function NavigationGroup({ items, activeId, onSelect }: NavigationGroupProps) {
             key={item.id}
             className={activeId === item.id ? "nav-item active" : "nav-item"}
             type="button"
+            aria-label={compact ? item.label : undefined}
+            title={compact ? item.label : undefined}
             onClick={() => onSelect(item.id)}
           >
             <Icon size={16} strokeWidth={1.9} />

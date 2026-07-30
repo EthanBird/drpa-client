@@ -4,14 +4,25 @@ DRPA 的 Local Dify Studio 内置 Workflow / Chatflow 可视化设计器。它�
 
 ## 创建工作流
 
-1. 打开 **AI 应用**。
-2. 选择 **新建应用**。
+1. 打开 **流程设计**。
+2. 选择 **新建流程**。
 3. 选择 **Workflow** 或 **Chatflow**。
 4. 打开 **工作流** 标签。
 5. 从左侧节点库点击或拖入节点。
 6. 点击节点右侧端口，再点击目标节点完成连接。
 7. 在右侧属性面板配置节点。
 8. 选择 **校验**、**保存工作流**或**测试运行**。
+
+### 最简单的 RPAZ 流程
+
+不需要手工创建节点或连线：
+
+1. 在工作流顶部的下拉框选择一个已安装 RPAZ 包；
+2. 点击 **RPAZ 快速流程**；
+3. 系统自动生成 `开始 → RPAZ 包 → 结束`，同时填入包 ID、参数默认值和结束输出；
+4. 点击 **保存工作流**，再点 **测试运行**并输入测试内容。
+
+纯 RPAZ、模板、HTTP、Python、列表和知识检索流程不要求 Provider。只有 LLM、问题分类器和参数提取器需要 Provider。
 
 默认 Workflow：
 
@@ -35,6 +46,13 @@ Start → LLM → Answer
 | If / Else | TRUE / FALSE 条件分支 |
 | HTTP Request | HTTP API 调用 |
 | Code | 内置 Python 3 代码 |
+| RPAZ Package | 调用已安装的 RPAZ 包 |
+| Question Classifier | 使用当前 Provider 选择分类分支 |
+| Parameter Extractor | 从文本提取 JSON 参数 |
+| Variable Aggregator | 选择条件分支中第一个非空变量 |
+| List Operator | 筛选、排序和截取数组 |
+| Document Extractor | 读取当前工作区内的 UTF-8 文本文件 |
+| Knowledge Retrieval | 检索当前工作区的本地知识库 |
 | Answer | Chatflow 回复 |
 | End | Workflow 结构化输出 |
 

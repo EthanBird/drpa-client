@@ -1,10 +1,10 @@
 # Local Dify 开发平台
 
-DRPA 的“AI 应用”模块用于在本机创建、测试和发布轻量 Dify 兼容应用。第一阶段支持 Chat 与 Completion；Workflow 画布和图执行器将在后续阶段加入。
+DRPA 的“流程设计”模块用于在本机创建、测试和发布轻量 Dify 兼容流程，支持 Chat、Completion、Workflow 与 Chatflow。
 
 ## 开发流程
 
-1. 打开“基础设施 → AI 应用”。
+1. 打开“基础设施 → 流程设计”。
 2. 在 Providers 中配置 OpenAI 兼容 URL、Model 和 API Key。
 3. 新建 Chat 或 Completion 应用。
 4. 编辑系统指令、开场白、输入变量、Temperature 和最大输出。
@@ -13,7 +13,7 @@ DRPA 的“AI 应用”模块用于在本机创建、测试和发布轻量 Dify 
 7. 发布本地版本，获取应用 API Token。
 8. 导出 Dify YAML DSL，上传到 Dify Cloud 或自部署 Dify。
 
-## Provider 与 Dify Loves Hermes
+## Provider 与 Dify2API
 
 Provider 接受标准 OpenAI Chat Completions 接口：
 
@@ -22,17 +22,13 @@ https://api.example.com/v1
 http://127.0.0.1:34121/v1
 ```
 
-第二个地址可以指向 `dify-loves-hermes`。这样 Local Dify 会把请求作为 OpenAI 请求交给 Hermes，再由 Hermes 调用本地或远程 Dify App API。
+第二个地址可以指向插件页启动的 `dify2api`。它把 Dify Agent API
+转换为 OpenAI Chat Completions，并提供健康、模型、上游连通性和对话链路
+调试。请从插件 Provider 卡片应用 Endpoint、模型名和本地代理 Key，不要把
+上游 Dify App Key 当成本地客户端凭据。
 
-DRPA 会通过以下 Header 记录调用链：
-
-```text
-X-DRPA-Trace-Id
-X-DRPA-Provider-Route
-X-DRPA-Hop-Count
-```
-
-路由重复出现同一 App 或超过四跳时，运行会以明确错误结束，避免 Provider 套娃形成循环。
+不要让 Local Dify 经 Dify2API 再指回同一个 Local Dify Service，以免形成
+递归调用。
 
 ## 本地 Dify Service API
 

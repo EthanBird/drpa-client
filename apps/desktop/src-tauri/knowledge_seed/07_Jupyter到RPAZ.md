@@ -1,6 +1,6 @@
 # 从 Jupyter 探索代码到稳定 RPAZ
 
-开发工作室内置真实 Jupyter 执行链路，适合逐段验证网页、数据转换和输出格式。Notebook 不是最终入口：导出的任务仍由 manifest 指向 Python 模块并调用 `main(ctx)`。本章说明怎样避免“单元格能跑，脚本包不能跑”。
+开发工作室内置真实 Jupyter 执行链路，适合逐段验证网页、数据转换和输出格式。Notebook 不是最终入口：导出的任务仍由 manifest 指向 Python 模块并调用 `main(ctx)`。本章说明怎样避免“单元格能跑，RPAZ 包不能跑”。
 
 ## 1. 工作室 Notebook 能力
 

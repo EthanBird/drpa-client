@@ -28,6 +28,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { useAppStore } from "../app/store";
+import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
 import type { DatabaseColumn, DatabaseInfo, DatabaseQueryResult, DatabaseTable, RemoteConnectionTest, RemoteDatabaseProfile } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 
@@ -52,6 +53,8 @@ interface QueryHistoryEntry {
 
 export function DataPage() {
   const theme = useAppStore((state) => state.theme);
+  const schemaCollapsed = useSidebarCollapsed("data-schema");
+  const inspectorCollapsed = useSidebarCollapsed("data-inspector");
   const [database, setDatabase] = useState<DatabaseInfo | null>(null);
   const [tables, setTables] = useState<DatabaseTable[]>([]);
   const [selectedTable, setSelectedTable] = useState("");
@@ -126,6 +129,49 @@ export function DataPage() {
       .catch((reason: unknown) => { if (active) setError(`读取数据库连接失败：${String(reason)}`); });
     return () => { active = false; };
   }, []);
+
+  const connectDroppedFiles = useCallback(async (paths: string[]) => {
+    const sources = paths
+      .map((path) => ({ path, engine: fileDatabaseEngine(path) }))
+      .filter((source): source is { path: string; engine: "sqlite" | "excel" } => source.engine !== null);
+    if (sources.length === 0) {
+      setError("请拖入 SQLite（.db/.sqlite/.sqlite3）或 Excel（.xls/.xlsx/.xlsb/.ods）文件");
+      return;
+    }
+    setConnectionBusy(true);
+    setError("");
+    try {
+      const savedProfiles: RemoteDatabaseProfile[] = [];
+      for (const source of sources) {
+        const profile = createRemoteProfile(source.engine, source.path);
+        await desktopGateway.testRemoteDatabaseConnection(profile, "");
+        savedProfiles.push(await desktopGateway.saveRemoteDatabaseProfile(profile));
+      }
+      setRemoteProfiles((current) => {
+        const ids = new Set(savedProfiles.map((profile) => profile.id));
+        return [...current.filter((profile) => !ids.has(profile.id)), ...savedProfiles]
+          .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+      });
+      const last = savedProfiles.at(-1);
+      if (last) {
+        setActiveConnectionId(last.id);
+        setResult(null);
+      }
+    } catch (reason) {
+      setError(`创建文件数据源失败：${String(reason)}`);
+    } finally {
+      setConnectionBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleNativeDrop = (event: Event) => {
+      const paths = (event as CustomEvent<{ paths?: string[] }>).detail?.paths ?? [];
+      void connectDroppedFiles(paths);
+    };
+    window.addEventListener("drpa-data-file-drop", handleNativeDrop);
+    return () => window.removeEventListener("drpa-data-file-drop", handleNativeDrop);
+  }, [connectDroppedFiles]);
 
   useEffect(() => {
     localStorage.setItem(queryHistoryStorageKey(), JSON.stringify(history.slice(0, 30)));
@@ -258,6 +304,9 @@ export function DataPage() {
         maxOutputTokens: config.agentMaxOutputTokens,
         maxRounds: config.agentMaxRounds,
         temperature: config.agentTemperature,
+        pythonTimeoutSeconds: config.agentPythonTimeoutSeconds,
+        selectedSkillIds: [],
+        toolPolicy: config.agentToolPolicy,
         messages: [{
           role: "user",
           content: [
@@ -387,8 +436,9 @@ export function DataPage() {
         </div>
       </header>
 
-      <div className="data-workspace">
-        <aside className="data-schema-pane">
+      <div className={`data-workspace${schemaCollapsed ? " schema-collapsed" : ""}${inspectorCollapsed ? " inspector-collapsed" : ""}`}>
+        {schemaCollapsed ? <SidebarToggle id="data-schema" side="left" label="数据连接侧边栏" restore /> : <aside className="data-schema-pane collapsible-sidebar">
+          <SidebarToggle id="data-schema" side="left" label="数据连接侧边栏" />
           <div className="data-pane-title"><Database size={15} /> 连接 <button type="button" aria-label="新建数据库连接" title="新建 PostgreSQL / MySQL / SQLite / Excel 数据源" onClick={() => editConnection()}><Plus size={13} /></button></div>
           <div className="database-connections-list">
             <button className={`database-connection ${activeConnectionId === "local" ? "active" : ""}`} type="button" onClick={() => { setActiveConnectionId("local"); setResult(null); setError(""); }}>
@@ -428,7 +478,7 @@ export function DataPage() {
             ))}
           </div>
           <div className="database-path" title={database?.path}><span>{activeProfile ? "端点" : "文件"}</span><code>{database?.path ?? "正在定位…"}</code></div>
-        </aside>
+        </aside>}
 
         <main className="data-query-pane">
           <div className="query-tabs">
@@ -476,7 +526,8 @@ export function DataPage() {
           </section>
         </main>
 
-        <aside className="data-inspector-pane">
+        {inspectorCollapsed ? <SidebarToggle id="data-inspector" side="right" label="字段结构侧边栏" restore /> : <aside className="data-inspector-pane collapsible-sidebar">
+          <SidebarToggle id="data-inspector" side="right" label="字段结构侧边栏" />
           <div className="data-pane-title"><Rows3 size={15} /> 字段结构</div>
           {selectedTable ? <div className="inspector-table-name"><Table2 size={14} /><strong>{selectedTable}</strong><span>{columns.length} 个字段</span></div> : <div className="data-empty inspector-empty">选择左侧数据表查看字段定义。</div>}
           <div className="column-list">
@@ -487,7 +538,7 @@ export function DataPage() {
             {history.length === 0 && <div className="data-empty">本次执行的查询将显示在这里。</div>}
             {history.map((entry) => <button type="button" key={entry.id} onClick={() => { setSql(entry.sql); window.setTimeout(() => editorRef.current?.focus(), 0); }}><span><strong>{entry.statementType}</strong><small>{entry.sql.replace(/\s+/g, " ").slice(0, 68)}</small></span><em><Clock3 size={11} /> {formatTime(entry.executedAt)} · {entry.durationMs} ms</em></button>)}
           </div>
-        </aside>
+        </aside>}
       </div>
 
       {connectionDraft && (
@@ -604,14 +655,15 @@ function quoteTableIdentifier(value: string, engine?: RemoteDatabaseProfile["eng
     : `"${part.replaceAll('"', '""')}"`).join(".");
 }
 
-function createRemoteProfile(): RemoteDatabaseProfile {
+function createRemoteProfile(engine: RemoteDatabaseProfile["engine"] = "postgresql", sourcePath = ""): RemoteDatabaseProfile {
+  const fileName = sourcePath.split(/[\\/]/).at(-1)?.replace(/\.[^.]+$/, "") ?? "";
   return {
     id: `database-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    name: "",
-    engine: "postgresql",
-    host: "localhost",
-    port: 5432,
-    database: "",
+    name: fileName,
+    engine,
+    host: isFileDatabase(engine) ? "" : "localhost",
+    port: engine === "postgresql" ? 5432 : engine === "mysql" ? 3306 : 0,
+    database: sourcePath,
     username: "",
     tlsMode: "prefer",
   };
@@ -619,6 +671,12 @@ function createRemoteProfile(): RemoteDatabaseProfile {
 
 function isFileDatabase(engine: RemoteDatabaseProfile["engine"]): engine is "sqlite" | "excel" {
   return engine === "sqlite" || engine === "excel";
+}
+
+function fileDatabaseEngine(path: string): "sqlite" | "excel" | null {
+  if (/\.(db|sqlite|sqlite3)$/i.test(path)) return "sqlite";
+  if (/\.(xls|xlsx|xlsb|ods)$/i.test(path)) return "excel";
+  return null;
 }
 
 function databaseEngineLabel(engine: RemoteDatabaseProfile["engine"]): string {

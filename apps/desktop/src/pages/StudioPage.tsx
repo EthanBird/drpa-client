@@ -33,6 +33,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { useAppStore } from "../app/store";
+import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
 import type { StudioProject, StudioVariable } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 import { AgentPage } from "./AgentPage";
@@ -272,6 +273,8 @@ type PendingDelete =
   | { kind: "entry"; path: string };
 
 export function StudioPage() {
+  const projectsCollapsed = useSidebarCollapsed("studio-projects");
+  const filesCollapsed = useSidebarCollapsed("studio-files");
   const snapshot = useAppStore((state) => state.snapshot);
   const setSnapshot = useAppStore((state) => state.setSnapshot);
   const theme = useAppStore((state) => state.theme);
@@ -351,7 +354,7 @@ export function StudioPage() {
     try {
       const project = await desktopGateway.openInstalledPackage(installedPackageId);
       await refresh("main.py", project.id);
-      setNotice(`已从已安装脚本包创建可编辑工作副本：${project.name}`);
+      setNotice(`已从已安装 RPAZ 包创建可编辑工作副本：${project.name}`);
     } catch (error) {
       setNotice(`打开失败：${String(error)}`);
     } finally { setBusy(false); }
@@ -519,6 +522,24 @@ export function StudioPage() {
     finally { setBusy(false); }
   };
 
+  const saveToPackageLibrary = async () => {
+    if (!selectedId) return;
+    setBusy(true);
+    try {
+      if (selectedFile && !selectedFile.endsWith("/")) {
+        await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
+      }
+      const installed = await desktopGateway.installStudioProject(selectedId);
+      setSnapshot(await desktopGateway.getWorkspaceSnapshot());
+      setInstalledPackageId(installed.id);
+      setNotice(`已保存到 RPAZ 包库：${installed.name} · v${installed.version}`);
+    } catch (error) {
+      setNotice(`保存到 RPAZ 包失败：${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const language = selectedFile.endsWith(".py") ? "python" : selectedFile.endsWith(".yaml") ? "yaml" : selectedFile.endsWith(".json") ? "json" : "plaintext";
   const notebook = selectedFile.endsWith(".ipynb");
 
@@ -529,6 +550,7 @@ export function StudioPage() {
         <div className="header-actions">
           <button className="button secondary" type="button" onClick={() => setAgentOpen((current) => !current)} aria-pressed={agentOpen}>{agentOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />} {agentOpen ? "收起 Agent" : "打开 Agent"}</button>
           <button className="button secondary" type="button" onClick={save} disabled={!selectedId || busy || selectedFile.endsWith("/")}><Save size={15} /> 保存</button>
+          <button className="button secondary" type="button" onClick={() => void saveToPackageLibrary()} disabled={!selectedId || busy}><PackageCheck size={15} /> 保存到 RPAZ 包</button>
           <button className="button secondary" type="button" onClick={exportProject} disabled={!selectedId || busy}><PackageCheck size={15} /> 导出 RPAZ</button>
           <button className="button primary" type="button" onClick={runProject} disabled={!selectedId || busy}><Play size={15} fill="currentColor" /> {busy ? "处理中…" : "直接运行"}</button>
         </div>
@@ -537,15 +559,16 @@ export function StudioPage() {
         <input value={projectName} onChange={(event) => setProjectName(event.target.value)} aria-label="项目名称" placeholder="只需输入项目名称" />
         <button className="button secondary" type="button" onClick={createProject} disabled={busy}><Plus size={15} /> 新建项目</button>
         <span className="studio-toolbar-divider" />
-        <select aria-label="已安装脚本包" value={installedPackageId} onChange={(event) => setInstalledPackageId(event.target.value)} disabled={packages.length === 0}>
-          {packages.length === 0 && <option value="">没有已安装脚本包</option>}
+        <select aria-label="已安装 RPAZ 包" value={installedPackageId} onChange={(event) => setInstalledPackageId(event.target.value)} disabled={packages.length === 0}>
+          {packages.length === 0 && <option value="">没有已安装 RPAZ 包</option>}
           {packages.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.version}</option>)}
         </select>
         <button className="button secondary" type="button" onClick={openInstalled} disabled={!installedPackageId || busy}><FolderInput size={15} /> 打开已安装包</button>
         <details className="studio-run-config"><summary>运行参数</summary><textarea aria-label="Studio 运行参数 JSON" value={runParameters} onChange={(event) => setRunParameters(event.target.value)} /></details>
       </div>
-      <div className={`${notebook ? "studio-layout notebook-active" : "studio-layout"} ${agentOpen ? "agent-open" : ""}`}>
-        <aside className="studio-projects">
+      <div className={`${notebook ? "studio-layout notebook-active" : "studio-layout"} ${agentOpen ? "agent-open" : ""}${projectsCollapsed ? " projects-collapsed" : ""}${filesCollapsed ? " files-collapsed" : ""}`}>
+        {projectsCollapsed ? <SidebarToggle id="studio-projects" side="left" label="项目侧边栏" restore /> : <aside className="studio-projects collapsible-sidebar">
+          <SidebarToggle id="studio-projects" side="left" label="项目侧边栏" />
           <div className="studio-pane-title"><FolderTree size={15} /> 项目</div>
           {projects.length === 0 && <p className="empty-hint">尚无项目，请在上方新建。</p>}
           {projects.map((project) => (
@@ -564,13 +587,14 @@ export function StudioPage() {
               <button type="button" className="danger" onClick={() => { setPendingDelete({ kind: "project", project: projectMenu.project }); setProjectMenu(null); }}><Trash2 size={14} /> 删除开发项目</button>
             </div>
           )}
-        </aside>
-        <aside
-          className="studio-files"
+        </aside>}
+        {filesCollapsed ? <SidebarToggle id="studio-files" side="left" label="文件侧边栏" restore /> : <aside
+          className="studio-files collapsible-sidebar"
           onContextMenu={(event) => { event.preventDefault(); setFileMenu({ x: event.clientX, y: event.clientY }); }}
           onDragOver={(event) => event.preventDefault()}
           onDrop={dropBrowserFiles}
         >
+          <SidebarToggle id="studio-files" side="left" label="文件侧边栏" />
           <div className="studio-pane-title studio-pane-title-actions">
             <span><Code2 size={15} /> 文件</span>
             <span className="studio-file-actions">
@@ -635,7 +659,7 @@ export function StudioPage() {
               <button type="button" className="danger" onClick={() => { if (fileMenu.target) setPendingDelete({ kind: "entry", path: fileMenu.target }); setFileMenu(null); }} disabled={!fileMenu.target}><Trash2 size={14} /> 删除</button>
             </div>
           )}
-        </aside>
+        </aside>}
         <section className={notebook ? "studio-editor notebook-editor" : "studio-editor"}>
           {notebook ? (
             <NotebookWorkspace projectId={selectedId} content={content} onChange={setContent} onNotice={setNotice} theme={theme} />

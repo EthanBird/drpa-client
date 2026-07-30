@@ -327,6 +327,13 @@ pub(crate) fn validate_graph(graph: &WorkflowGraph, mode: &str) -> WorkflowValid
                 | "if-else"
                 | "http-request"
                 | "code"
+                | "rpaz-package"
+                | "question-classifier"
+                | "parameter-extractor"
+                | "variable-aggregator"
+                | "list-operator"
+                | "document-extractor"
+                | "knowledge-retrieval"
                 | "answer"
                 | "end"
         ) {
@@ -573,6 +580,100 @@ pub(crate) fn new_node(kind: &str, x: f64, y: f64) -> WorkflowNode {
                 ("outputs".to_owned(), json!({"result": {"type": "string"}})),
             ]),
             112.0,
+        ),
+        "rpaz-package" => (
+            "RPAZ 包",
+            BTreeMap::from([
+                ("package_id".to_owned(), json!("")),
+                (
+                    "parameters".to_owned(),
+                    json!({"input": "{{#start.query#}}"}),
+                ),
+            ]),
+            104.0,
+        ),
+        "question-classifier" => (
+            "问题分类器",
+            BTreeMap::from([
+                (
+                    "query_variable_selector".to_owned(),
+                    json!(["start", "query"]),
+                ),
+                (
+                    "classes".to_owned(),
+                    json!([
+                        {"id": "1", "name": "类别 1"},
+                        {"id": "2", "name": "类别 2"}
+                    ]),
+                ),
+            ]),
+            116.0,
+        ),
+        "parameter-extractor" => (
+            "参数提取器",
+            BTreeMap::from([
+                ("query".to_owned(), json!(["start", "query"])),
+                (
+                    "parameters".to_owned(),
+                    json!([
+                        {"name": "result", "type": "string", "description": "需要提取的结果"}
+                    ]),
+                ),
+                (
+                    "instruction".to_owned(),
+                    json!("从输入文本中提取结构化参数。"),
+                ),
+            ]),
+            112.0,
+        ),
+        "variable-aggregator" => (
+            "变量聚合器",
+            BTreeMap::from([
+                ("variables".to_owned(), json!([["start", "query"]])),
+                ("output_type".to_owned(), json!("any")),
+            ]),
+            96.0,
+        ),
+        "list-operator" => (
+            "列表操作",
+            BTreeMap::from([
+                ("variable".to_owned(), json!(["start", "query"])),
+                (
+                    "filter_by".to_owned(),
+                    json!({"enabled": false, "conditions": []}),
+                ),
+                (
+                    "order_by".to_owned(),
+                    json!({"enabled": false, "key": "", "value": "asc"}),
+                ),
+                ("limit".to_owned(), json!({"enabled": true, "size": 10})),
+            ]),
+            108.0,
+        ),
+        "document-extractor" => (
+            "文档提取器",
+            BTreeMap::from([
+                (
+                    "variable_selector".to_owned(),
+                    json!(["start", "file_path"]),
+                ),
+                ("is_array_file".to_owned(), json!(false)),
+            ]),
+            92.0,
+        ),
+        "knowledge-retrieval" => (
+            "知识检索",
+            BTreeMap::from([
+                (
+                    "query_variable_selector".to_owned(),
+                    json!(["start", "query"]),
+                ),
+                ("top_k".to_owned(), json!(5)),
+                ("include_knowledge_bases".to_owned(), json!(true)),
+                ("include_documents".to_owned(), json!(true)),
+                ("knowledge_base_ids".to_owned(), json!([])),
+            ]),
+            104.0,
         ),
         "answer" => (
             "直接回复",

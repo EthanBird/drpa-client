@@ -27,6 +27,7 @@ import remarkGfm from "remark-gfm";
 
 import type { KnowledgeEntry } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
+import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
 
 type ReaderMode = "preview" | "edit" | "split";
 type EntryKind = KnowledgeEntry["kind"];
@@ -37,7 +38,7 @@ interface TreeNode {
 }
 
 interface EntryMenu {
-  entry: KnowledgeEntry;
+  entry: KnowledgeEntry | null;
   x: number;
   y: number;
 }
@@ -47,6 +48,7 @@ type InlineDraft =
   | { mode: "rename"; source: KnowledgeEntry; parent: string; value: string };
 
 export function DocsPage() {
+  const sidebarCollapsed = useSidebarCollapsed("knowledge-library");
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
   const [selectedEntryPath, setSelectedEntryPath] = useState("");
@@ -338,11 +340,22 @@ export function DocsPage() {
         </div>
       </header>
 
-      <div className="knowledge-layout">
-        <aside className="knowledge-sidebar">
+      <div className={`knowledge-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+        {sidebarCollapsed ? <SidebarToggle id="knowledge-library" side="left" label="知识库侧边栏" restore /> : <aside className="knowledge-sidebar collapsible-sidebar">
+          <SidebarToggle id="knowledge-library" side="left" label="知识库侧边栏" />
           <div className="knowledge-search"><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文档名称…" /></div>
           <div className="knowledge-tree-title"><span><BookOpen size={13} /> 本地知识库</span><button type="button" title="刷新目录" onClick={() => void refresh(selectedPath)}><RefreshCw size={12} /></button></div>
-          <div className="knowledge-tree" role="tree" aria-label="知识库目录">
+          <div
+            className="knowledge-tree"
+            role="tree"
+            aria-label="知识库目录"
+            onContextMenu={(event) => {
+              if ((event.target as HTMLElement).closest(".knowledge-tree-row, button, input")) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setMenu({ entry: null, x: event.clientX, y: event.clientY });
+            }}
+          >
             {draft && (
               <div className="knowledge-inline-entry">
                 {draft.mode === "create" && draft.kind === "directory" ? <FolderPlus size={13} /> : <FilePenLine size={13} />}
@@ -358,7 +371,7 @@ export function DocsPage() {
             {entries.length === 0 && <div className="knowledge-tree-empty">知识库为空<br />新建或导入一篇 Markdown</div>}
           </div>
           <footer className="knowledge-sidebar-footer"><span>{entries.filter((entry) => entry.kind === "file").length} 篇文档</span><span>{entries.filter((entry) => entry.kind === "directory").length} 个目录</span></footer>
-        </aside>
+        </aside>}
 
         <section className="knowledge-workspace">
           <div className="knowledge-toolbar">
@@ -398,9 +411,10 @@ export function DocsPage() {
 
       {menu && (
         <div className="context-menu knowledge-context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 210), top: Math.min(menu.y, window.innerHeight - 190) }} onClick={(event) => event.stopPropagation()}>
-          {menu.entry.kind === "directory" && <><button type="button" onClick={() => startCreate("file", menu.entry.path)}><FilePlus2 size={13} /> 新建子文档</button><button type="button" onClick={() => startCreate("directory", menu.entry.path)}><FolderPlus size={13} /> 新建子目录</button><span /></>}
-          <button type="button" onClick={() => startRename(menu.entry)}><Pencil size={13} /> 重命名</button>
-          <button type="button" className="danger" onClick={() => { setPendingDelete(menu.entry); setMenu(null); }}><Trash2 size={13} /> 删除</button>
+          {!menu.entry && <><button type="button" onClick={() => startCreate("file", "")}><FilePlus2 size={13} /> 新建根文档</button><button type="button" onClick={() => startCreate("directory", "")}><FolderPlus size={13} /> 新建根目录</button></>}
+          {menu.entry?.kind === "directory" && <><button type="button" onClick={() => startCreate("file", menu.entry?.path ?? "")}><FilePlus2 size={13} /> 新建子文档</button><button type="button" onClick={() => startCreate("directory", menu.entry?.path ?? "")}><FolderPlus size={13} /> 新建子目录</button><span /></>}
+          {menu.entry && <button type="button" onClick={() => startRename(menu.entry!)}><Pencil size={13} /> 重命名</button>}
+          {menu.entry && <button type="button" className="danger" onClick={() => { setPendingDelete(menu.entry); setMenu(null); }}><Trash2 size={13} /> 删除</button>}
         </div>
       )}
 

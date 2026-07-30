@@ -1,0 +1,1714 @@
+.generic-plugins-page {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+.generic-plugins-header {
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.plugin-workbench-notice {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  margin: 7px 20px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-notice.success {
+  border-color: color-mix(in srgb, var(--success) 24%, var(--border));
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.plugin-workbench-notice.error {
+  border-color: color-mix(in srgb, var(--danger) 24%, var(--border));
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.plugin-workbench-notice span {
+  flex: 1;
+}
+
+.plugin-workbench-notice > button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+}
+
+.plugin-workbench-developer {
+  flex: 0 0 auto;
+  max-height: 260px;
+  overflow: auto;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+
+.plugin-workbench-developer > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 42px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plugin-workbench-developer > header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-strong);
+}
+
+.plugin-workbench-developer > header span {
+  display: grid;
+  gap: 2px;
+}
+
+.plugin-workbench-developer > header strong {
+  color: var(--text-1);
+  font-size: calc(9px * var(--font-scale));
+}
+
+.plugin-workbench-developer > header small {
+  color: var(--text-3);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.plugin-workbench-developer > header em {
+  color: var(--accent-strong);
+  font: normal calc(7px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-project-create {
+  display: grid;
+  grid-template-columns: minmax(130px, .8fr) minmax(170px, 1fr) 150px auto;
+  gap: 7px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plugin-workbench-project-create input,
+.plugin-workbench-project-create select,
+.plugin-workbench-event-toolbar input,
+.plugin-workbench-event-toolbar select {
+  min-width: 0;
+  height: 31px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: 0;
+  background: var(--surface-0);
+  color: var(--text-1);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-project-create input:focus,
+.plugin-workbench-project-create select:focus,
+.plugin-workbench-event-toolbar input:focus,
+.plugin-workbench-event-toolbar select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.plugin-workbench-project-list {
+  display: grid;
+  gap: 5px;
+  padding: 7px 14px 10px;
+}
+
+.plugin-workbench-project-list article {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-project-list article > span {
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  border-radius: 6px;
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.plugin-workbench-project-list article > span.invalid {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.plugin-workbench-project-list article > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.plugin-workbench-project-list strong {
+  color: var(--text-1);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-project-list code,
+.plugin-workbench-project-list small {
+  overflow: hidden;
+  color: var(--text-3);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-project-list > p {
+  margin: 4px 0;
+  color: var(--text-3);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--border-subtle);
+}
+
+.plugin-workbench-layout.catalog-collapsed {
+  grid-template-columns: 30px minmax(0, 1fr);
+}
+
+.plugin-workbench-catalog {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding: 34px 7px 7px !important;
+  background: var(--surface-1);
+}
+
+.plugin-workbench-catalog > header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 5px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-2);
+}
+
+.plugin-workbench-catalog > header svg {
+  color: var(--accent-strong);
+}
+
+.plugin-workbench-catalog > header strong {
+  font-size: calc(9px * var(--font-scale));
+}
+
+.plugin-workbench-catalog > header span {
+  margin-left: auto;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-catalog-list {
+  min-height: 0;
+  flex: 1;
+  padding: 6px 0;
+  overflow: auto;
+}
+
+.plugin-workbench-catalog-list > button {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 9px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.plugin-workbench-catalog-list > button:hover {
+  background: var(--surface-2);
+}
+
+.plugin-workbench-catalog-list > button.active {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--accent-soft);
+}
+
+.plugin-workbench-catalog-list > button > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.plugin-workbench-catalog-list strong,
+.plugin-workbench-catalog-list small,
+.plugin-workbench-catalog-list > button > div > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plugin-workbench-catalog-list strong {
+  color: var(--text-1);
+  font-size: calc(9px * var(--font-scale));
+  white-space: nowrap;
+}
+
+.plugin-workbench-catalog-list small {
+  display: -webkit-box;
+  color: var(--text-3);
+  font-size: calc(7px * var(--font-scale));
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.plugin-workbench-catalog-list > button > div > span {
+  color: var(--accent-strong);
+  font-size: calc(6px * var(--font-scale));
+  white-space: nowrap;
+}
+
+.plugin-workbench-catalog-list > button > em {
+  color: var(--text-3);
+  font: normal calc(6px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-status-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--text-3);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-3) 12%, transparent);
+}
+
+.plugin-workbench-status-dot.running {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 15%, transparent);
+}
+
+.plugin-workbench-status-dot.stopped {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+.plugin-workbench-status-dot.error {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.plugin-workbench-empty {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 7px;
+  min-height: 180px;
+  padding: 20px 10px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.plugin-workbench-empty strong {
+  color: var(--text-2);
+  font-size: calc(9px * var(--font-scale));
+}
+
+.plugin-workbench-empty span {
+  font-size: calc(7px * var(--font-scale));
+  line-height: 1.5;
+}
+
+.plugin-workbench-main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-hero {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 98px;
+  padding: 13px 17px;
+  border-bottom: 1px solid var(--border-subtle);
+  background:
+    radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--accent-soft) 85%, transparent), transparent 30%),
+    var(--surface-1);
+}
+
+.plugin-workbench-logo {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 45px;
+  height: 45px;
+  border-radius: 11px;
+  background: linear-gradient(135deg, var(--accent-soft), color-mix(in srgb, var(--accent) 20%, var(--surface-2)));
+  color: var(--accent-strong);
+}
+
+.plugin-workbench-identity {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.plugin-workbench-identity > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugin-workbench-identity h2 {
+  margin: 0;
+  color: var(--text-1);
+  font-size: calc(15px * var(--font-scale));
+}
+
+.plugin-workbench-identity > p {
+  overflow: hidden;
+  max-width: 720px;
+  margin: 0;
+  color: var(--text-3);
+  font-size: calc(8px * var(--font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-identity > code {
+  color: var(--text-3);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-status {
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: calc(6px * var(--font-scale));
+}
+
+.plugin-workbench-status.running {
+  border-color: color-mix(in srgb, var(--success) 25%, var(--border));
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.plugin-workbench-status.stopped {
+  border-color: color-mix(in srgb, var(--warning) 25%, var(--border));
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.plugin-workbench-status.error {
+  border-color: color-mix(in srgb, var(--danger) 25%, var(--border));
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.plugin-workbench-capability-badges {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 4px !important;
+}
+
+.plugin-workbench-capability-badges > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: calc(6px * var(--font-scale));
+}
+
+.plugin-workbench-runtime-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.plugin-workbench-runtime-error {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 7px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--border));
+  border-radius: 7px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  min-height: 39px;
+  margin: 0;
+  padding: 5px 13px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+
+.plugin-workbench-tabs button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  height: 33px;
+  padding: 0 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-tabs button:hover {
+  color: var(--text-1);
+}
+
+.plugin-workbench-tabs button.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.plugin-workbench-content {
+  flex: 1;
+  min-height: 0;
+  padding: 13px 15px;
+  overflow: auto;
+}
+
+.plugin-workbench-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr);
+  gap: 10px;
+}
+
+.plugin-workbench-overview > section:last-child {
+  grid-column: 1 / -1;
+}
+
+.plugin-workbench-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+
+.plugin-workbench-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plugin-workbench-panel-header > span {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.plugin-workbench-panel-header > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.plugin-workbench-panel-header h3 {
+  margin: 0;
+  color: var(--text-1);
+  font-size: calc(9px * var(--font-scale));
+}
+
+.plugin-workbench-panel-header p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-3);
+  font-size: calc(7px * var(--font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-panel-header > :last-child:not(div):not(span) {
+  margin-left: auto;
+}
+
+.plugin-workbench-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 10px;
+}
+
+.plugin-workbench-capability-grid > button {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 64px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.plugin-workbench-capability-grid > button:hover {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: var(--accent-soft);
+}
+
+.plugin-workbench-capability-grid > button > span {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--surface-3);
+  color: var(--accent-strong);
+}
+
+.plugin-workbench-capability-grid > button > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.plugin-workbench-capability-grid strong {
+  color: var(--text-1);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-capability-grid small,
+.plugin-workbench-capability-grid code {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: calc(6px * var(--font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-capability-grid code {
+  font-family: var(--font-mono);
+}
+
+.plugin-workbench-health-summary,
+.plugin-workbench-service-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-health-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+
+.plugin-workbench-health-icon.healthy,
+.plugin-workbench-health-icon.running {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.plugin-workbench-health-summary > div,
+.plugin-workbench-service-status > div {
+  display: grid;
+  gap: 3px;
+}
+
+.plugin-workbench-health-summary strong,
+.plugin-workbench-service-status strong {
+  color: var(--text-1);
+  font-size: calc(9px * var(--font-scale));
+}
+
+.plugin-workbench-health-summary small,
+.plugin-workbench-service-status small {
+  color: var(--text-3);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.plugin-workbench-manifest-meta,
+.plugin-workbench-response-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+}
+
+.plugin-workbench-manifest-meta > div,
+.plugin-workbench-response-meta > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.plugin-workbench-manifest-meta > div.wide {
+  grid-column: span 2;
+}
+
+.plugin-workbench-manifest-meta dt,
+.plugin-workbench-response-meta dt {
+  color: var(--text-3);
+  font-size: calc(6px * var(--font-scale));
+}
+
+.plugin-workbench-manifest-meta dd,
+.plugin-workbench-response-meta dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-2);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-panel-empty {
+  display: grid;
+  grid-column: 1 / -1;
+  justify-items: center;
+  align-content: center;
+  gap: 7px;
+  min-height: 145px;
+  padding: 18px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.plugin-workbench-panel-empty.compact {
+  min-height: 75px;
+}
+
+.plugin-workbench-panel-empty p {
+  margin: 0;
+  font-size: calc(8px * var(--font-scale));
+  line-height: 1.5;
+}
+
+.plugin-workbench-panel-empty small {
+  max-width: 520px;
+  font: calc(6px * var(--font-scale))/1.5 var(--font-mono);
+}
+
+.plugin-workbench-config-grid,
+.plugin-workbench-panel-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 11px;
+}
+
+.plugin-workbench-config-field,
+.plugin-workbench-debugger label,
+.plugin-workbench-response label,
+.plugin-workbench-tool-runner label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--text-2);
+  font-size: calc(8px * var(--font-scale));
+  font-weight: 620;
+}
+
+.plugin-workbench-config-field.wide {
+  grid-column: 1 / -1;
+}
+
+.plugin-workbench-config-field > span em {
+  margin-left: 5px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: calc(6px * var(--font-scale));
+  font-style: normal;
+}
+
+.plugin-workbench-config-field input,
+.plugin-workbench-config-field select,
+.plugin-workbench-config-field textarea,
+.plugin-workbench-debugger input,
+.plugin-workbench-debugger select,
+.plugin-workbench-debugger textarea,
+.plugin-workbench-tool-runner textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: 0;
+  background: var(--surface-0);
+  color: var(--text-1);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-config-field input,
+.plugin-workbench-config-field select,
+.plugin-workbench-debugger input,
+.plugin-workbench-debugger select {
+  height: 33px;
+  padding: 0 8px;
+}
+
+.plugin-workbench-config-field textarea,
+.plugin-workbench-debugger textarea,
+.plugin-workbench-tool-runner textarea {
+  padding: 8px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.plugin-workbench-config-field textarea.json,
+.plugin-workbench-debugger textarea.json,
+.plugin-workbench-tool-runner textarea.json {
+  font-family: var(--font-mono);
+}
+
+.plugin-workbench-config-field input:focus,
+.plugin-workbench-config-field select:focus,
+.plugin-workbench-config-field textarea:focus,
+.plugin-workbench-debugger input:focus,
+.plugin-workbench-debugger select:focus,
+.plugin-workbench-debugger textarea:focus,
+.plugin-workbench-tool-runner textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.plugin-workbench-config-field > small,
+.plugin-workbench-debugger label > small {
+  min-height: 1em;
+  color: var(--text-3);
+  font-size: calc(6px * var(--font-scale));
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.plugin-workbench-switch-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 61px;
+  padding: 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-switch-field > span {
+  display: grid;
+  gap: 3px;
+}
+
+.plugin-workbench-switch-field strong {
+  color: var(--text-2);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-switch-field small {
+  color: var(--text-3);
+  font-size: calc(6px * var(--font-scale));
+}
+
+.plugin-workbench-switch-field em {
+  margin-left: 5px;
+  color: var(--danger);
+  font-size: calc(6px * var(--font-scale));
+  font-style: normal;
+}
+
+.plugin-workbench-service-grid,
+.plugin-workbench-debugger,
+.plugin-workbench-tools {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr);
+  gap: 10px;
+  min-height: 100%;
+}
+
+.plugin-workbench-service-grid > section,
+.plugin-workbench-debugger > section,
+.plugin-workbench-debugger > form,
+.plugin-workbench-tools > section {
+  align-self: start;
+}
+
+.plugin-workbench-service-status .plugin-workbench-status-dot {
+  margin: 0 4px;
+}
+
+.plugin-workbench-endpoint {
+  display: grid;
+  gap: 5px;
+  padding: 0 10px 10px;
+  color: var(--text-2);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.plugin-workbench-endpoint > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-endpoint code {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-2);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-endpoint button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.plugin-workbench-service-grid > section:first-child > .button {
+  margin: 0 10px 11px;
+}
+
+.plugin-workbench-service-list,
+.plugin-workbench-provider-list {
+  display: grid;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.plugin-workbench-service-list article,
+.plugin-workbench-provider-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-service-list article {
+  grid-template-columns: minmax(110px, .7fr) minmax(130px, 1fr) 25px;
+}
+
+.plugin-workbench-service-list article > div,
+.plugin-workbench-provider-list article > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.plugin-workbench-service-list strong,
+.plugin-workbench-provider-list strong {
+  color: var(--text-1);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-service-list small,
+.plugin-workbench-provider-list small,
+.plugin-workbench-service-list code,
+.plugin-workbench-provider-list code {
+  overflow: hidden;
+  color: var(--text-3);
+  font: calc(6px * var(--font-scale)) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-service-list article > button:not(.button) {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.plugin-workbench-health-panel {
+  grid-column: 1 / -1;
+}
+
+.plugin-workbench-health-detail {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-health-detail > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.plugin-workbench-health-detail.unhealthy > span {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.plugin-workbench-health-detail > div {
+  display: grid;
+  gap: 3px;
+}
+
+.plugin-workbench-health-detail strong {
+  color: var(--text-1);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-health-detail small {
+  color: var(--text-3);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.plugin-workbench-health-detail pre {
+  grid-column: 1 / -1;
+  max-height: 220px;
+  margin: 2px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--log-canvas);
+  color: var(--text-2);
+  font: calc(7px * var(--font-scale))/1.5 var(--font-mono);
+}
+
+.plugin-workbench-tool-list {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+
+.plugin-workbench-tool-list > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-2);
+}
+
+.plugin-workbench-tool-list > header strong {
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-tool-list > header span {
+  margin-left: auto;
+  color: var(--text-3);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-tool-list > button {
+  display: grid;
+  width: calc(100% - 12px);
+  gap: 3px;
+  margin: 6px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.plugin-workbench-tool-list > button:hover {
+  background: var(--surface-2);
+}
+
+.plugin-workbench-tool-list > button.active {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: var(--accent-soft);
+}
+
+.plugin-workbench-tool-list strong {
+  color: var(--text-1);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-tool-list code,
+.plugin-workbench-tool-list small {
+  color: var(--text-3);
+  font-size: calc(6px * var(--font-scale));
+}
+
+.plugin-workbench-tool-list code {
+  font-family: var(--font-mono);
+}
+
+.plugin-workbench-tool-runner {
+  padding-bottom: 10px;
+}
+
+.plugin-workbench-tool-runner > label {
+  margin: 10px 10px 0;
+}
+
+.plugin-workbench-tool-runner label pre,
+.plugin-workbench-response label pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--log-canvas);
+  color: var(--text-2);
+  font: calc(7px * var(--font-scale))/1.5 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.plugin-workbench-tool-runner > .button {
+  margin: 10px;
+}
+
+.plugin-workbench-tool-result {
+  display: grid;
+  gap: 6px;
+  margin: 0 10px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border));
+  border-radius: 7px;
+  background: var(--success-soft);
+}
+
+.plugin-workbench-tool-result.error {
+  border-color: color-mix(in srgb, var(--danger) 24%, var(--border));
+  background: var(--danger-soft);
+}
+
+.plugin-workbench-tool-result strong {
+  color: var(--text-1);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.plugin-workbench-tool-result pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  color: var(--text-2);
+  font: calc(7px * var(--font-scale))/1.5 var(--font-mono);
+}
+
+.plugin-workbench-debugger > form,
+.plugin-workbench-response {
+  padding-bottom: 10px;
+}
+
+.plugin-workbench-debugger > form > label,
+.plugin-workbench-debugger > form > .button,
+.plugin-workbench-response > label {
+  margin: 10px 10px 0;
+}
+
+.plugin-workbench-debug-routes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 10px 10px 0;
+}
+
+.plugin-workbench-debug-routes button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  min-height: 54px;
+  padding: 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.plugin-workbench-debug-routes button:hover,
+.plugin-workbench-debug-routes button.active {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: var(--accent-soft);
+}
+
+.plugin-workbench-debug-routes button > span {
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--accent-strong);
+  font: 700 calc(6px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-debug-routes button > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.plugin-workbench-debug-routes strong,
+.plugin-workbench-debug-routes code,
+.plugin-workbench-debug-routes small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-debug-routes strong {
+  color: var(--text-1);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.plugin-workbench-debug-routes code,
+.plugin-workbench-debug-routes small {
+  color: var(--text-3);
+  font: calc(6px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-debug-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 10px 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-debug-endpoint > span {
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font: 700 calc(6px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-debug-endpoint code {
+  overflow: hidden;
+  color: var(--text-2);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-debug-credential {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 7px 10px 0;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.plugin-workbench-debug-credential code {
+  font-family: var(--font-mono);
+}
+
+.plugin-workbench-response-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 10px 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-response-status.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.plugin-workbench-response-meta {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-bottom: 0;
+}
+
+.plugin-workbench-events,
+.plugin-workbench-logs {
+  min-height: 100%;
+}
+
+.plugin-workbench-event-toolbar {
+  display: grid;
+  grid-template-columns: 150px minmax(160px, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plugin-workbench-event-toolbar > span {
+  color: var(--text-3);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-event-list {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 280px;
+  padding: 10px;
+}
+
+.plugin-workbench-event-list article {
+  padding: 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-event-list article > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.plugin-workbench-event-list article > header > span {
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font: calc(6px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-event-list article > header strong {
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: calc(8px * var(--font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-workbench-event-list article > header time {
+  color: var(--text-3);
+  font: calc(6px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-event-list article > code {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-3);
+  font: calc(6px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-event-list article > pre {
+  max-height: 180px;
+  margin: 6px 0 0;
+  padding: 7px;
+  overflow: auto;
+  border-radius: 5px;
+  background: var(--log-canvas);
+  color: var(--text-2);
+  font: calc(7px * var(--font-scale))/1.5 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.plugin-workbench-log-filter {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-0);
+}
+
+.plugin-workbench-log-filter button {
+  height: 23px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font: calc(6px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-log-filter button.active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.plugin-workbench-log-view {
+  min-height: 320px;
+  max-height: calc(100vh - 335px);
+  padding: 7px;
+  overflow: auto;
+  background: var(--log-canvas);
+}
+
+.plugin-workbench-log-view > div {
+  display: grid;
+  grid-template-columns: 65px 42px minmax(0, 1fr);
+  gap: 7px;
+  min-height: 25px;
+  padding: 4px 5px;
+  border-radius: 4px;
+  color: var(--text-3);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+}
+
+.plugin-workbench-log-view > div:hover {
+  background: var(--log-hover);
+}
+
+.plugin-workbench-log-view > div.stderr > span {
+  color: var(--danger);
+}
+
+.plugin-workbench-log-view pre {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font: inherit;
+  white-space: pre-wrap;
+}
+
+.plugin-workbench-custom-frame {
+  display: flex;
+  min-height: calc(100vh - 310px);
+  flex-direction: column;
+}
+
+.plugin-workbench-custom-frame iframe {
+  width: 100%;
+  min-height: 440px;
+  flex: 1;
+  border: 0;
+  background: white;
+}
+
+.plugin-workbench-panel-document,
+.plugin-workbench-panel-result {
+  max-height: calc(100vh - 340px);
+  margin: 10px;
+  padding: 11px;
+  overflow: auto;
+  border-radius: 7px;
+  background: var(--log-canvas);
+  color: var(--text-2);
+  font: calc(8px * var(--font-scale))/1.6 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.plugin-workbench-custom-form > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.plugin-workbench-danger {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+
+.plugin-workbench-danger > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+}
+
+.plugin-workbench-danger > div > span {
+  display: grid;
+  gap: 2px;
+}
+
+.plugin-workbench-danger strong {
+  color: var(--text-2);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.plugin-workbench-danger small {
+  color: var(--text-3);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.plugin-workbench-danger > button {
+  margin-left: auto;
+}
+
+.plugin-workbench-welcome {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  padding: 40px;
+  background: var(--surface-0);
+  color: var(--text-3);
+  text-align: center;
+}
+
+.plugin-workbench-welcome h2 {
+  margin: 4px 0 0;
+  color: var(--text-1);
+  font-size: calc(16px * var(--font-scale));
+}
+
+.plugin-workbench-welcome p {
+  max-width: 520px;
+  margin: 0 0 4px;
+  font-size: calc(9px * var(--font-scale));
+  line-height: 1.55;
+}
+
+.plugin-workbench-modal-backdrop {
+  position: fixed;
+  z-index: 270;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  padding-top: 15vh;
+  background: color-mix(in srgb, #111827 54%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.plugin-workbench-modal {
+  width: min(440px, calc(100vw - 36px));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-1);
+  box-shadow: var(--shadow-float);
+}
+
+.plugin-workbench-modal > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plugin-workbench-modal h2 {
+  margin: 0;
+  color: var(--text-1);
+  font-size: calc(13px * var(--font-scale));
+}
+
+.plugin-workbench-modal > header button {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.plugin-workbench-confirm {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 18px;
+  color: var(--danger);
+  text-align: center;
+}
+
+.plugin-workbench-confirm p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: calc(9px * var(--font-scale));
+  line-height: 1.55;
+}
+
+.plugin-workbench-confirm footer {
+  display: flex;
+  gap: 7px;
+  margin-top: 4px;
+}
+
+:root[data-hide-page-headers="true"] .main-content .generic-plugins-page > .generic-plugins-header {
+  min-height: 0;
+  justify-content: flex-end;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+:root[data-hide-page-headers="true"] .main-content .generic-plugins-page > .generic-plugins-header > :first-child {
+  display: none;
+}
+
+:root[data-ui-density="compact"] .plugin-workbench-hero {
+  min-height: 78px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+:root[data-ui-density="compact"] .plugin-workbench-tabs {
+  min-height: 34px;
+}
+
+:root[data-ui-density="compact"] .plugin-workbench-tabs button {
+  height: 28px;
+}
+
+@media (max-width: 1120px) {
+  .plugin-workbench-layout {
+    grid-template-columns: 205px minmax(0, 1fr);
+  }
+
+  .plugin-workbench-layout.catalog-collapsed {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .plugin-workbench-overview,
+  .plugin-workbench-service-grid,
+  .plugin-workbench-debugger,
+  .plugin-workbench-tools {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugin-workbench-overview > section:last-child {
+    grid-column: auto;
+  }
+
+  .plugin-workbench-project-create {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .plugin-workbench-layout,
+  .plugin-workbench-layout.catalog-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugin-workbench-catalog,
+  .plugin-workbench-layout > .sidebar-restore-button.left {
+    display: none;
+  }
+
+  .plugin-workbench-runtime-actions {
+    flex-direction: column;
+  }
+
+  .plugin-workbench-capability-grid,
+  .plugin-workbench-config-grid,
+  .plugin-workbench-panel-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugin-workbench-manifest-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-workbench-status-dot {
+    box-shadow: none;
+  }
+}

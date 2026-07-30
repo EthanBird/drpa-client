@@ -16,6 +16,7 @@ on:
       - "apps/desktop/**"
       - "crates/**"
       - "offline/**"
+      - "plugins/**"
       - "runtime/python/**"
       - "tools/linux/**"
       - "tools/offline/**"
@@ -137,7 +138,7 @@ jobs:
             UV_NO_MANAGED_PYTHON=1 \
             UV_PYTHON_DOWNLOADS=never \
             "$runtime_root/$runtime_python" "$runtime_root/bootstrap_runtime.py" --environment "$smoke_environment"
-          "$smoke_environment/bin/python" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat; print('DRPA_LINUX_APPIMAGE_RUNTIME_OK')"
+          "$smoke_environment/bin/python" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat, docx, openpyxl, pptx, pypdf, reportlab; from drpa_runner import document_worker; assert document_worker.PROTOCOL_VERSION == 1; print('DRPA_LINUX_APPIMAGE_RUNTIME_OK')"
       - name: Build self-contained Debian package from verified AppDir
         shell: bash
         run: |

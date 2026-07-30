@@ -10,6 +10,7 @@ export type NavigationId =
   | "localDify"
   | "plugins"
   | "docs"
+  | "knowledgeBase"
   | "runtimes"
   | "secrets"
   | "settings";
@@ -157,6 +158,13 @@ export type LocalDifyWorkflowNodeKind =
   | "if-else"
   | "http-request"
   | "code"
+  | "rpaz-package"
+  | "question-classifier"
+  | "parameter-extractor"
+  | "variable-aggregator"
+  | "list-operator"
+  | "document-extractor"
+  | "knowledge-retrieval"
   | "answer"
   | "end"
   | string;
@@ -318,6 +326,31 @@ export interface RuntimeStatus {
   message: string;
 }
 
+export interface SystemResourceMetric {
+  usedBytes: number;
+  totalBytes: number;
+  usagePercent: number;
+}
+
+export interface SystemCpuMetric {
+  usagePercent: number;
+  logicalCores: number;
+}
+
+export interface SystemDiskVolume extends SystemResourceMetric {
+  name: string;
+  mountPoint: string;
+}
+
+export interface SystemMetricsSnapshot {
+  sampledAt: number;
+  cpu: SystemCpuMetric;
+  memory: SystemResourceMetric;
+  disk: SystemResourceMetric & {
+    volumes: SystemDiskVolume[];
+  };
+}
+
 export interface PlatformCapabilities {
   os: "windows" | "linux" | "macos";
   displayName: string;
@@ -341,6 +374,14 @@ export interface WorkspaceInfo {
   createdAt: number;
 }
 
+export interface UserDataTransferResult {
+  path: string;
+  fileCount: number;
+  totalBytes: number;
+  workspaceName: string;
+  restartRequired: boolean;
+}
+
 export interface KnowledgeEntry {
   path: string;
   name: string;
@@ -354,6 +395,161 @@ export interface AgentMessage {
   content: string;
 }
 
+export interface AgentToolPolicy {
+  enabled: boolean;
+  databaseRead: boolean;
+  databaseConnections: boolean;
+  arbitraryFileRead: boolean;
+  knowledgeBaseRead: boolean;
+  documentRead: boolean;
+  documentWrite: boolean;
+  documentConvert: boolean;
+  projectWrite: boolean;
+  python: boolean;
+  workspaceWrite: boolean;
+  extensions: boolean;
+}
+
+export interface AgentDocumentAttachment {
+  id: string;
+  name: string;
+  format: "pdf" | "docx" | "xlsx" | "pptx" | string;
+  sizeBytes: number;
+  importedAt: string;
+}
+
+export interface AgentDocumentArtifact {
+  id: string;
+  name: string;
+  format: "pdf" | "docx" | "xlsx" | "pptx" | string;
+  sizeBytes: number;
+  createdAt: string;
+  sourceId?: string;
+}
+
+export interface AgentDocumentExport {
+  artifactId: string;
+  path: string;
+  sizeBytes: number;
+}
+
+export interface KnowledgeBaseSummary {
+  id: string;
+  name: string;
+  description: string;
+  sourceCount: number;
+  chunkCount: number;
+  status: string;
+  updatedAt: number;
+}
+
+export interface KnowledgeBaseSource {
+  id: string;
+  knowledgeBaseId: string;
+  name: string;
+  kind: string;
+  status: string;
+  chunkCount: number;
+  sizeBytes: number;
+  uri: string;
+  lastError: string;
+  updatedAt: number;
+}
+
+export interface KnowledgeBaseSearchResult {
+  knowledgeBaseId: string;
+  knowledgeBaseName: string;
+  sourceId: string;
+  sourceName: string;
+  chunkId: string;
+  content: string;
+  citation: string;
+  score: number;
+  vectorScore: number;
+  keywordScore: number;
+}
+
+export type AutomationScheduleKind = "cron" | "daily" | "weekly" | "interval";
+export type AutomationConcurrencyPolicy = "skip" | "queue" | "parallel";
+export type AutomationRunStatus = "queued" | "running" | "succeeded" | "failed" | "skipped";
+
+export interface AutomationSchedule {
+  type: AutomationScheduleKind;
+  cron: string;
+  time: string;
+  daysOfWeek: number[];
+  intervalMinutes: number;
+}
+
+export interface AutomationAction {
+  type: "rpaz-package" | string;
+  packageId: string;
+  entrypoint: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface AutomationRetryPolicy {
+  maxAttempts: number;
+  delaySeconds: number;
+  backoffMultiplier: number;
+}
+
+export interface AutomationDeliveryTarget {
+  id: string;
+  type: string;
+  name: string;
+  enabled: boolean;
+  configuration: Record<string, unknown>;
+}
+
+export interface AutomationPlanInput {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  schedule: AutomationSchedule;
+  action: AutomationAction;
+  concurrencyPolicy: AutomationConcurrencyPolicy;
+  retryPolicy: AutomationRetryPolicy;
+  timeoutSeconds: number;
+  deliveryTargets: AutomationDeliveryTarget[];
+}
+
+export interface AutomationPlan extends AutomationPlanInput {
+  createdAt: number;
+  updatedAt: number;
+  lastRunAt?: number;
+  nextRunAt?: number;
+  lastScheduledMinute?: number;
+}
+
+export interface AutomationDeliveryResult {
+  targetId: string;
+  targetName: string;
+  status: string;
+  error: string;
+}
+
+export interface AutomationRun {
+  id: string;
+  planId: string;
+  planName: string;
+  trigger: "manual" | "scheduled";
+  status: AutomationRunStatus;
+  queuedAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  attempt: number;
+  result?: unknown;
+  error: string;
+  deliveryResults: AutomationDeliveryResult[];
+}
+
+export interface AgentProviderRef {
+  pluginId: string;
+  providerId: string;
+}
+
 export interface AgentTurnRequest {
   requestId: string;
   sessionId?: string;
@@ -362,12 +558,16 @@ export interface AgentTurnRequest {
   mode?: "rpaz" | "sql";
   databaseDialect?: "sqlite" | "postgresql" | "mysql";
   apiKey: string;
+  providerRef?: AgentProviderRef | null;
   projectId: string;
   stream: boolean;
   contextWindow: number;
   maxOutputTokens: number;
   maxRounds: number;
   temperature: number;
+  pythonTimeoutSeconds: number;
+  selectedSkillIds: string[];
+  toolPolicy: AgentToolPolicy;
   messages: AgentMessage[];
 }
 
@@ -398,6 +598,27 @@ export interface AgentConversationSession {
   createdAt: number;
   updatedAt: number;
   messages: AgentConversationMessage[];
+  selectedSkillIds: string[];
+  messageCount?: number;
+}
+
+export interface AgentConversationSessionSummary {
+  id: string;
+  title: string;
+  projectId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  selectedSkillIds: string[];
+}
+
+export interface AgentConversationProject {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: number;
+  updatedAt: number;
+  sessionCount: number;
 }
 
 export interface AgentTurnResult {
@@ -491,6 +712,56 @@ export interface RunSummary {
   exitCode?: number;
 }
 
+export type PluginJsonPrimitive = string | number | boolean | null;
+export type PluginJsonValue =
+  | PluginJsonPrimitive
+  | PluginJsonValue[]
+  | { [key: string]: PluginJsonValue };
+
+export interface PluginServiceSummary {
+  id: string;
+  title: string;
+  primary: boolean;
+  transport: string;
+  status: "disabled" | "stopped" | "running" | "error";
+  endpoint: string;
+  healthcheck: string;
+}
+
+export interface PluginProviderSummary {
+  id: string;
+  title: string;
+  protocol: string;
+  serviceId: string;
+  endpoint: string;
+  modelConfigKey: string;
+  apiKeyConfigKey: string;
+}
+
+export interface PluginDebuggerEndpoint {
+  id: string;
+  title: string;
+  kind: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  endpoint: string;
+  bearerConfigKey: string;
+  requestDefaults: PluginJsonValue;
+  timeoutSeconds: number;
+}
+
+export interface PluginDebuggerPanel {
+  id: string;
+  title: string;
+  kind: string;
+  endpoint: string;
+  config: PluginJsonValue;
+}
+
+export interface PluginDebuggerManifest {
+  endpoints: PluginDebuggerEndpoint[];
+  panels: PluginDebuggerPanel[];
+}
+
 export interface PluginSummary {
   id: string;
   name: string;
@@ -502,7 +773,13 @@ export interface PluginSummary {
   status: "disabled" | "stopped" | "running" | "error";
   endpoint: string;
   toolCount: number;
+  serviceCount: number;
+  toolProviderCount: number;
+  services: PluginServiceSummary[];
+  providers: PluginProviderSummary[];
+  debugger: PluginDebuggerManifest;
   config: Record<string, unknown>;
+  configuredSecrets: Record<string, boolean>;
   configSchema: {
     type?: string;
     properties?: Record<string, {
@@ -513,6 +790,9 @@ export interface PluginSummary {
       secret?: boolean;
       minimum?: number;
       maximum?: number;
+      minLength?: number;
+      maxLength?: number;
+      pattern?: string;
     }>;
     required?: string[];
   };
@@ -524,6 +804,30 @@ export interface PluginLogLine {
   timestamp: number;
   stream: "stdout" | "stderr";
   message: string;
+  serviceId?: string;
+  event?: PluginJsonValue;
+}
+
+export interface PluginDebuggerResponse {
+  endpointId: string;
+  status: number;
+  durationMs: number;
+  contentType: string;
+  body: PluginJsonValue;
+  truncated: boolean;
+}
+
+export interface PluginToolDescriptor {
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: PluginJsonValue;
+}
+
+export interface PluginToolWorkbenchResult {
+  ok: boolean;
+  output: PluginJsonValue;
+  durationMs: number;
 }
 
 export interface PluginProjectSummary {

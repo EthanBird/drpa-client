@@ -23,6 +23,8 @@ class ExecutionRequest:
     callable: str
     parameters: dict[str, Any]
     database_path: Path | None = None
+    package_catalog: dict[str, dict[str, Any]] | None = None
+    result_path: Path | None = None
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "ExecutionRequest":
@@ -36,6 +38,8 @@ class ExecutionRequest:
             callable=str(raw.get("callable") or "main"),
             parameters=dict(raw.get("parameters") or {}),
             database_path=Path(raw["database_path"]) if raw.get("database_path") else None,
+            package_catalog=dict(raw.get("package_catalog") or {}),
+            result_path=Path(raw["result_path"]) if raw.get("result_path") else None,
         )
 
 
@@ -60,6 +64,8 @@ def execute_request(request: ExecutionRequest, events: EventWriter) -> int:
             else (output_dir / ".drpa-runtime.sqlite3").resolve()
         ),
         events=events,
+        package_catalog=request.package_catalog or {},
+        invocation_stack=[request.package_id],
     )
 
     events.emit("ready", protocol=1)
@@ -68,7 +74,15 @@ def execute_request(request: ExecutionRequest, events: EventWriter) -> int:
         entry = getattr(module, request.callable, None)
         if not callable(entry):
             raise TypeError(f"package entrypoint must define callable {request.callable}(ctx)")
-        entry(context)
+        result = entry(context)
+        if request.result_path is not None:
+            import json
+
+            request.result_path.parent.mkdir(parents=True, exist_ok=True)
+            request.result_path.write_text(
+                json.dumps(result, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
     except KeyboardInterrupt:
         events.emit("warning", message="run cancelled")
         events.emit("completed", exit_code=130)

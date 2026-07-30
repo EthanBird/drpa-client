@@ -18,10 +18,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../app/store";
 import type { RunDetail } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
+import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
 
 type DetailTab = "overview" | "logs" | "artifacts" | "parameters";
 
 export function RunsPage() {
+  const inspectorCollapsed = useSidebarCollapsed("runs-inspector");
   const snapshot = useAppStore((state) => state.snapshot);
   const [query, setQuery] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
@@ -61,11 +63,11 @@ export function RunsPage() {
 
   return (
     <div className="page runs-page">
-      <header className="page-header"><div><div className="eyebrow">执行与审计</div><h1>运行记录</h1><p>查看活动任务，并审计每一次脚本包执行。</p></div></header>
+      <header className="page-header"><div><div className="eyebrow">执行与审计</div><h1>运行记录</h1><p>查看活动任务，并审计每一次 RPAZ 包执行。</p></div></header>
       <div className="runs-summary-strip"><span><Activity size={15} /><strong>{snapshot.stats.activeRuns}</strong> 活动</span><span><CircleCheck size={15} /><strong>{completed}</strong> 已完成</span><span><Square size={13} /><strong>{cancelled}</strong> 已停止</span></div>
-      <div className="runs-master-detail">
+      <div className={`runs-master-detail${inspectorCollapsed ? " inspector-collapsed" : ""}`}>
         <section className="panel runs-detail-panel">
-          <div className="library-toolbar"><div className="large-search"><Search size={15} /><input aria-label="搜索运行记录" placeholder="按运行 ID、脚本包或任务配置搜索" value={query} onChange={(event) => setQuery(event.target.value)} /></div></div>
+          <div className="library-toolbar"><div className="large-search"><Search size={15} /><input aria-label="搜索运行记录" placeholder="按运行 ID、RPAZ 包或任务配置搜索" value={query} onChange={(event) => setQuery(event.target.value)} /></div></div>
           <div className="full-runs-table">
             <div className="full-runs-header"><span>任务</span><span>状态</span><span>开始时间</span><span>耗时</span><span>进度</span><span /></div>
             {runs.map((run) => (
@@ -89,7 +91,8 @@ export function RunsPage() {
           {runs.length === 0 && <div className="empty-state"><Activity size={26} /><h2>暂无运行记录</h2><p>从运行工作台提交任务后会显示在这里。</p></div>}
         </section>
 
-        <aside className="panel run-inspector" aria-live="polite">
+        {inspectorCollapsed ? <SidebarToggle id="runs-inspector" side="right" label="运行详情侧边栏" restore /> : <aside className="panel run-inspector collapsible-sidebar" aria-live="polite">
+          <SidebarToggle id="runs-inspector" side="right" label="运行详情侧边栏" />
           {loadingDetail && !detail && <div className="run-inspector-loading"><LoaderCircle className="spin" size={20} /> 正在读取运行详情</div>}
           {detailError && <div className="run-inspector-error"><AlertTriangle size={18} /><span><strong>读取详情失败</strong>{detailError}</span></div>}
           {!selectedRunId && <div className="empty-state"><Activity size={26} /><h2>选择一条运行记录</h2><p>这里会展示完整事件、参数和产物。</p></div>}
@@ -113,7 +116,7 @@ export function RunsPage() {
               </div>
             </>
           )}
-        </aside>
+        </aside>}
       </div>
     </div>
   );
@@ -123,7 +126,7 @@ function RunOverview({ detail }: { detail: RunDetail }) {
   const summary = detail.summary;
   return (
     <div className="run-overview-grid">
-      <Info label="脚本包" value={`${summary.packageId || "—"} · ${summary.packageVersion || "—"}`} />
+      <Info label="RPAZ 包" value={`${summary.packageId || "—"} · ${summary.packageVersion || "—"}`} />
       <Info label="任务配置" value={`${summary.profileName} · ${summary.profileId || "—"}`} />
       <Info label="开始时间" value={displayTimestamp(summary.startedAt, true)} />
       <Info label="结束时间" value={summary.finishedAt ? displayTimestamp(summary.finishedAt, true) : "运行中"} />

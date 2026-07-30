@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use drpa_protocol::RUNTIME_PROTOCOL_VERSION;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -19,7 +20,10 @@ use crate::local_dify_workflow::{
     self, WorkflowGraph, WorkflowNode, WorkflowValidationReport, default_graph, graph_from_dify,
     graph_to_dify, is_workflow_mode, normalize_graph, validate_graph,
 };
-use crate::{AppPaths, agent, locate_runtime_python};
+use crate::{
+    AppPaths, agent, installed_package_catalog, knowledge_base, locate_runtime,
+    locate_runtime_python,
+};
 
 const LOCAL_DIFY_SCHEMA: u32 = 2;
 const MAX_APPS: usize = 200;
@@ -291,11 +295,11 @@ struct HttpRequest {
 }
 
 const fn default_context_window() -> u32 {
-    128_000
+    393_216
 }
 
 const fn default_max_output_tokens() -> u32 {
-    4_096
+    98_304
 }
 
 const fn default_temperature() -> f32 {
@@ -359,8 +363,8 @@ fn ensure_root(paths: &AppPaths) -> Result<(), String> {
         let default_provider = LocalDifyProvider {
             id: "provider-openai-compatible".to_owned(),
             name: "OpenAI Compatible".to_owned(),
-            base_url: "https://api.openai.com/v1".to_owned(),
-            model: "gpt-4o-mini".to_owned(),
+            base_url: "http://127.0.0.1/v1".to_owned(),
+            model: "deepseek-v4-flash".to_owned(),
             context_window: default_context_window(),
             max_output_tokens: default_max_output_tokens(),
             temperature: default_temperature(),
@@ -371,7 +375,7 @@ fn ensure_root(paths: &AppPaths) -> Result<(), String> {
             timeout_seconds: default_timeout_seconds(),
             custom_headers: BTreeMap::new(),
             dify_provider: "langgenius/openai/openai".to_owned(),
-            dify_model: "gpt-4o-mini".to_owned(),
+            dify_model: "deepseek-v4-flash".to_owned(),
             has_api_key: false,
             updated_at: now_timestamp(),
         };
@@ -394,9 +398,9 @@ fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
 }
 
 fn validate_app(app: &LocalDifyApp) -> Result<(), String> {
-    validate_identifier(&app.id, "AI 应用")?;
+    validate_identifier(&app.id, "流程")?;
     if app.name.trim().is_empty() || app.name.chars().count() > 100 {
-        return Err("AI 应用名称应为 1 到 100 个字符".to_owned());
+        return Err("流程名称应为 1 到 100 个字符".to_owned());
     }
     if !matches!(
         app.mode.as_str(),
@@ -515,11 +519,11 @@ fn load_provider(
 }
 
 fn load_app(paths: &AppPaths, app_id: &str) -> Result<LocalDifyApp, String> {
-    validate_identifier(app_id, "AI 应用")?;
+    validate_identifier(app_id, "流程")?;
     let bytes =
-        fs::read(app_path(paths, app_id)).map_err(|error| format!("读取 AI 应用失败：{error}"))?;
+        fs::read(app_path(paths, app_id)).map_err(|error| format!("读取流程失败：{error}"))?;
     let app: LocalDifyApp =
-        serde_json::from_slice(&bytes).map_err(|error| format!("AI 应用配置无效：{error}"))?;
+        serde_json::from_slice(&bytes).map_err(|error| format!("流程配置无效：{error}"))?;
     Ok(normalize_app(app))
 }
 
@@ -596,7 +600,7 @@ pub(crate) fn create_local_dify_app(
 ) -> Result<LocalDifyApp, String> {
     ensure_root(&paths)?;
     if list_local_dify_apps(paths.clone())?.len() >= MAX_APPS {
-        return Err(format!("本地 AI 应用最多保留 {MAX_APPS} 个"));
+        return Err(format!("本地流程最多保留 {MAX_APPS} 个"));
     }
     let mode = input.mode.trim().to_owned();
     let now = now_timestamp();
@@ -609,11 +613,11 @@ pub(crate) fn create_local_dify_app(
         schema: LOCAL_DIFY_SCHEMA,
         id: format!("app-{}", Uuid::new_v4().simple()),
         name: input.name.trim().to_owned(),
-        description: "用于本地测试与 Dify DSL 导出的 AI 应用。".to_owned(),
+        description: "用于本地测试与 Dify DSL 导出的流程。".to_owned(),
         mode,
         provider_id,
         system_prompt: "你是一个准确、简洁的 AI 助手。".to_owned(),
-        opening_statement: "你好，我是本地 AI 应用。".to_owned(),
+        opening_statement: "你好，我是本地流程助手。".to_owned(),
         input_key: "query".to_owned(),
         temperature: default_temperature(),
         max_output_tokens: default_max_output_tokens(),
@@ -683,9 +687,22 @@ pub(crate) fn create_local_dify_workflow_node(
 ) -> Result<WorkflowNode, String> {
     if !matches!(
         kind.as_str(),
-        "llm" | "template-transform" | "if-else" | "http-request" | "code" | "answer" | "end"
+        "llm"
+            | "template-transform"
+            | "if-else"
+            | "http-request"
+            | "code"
+            | "rpaz-package"
+            | "question-classifier"
+            | "parameter-extractor"
+            | "variable-aggregator"
+            | "list-operator"
+            | "document-extractor"
+            | "knowledge-retrieval"
+            | "answer"
+            | "end"
     ) {
-        return Err("工作流节点类型无效".to_owned());
+        return Err(format!("工作流节点类型无效：{kind}"));
     }
     if !x.is_finite() || !y.is_finite() {
         return Err("工作流节点坐标无效".to_owned());
@@ -698,12 +715,12 @@ pub(crate) fn delete_local_dify_app(
     app_id: String,
     paths: State<'_, AppPaths>,
 ) -> Result<(), String> {
-    validate_identifier(&app_id, "AI 应用")?;
+    validate_identifier(&app_id, "流程")?;
     let root = apps_root(&paths).join(&app_id);
     if !root.is_dir() {
-        return Err("AI 应用不存在".to_owned());
+        return Err("流程不存在".to_owned());
     }
-    fs::remove_dir_all(root).map_err(|error| format!("删除 AI 应用失败：{error}"))?;
+    fs::remove_dir_all(root).map_err(|error| format!("删除流程失败：{error}"))?;
     let mut secrets: LocalDifySecrets = read_json_or_default(&secrets_path(&paths))?;
     secrets.app_api_tokens.remove(&app_id);
     write_json_atomic(&secrets_path(&paths), &secrets)
@@ -778,7 +795,7 @@ pub(crate) fn delete_local_dify_provider(
         .iter()
         .any(|app| app.provider_id == provider_id)
     {
-        return Err("该 Provider 正被 AI 应用使用".to_owned());
+        return Err("该 Provider 正被流程使用".to_owned());
     }
     let mut providers = load_providers(&paths)?;
     let previous = providers.len();
@@ -839,12 +856,12 @@ pub(crate) async fn run_local_dify_app(
         })
     })
     .await
-    .map_err(|error| format!("AI 应用执行任务异常：{error}"))?
+    .map_err(|error| format!("流程执行任务异常：{error}"))?
 }
 
 fn validate_run_request(request: &LocalDifyRunRequest) -> Result<(), String> {
     run_stream_event_name(&request.request_id)?;
-    validate_identifier(&request.app_id, "AI 应用")?;
+    validate_identifier(&request.app_id, "流程")?;
     if request.query.trim().is_empty() || request.query.len() > MAX_INPUT_BYTES {
         return Err("调试输入应为 1 到 1000000 字节".to_owned());
     }
@@ -860,6 +877,38 @@ fn validate_run_request(request: &LocalDifyRunRequest) -> Result<(), String> {
         return Err("Provider 调用链出现循环或超过最大跳数".to_owned());
     }
     Ok(())
+}
+
+fn workflow_requires_provider(app: &LocalDifyApp) -> bool {
+    !is_workflow_mode(&app.mode)
+        || app.workflow.nodes.iter().any(|node| {
+            matches!(
+                node.kind.as_str(),
+                "llm" | "question-classifier" | "parameter-extractor"
+            )
+        })
+}
+
+fn local_only_workflow_provider() -> LocalDifyProvider {
+    LocalDifyProvider {
+        id: "local-workflow".to_owned(),
+        name: "本地工作流".to_owned(),
+        base_url: String::new(),
+        model: "local-nodes".to_owned(),
+        context_window: 0,
+        max_output_tokens: 0,
+        temperature: 0.0,
+        streaming: false,
+        supports_tools: false,
+        supports_json: false,
+        supports_vision: false,
+        timeout_seconds: 0,
+        custom_headers: BTreeMap::new(),
+        dify_provider: "drpa/local".to_owned(),
+        dify_model: "local-nodes".to_owned(),
+        has_api_key: false,
+        updated_at: now_timestamp(),
+    }
 }
 
 fn run_app_internal<F>(
@@ -878,10 +927,14 @@ where
     ) {
         return Err("当前应用模式不受本地执行器支持".to_owned());
     }
-    if app.provider_id.is_empty() {
-        return Err("请先为应用选择 Provider".to_owned());
-    }
-    let (provider, api_key) = load_provider(paths, &app.provider_id)?;
+    let (provider, api_key) = if app.provider_id.is_empty() {
+        if workflow_requires_provider(&app) {
+            return Err("当前流程包含模型节点，请先选择 Provider".to_owned());
+        }
+        (local_only_workflow_provider(), String::new())
+    } else {
+        load_provider(paths, &app.provider_id)?
+    };
     let run_id = format!("dify-run-{}", Uuid::new_v4().simple());
     emit(LocalDifyStreamEvent::Started {
         run_id: run_id.clone(),
@@ -1225,6 +1278,61 @@ where
                 usage: empty_usage,
             })
         }
+        "rpaz-package" => {
+            let result = execute_workflow_rpaz(paths, node, outputs, request)?;
+            Ok(WorkflowNodeResult {
+                outputs: result,
+                branch: None,
+                answer: None,
+                usage: empty_usage,
+            })
+        }
+        "question-classifier" => {
+            let (result, branch, usage) = execute_workflow_question_classifier(
+                provider, api_key, request, route, node, outputs,
+            )?;
+            Ok(WorkflowNodeResult {
+                outputs: result,
+                branch: Some(branch),
+                answer: None,
+                usage,
+            })
+        }
+        "parameter-extractor" => {
+            let (result, usage) = execute_workflow_parameter_extractor(
+                provider, api_key, request, route, node, outputs,
+            )?;
+            Ok(WorkflowNodeResult {
+                outputs: result,
+                branch: None,
+                answer: None,
+                usage,
+            })
+        }
+        "variable-aggregator" => Ok(WorkflowNodeResult {
+            outputs: execute_workflow_variable_aggregator(node, outputs, request),
+            branch: None,
+            answer: None,
+            usage: empty_usage,
+        }),
+        "list-operator" => Ok(WorkflowNodeResult {
+            outputs: execute_workflow_list_operator(node, outputs, request),
+            branch: None,
+            answer: None,
+            usage: empty_usage,
+        }),
+        "document-extractor" => Ok(WorkflowNodeResult {
+            outputs: execute_workflow_document_extractor(paths, node, outputs, request)?,
+            branch: None,
+            answer: None,
+            usage: empty_usage,
+        }),
+        "knowledge-retrieval" => Ok(WorkflowNodeResult {
+            outputs: execute_workflow_knowledge_retrieval(paths, node, outputs, request)?,
+            branch: None,
+            answer: None,
+            usage: empty_usage,
+        }),
         "answer" => {
             let answer = node
                 .config
@@ -1436,6 +1544,529 @@ fn value_to_text(value: &Value) -> String {
         Value::String(value) => value.clone(),
         other => serde_json::to_string(other).unwrap_or_default(),
     }
+}
+
+fn configured_selector<'a>(node: &'a WorkflowNode, key: &str) -> Option<&'a [Value]> {
+    node.config
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+}
+
+fn selected_node_value(
+    node: &WorkflowNode,
+    key: &str,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> Value {
+    configured_selector(node, key)
+        .and_then(|selector| lookup_selector(selector, outputs, request))
+        .unwrap_or_else(|| json!(request.query))
+}
+
+fn parse_json_object_from_model(text: &str) -> Option<serde_json::Map<String, Value>> {
+    let trimmed = text.trim();
+    let unfenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed)
+        .strip_suffix("```")
+        .unwrap_or(trimmed)
+        .trim();
+    serde_json::from_str::<Value>(unfenced)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .or_else(|| {
+            let start = trimmed.find('{')?;
+            let end = trimmed.rfind('}')?;
+            serde_json::from_str::<Value>(&trimmed[start..=end])
+                .ok()?
+                .as_object()
+                .cloned()
+        })
+}
+
+fn execute_workflow_question_classifier(
+    provider: &LocalDifyProvider,
+    api_key: &str,
+    request: &LocalDifyRunRequest,
+    route: &[String],
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+) -> Result<(BTreeMap<String, Value>, String, LocalDifyUsage), String> {
+    let classes = node
+        .config
+        .get("classes")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty())
+        .ok_or_else(|| "问题分类器至少需要一个类别".to_owned())?;
+    let query = configured_selector(node, "query_variable_selector")
+        .and_then(|selector| lookup_selector(selector, outputs, request))
+        .unwrap_or_else(|| json!(request.query));
+    let class_descriptions = classes
+        .iter()
+        .map(|item| {
+            json!({
+                "id": item.get("id").and_then(Value::as_str).unwrap_or_default(),
+                "name": item.get("name").and_then(Value::as_str).unwrap_or_default()
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "model": provider.model,
+        "messages": [{
+            "role": "system",
+            "content": "你是问题分类器。只能从给定类别中选择一个，并只返回 JSON：{\"class_id\":\"类别ID\"}。"
+        }, {
+            "role": "user",
+            "content": format!(
+                "类别：{}\n待分类内容：{}",
+                serde_json::to_string(&class_descriptions).unwrap_or_default(),
+                value_to_text(&query)
+            )
+        }],
+        "temperature": 0,
+        "max_tokens": 128,
+        "stream": false,
+        "user": request.user,
+    });
+    let completion = call_provider(provider, api_key, &payload, route, |_| {})?;
+    let parsed = parse_json_object_from_model(&completion.answer);
+    let requested_id = parsed
+        .as_ref()
+        .and_then(|value| value.get("class_id").or_else(|| value.get("id")))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| completion.answer.trim());
+    let selected = classes
+        .iter()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(requested_id))
+        .or_else(|| {
+            classes.iter().find(|item| {
+                item.get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| completion.answer.contains(name))
+            })
+        })
+        .unwrap_or(&classes[0]);
+    let class_id = selected
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("1")
+        .to_owned();
+    let class_name = selected
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    Ok((
+        BTreeMap::from([
+            ("class_id".to_owned(), json!(class_id)),
+            ("class_name".to_owned(), json!(class_name)),
+            ("query".to_owned(), query),
+        ]),
+        class_id,
+        completion.usage,
+    ))
+}
+
+fn execute_workflow_parameter_extractor(
+    provider: &LocalDifyProvider,
+    api_key: &str,
+    request: &LocalDifyRunRequest,
+    route: &[String],
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+) -> Result<(BTreeMap<String, Value>, LocalDifyUsage), String> {
+    let parameters = node
+        .config
+        .get("parameters")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty())
+        .ok_or_else(|| "参数提取器至少需要一个参数定义".to_owned())?;
+    let query = selected_node_value(node, "query", outputs, request);
+    let instruction = node
+        .config
+        .get("instruction")
+        .and_then(Value::as_str)
+        .unwrap_or("从输入文本中提取结构化参数。");
+    let payload = json!({
+        "model": provider.model,
+        "messages": [{
+            "role": "system",
+            "content": format!(
+                "{instruction}\n严格返回一个 JSON 对象，不要附加解释。字段定义：{}",
+                serde_json::to_string(parameters).unwrap_or_default()
+            )
+        }, {
+            "role": "user",
+            "content": value_to_text(&query)
+        }],
+        "temperature": 0,
+        "max_tokens": provider.max_output_tokens.min(2048),
+        "stream": false,
+        "user": request.user,
+    });
+    let completion = call_provider(provider, api_key, &payload, route, |_| {})?;
+    let parsed = parse_json_object_from_model(&completion.answer)
+        .ok_or_else(|| "参数提取器模型输出不是 JSON 对象".to_owned())?;
+    let mut result: BTreeMap<String, Value> = parsed.into_iter().collect();
+    result.insert("__text".to_owned(), json!(completion.answer));
+    Ok((result, completion.usage))
+}
+
+fn execute_workflow_variable_aggregator(
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> BTreeMap<String, Value> {
+    let value = node
+        .config
+        .get("variables")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_array)
+        .filter_map(|selector| lookup_selector(selector, outputs, request))
+        .find(|value| !value.is_null() && !matches!(value, Value::String(text) if text.is_empty()))
+        .unwrap_or(Value::Null);
+    BTreeMap::from([("output".to_owned(), value)])
+}
+
+fn list_item_field<'a>(item: &'a Value, key: &str) -> &'a Value {
+    if key.trim().is_empty() {
+        item
+    } else {
+        item.get(key).unwrap_or(&Value::Null)
+    }
+}
+
+fn list_condition_matches(item: &Value, condition: &Value) -> bool {
+    let key = condition
+        .get("key")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let actual = list_item_field(item, key);
+    let expected = condition.get("value").unwrap_or(&Value::Null);
+    let operator = condition
+        .get("comparison_operator")
+        .and_then(Value::as_str)
+        .unwrap_or("is");
+    let actual_text = value_to_text(actual);
+    let expected_text = value_to_text(expected);
+    match operator {
+        "contains" => actual_text.contains(&expected_text),
+        "not_contains" | "not contains" => !actual_text.contains(&expected_text),
+        "starts_with" | "start with" => actual_text.starts_with(&expected_text),
+        "ends_with" | "end with" => actual_text.ends_with(&expected_text),
+        "is_not" | "is not" => actual != expected && actual_text != expected_text,
+        "greater_than" | ">" => numeric_value(actual) > numeric_value(expected),
+        "less_than" | "<" => numeric_value(actual) < numeric_value(expected),
+        "is_empty" | "empty" => actual_text.is_empty(),
+        "is_not_empty" | "not empty" => !actual_text.is_empty(),
+        _ => actual == expected || actual_text == expected_text,
+    }
+}
+
+fn execute_workflow_list_operator(
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> BTreeMap<String, Value> {
+    let selected = selected_node_value(node, "variable", outputs, request);
+    let mut items = selected
+        .as_array()
+        .cloned()
+        .or_else(|| {
+            selected
+                .as_str()
+                .and_then(|text| serde_json::from_str::<Vec<Value>>(text).ok())
+        })
+        .unwrap_or_default();
+    if let Some(filter) = node.config.get("filter_by").filter(|value| {
+        value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) {
+        if let Some(conditions) = filter.get("conditions").and_then(Value::as_array) {
+            items.retain(|item| {
+                conditions
+                    .iter()
+                    .all(|condition| list_condition_matches(item, condition))
+            });
+        }
+    }
+    if let Some(order) = node.config.get("order_by").filter(|value| {
+        value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) {
+        let key = order.get("key").and_then(Value::as_str).unwrap_or_default();
+        let descending = order.get("value").and_then(Value::as_str) == Some("desc");
+        items.sort_by(|left, right| {
+            let ordering = value_to_text(list_item_field(left, key))
+                .cmp(&value_to_text(list_item_field(right, key)));
+            if descending {
+                ordering.reverse()
+            } else {
+                ordering
+            }
+        });
+    }
+    if let Some(limit) = node.config.get("limit").filter(|value| {
+        value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) {
+        let size = limit
+            .get("size")
+            .and_then(Value::as_u64)
+            .unwrap_or(10)
+            .min(10_000) as usize;
+        items.truncate(size);
+    }
+    BTreeMap::from([
+        ("result".to_owned(), json!(items)),
+        (
+            "first_record".to_owned(),
+            items.first().cloned().unwrap_or(Value::Null),
+        ),
+        (
+            "last_record".to_owned(),
+            items.last().cloned().unwrap_or(Value::Null),
+        ),
+    ])
+}
+
+fn workflow_document_paths(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(path) => vec![path.clone()],
+        Value::Array(items) => items.iter().flat_map(workflow_document_paths).collect(),
+        Value::Object(object) => object
+            .get("path")
+            .or_else(|| object.get("local_path"))
+            .map(workflow_document_paths)
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn execute_workflow_document_extractor(
+    paths: &AppPaths,
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> Result<BTreeMap<String, Value>, String> {
+    let selected = selected_node_value(node, "variable_selector", outputs, request);
+    let document_paths = workflow_document_paths(&selected);
+    if document_paths.is_empty() {
+        return Err("文档提取器没有收到文件路径".to_owned());
+    }
+    let workspace = fs::canonicalize(&paths.workspace_root)
+        .map_err(|error| format!("无法访问工作区目录：{error}"))?;
+    let mut texts = Vec::new();
+    for document_path in document_paths {
+        let candidate = PathBuf::from(&document_path);
+        let candidate = if candidate.is_absolute() {
+            candidate
+        } else {
+            workspace.join(candidate)
+        };
+        let canonical = fs::canonicalize(&candidate)
+            .map_err(|error| format!("无法访问文档 {document_path}：{error}"))?;
+        if !canonical.starts_with(&workspace) {
+            return Err(format!(
+                "文档提取器只允许读取当前工作区文件：{document_path}"
+            ));
+        }
+        let metadata = fs::metadata(&canonical).map_err(|error| error.to_string())?;
+        if metadata.len() > 5 * 1024 * 1024 {
+            return Err(format!("文档超过 5MB 限制：{document_path}"));
+        }
+        texts.push(
+            fs::read_to_string(&canonical)
+                .map_err(|error| format!("文档不是 UTF-8 文本 {document_path}：{error}"))?,
+        );
+    }
+    let text = texts.join("\n\n");
+    Ok(BTreeMap::from([
+        ("text".to_owned(), json!(text)),
+        ("documents".to_owned(), json!(texts)),
+    ]))
+}
+
+fn collect_knowledge_text_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    if files.len() >= 2_000 || !root.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_knowledge_text_files(&path, files)?;
+        } else if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "md" | "txt" | "json" | "csv" | "yaml" | "yml"
+                )
+            })
+        {
+            files.push(path);
+        }
+        if files.len() >= 2_000 {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn execute_workflow_knowledge_retrieval(
+    paths: &AppPaths,
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> Result<BTreeMap<String, Value>, String> {
+    let query = value_to_text(&selected_node_value(
+        node,
+        "query_variable_selector",
+        outputs,
+        request,
+    ));
+    let normalized_query = query.trim().to_lowercase();
+    if normalized_query.is_empty() {
+        return Err("知识检索查询不能为空".to_owned());
+    }
+    let top_k = node
+        .config
+        .get("top_k")
+        .and_then(Value::as_u64)
+        .unwrap_or(5)
+        .clamp(1, 50) as usize;
+    let knowledge_base_ids = node
+        .config
+        .get("knowledge_base_ids")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let include_vector = node
+        .config
+        .get("include_knowledge_bases")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let include_documents = node
+        .config
+        .get("include_documents")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let mut matches: Vec<(f64, Value)> = Vec::new();
+    if include_vector {
+        for item in knowledge_base::search_for_agent(
+            &paths.workspace_root,
+            &knowledge_base_ids,
+            &query,
+            top_k,
+        )? {
+            matches.push((
+                item.score as f64,
+                json!({
+                    "type": "knowledge-base",
+                    "knowledgeBaseId": item.knowledge_base_id,
+                    "knowledgeBaseName": item.knowledge_base_name,
+                    "sourceId": item.source_id,
+                    "title": item.source_name,
+                    "chunkId": item.chunk_id,
+                    "content": item.content,
+                    "citation": item.citation,
+                    "score": item.score,
+                    "vectorScore": item.vector_score,
+                    "keywordScore": item.keyword_score
+                }),
+            ));
+        }
+    }
+
+    let knowledge_root = paths.workspace_root.join("knowledge");
+    let mut files = Vec::new();
+    if include_documents {
+        collect_knowledge_text_files(&knowledge_root, &mut files)?;
+    }
+    let mut terms = normalized_query
+        .split_whitespace()
+        .filter(|term| term.chars().count() > 1)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        terms.push(normalized_query.clone());
+    }
+    for path in files {
+        if fs::metadata(&path)
+            .map(|value| value.len())
+            .unwrap_or(u64::MAX)
+            > 1024 * 1024
+        {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let lower = content.to_lowercase();
+        let score = terms
+            .iter()
+            .map(|term| lower.matches(term).count() as u64)
+            .sum::<u64>();
+        if score == 0 {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(&knowledge_root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let ranking_score = 0.25 + (score as f64 / (score as f64 + 4.0)) * 0.5;
+        matches.push((
+            ranking_score,
+            json!({
+                "type": "knowledge-document",
+                "title": path.file_stem().and_then(|value| value.to_str()).unwrap_or_default(),
+                "path": relative,
+                "content": content.chars().take(1_200).collect::<String>(),
+                "citation": format!("知识文档 / {relative}"),
+                "score": ranking_score,
+                "keywordMatches": score
+            }),
+        ));
+    }
+    matches.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let result = matches
+        .into_iter()
+        .take(top_k)
+        .map(|(_, item)| item)
+        .collect::<Vec<_>>();
+    let text = result
+        .iter()
+        .filter_map(|item| item.get("content").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n");
+    Ok(BTreeMap::from([
+        ("result".to_owned(), json!(result)),
+        ("text".to_owned(), json!(text)),
+    ]))
 }
 
 fn execute_workflow_http(
@@ -1650,6 +2281,137 @@ print(json.dumps(result, ensure_ascii=False))
         .ok_or_else(|| "Python 代码节点输出必须是对象".to_owned())
 }
 
+fn execute_workflow_rpaz(
+    paths: &AppPaths,
+    node: &WorkflowNode,
+    outputs: &WorkflowOutputs,
+    request: &LocalDifyRunRequest,
+) -> Result<BTreeMap<String, Value>, String> {
+    let package_id = node
+        .config
+        .get("package_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if package_id.is_empty() {
+        return Err("RPAZ 包节点尚未选择包".to_owned());
+    }
+    let catalog = installed_package_catalog(paths)?;
+    let descriptor = catalog
+        .get(package_id)
+        .ok_or_else(|| format!("找不到已安装 RPAZ 包：{package_id}"))?;
+    let mut parameters = serde_json::Map::new();
+    if let Some(config) = node.config.get("parameters").and_then(Value::as_object) {
+        for (key, value) in config {
+            parameters.insert(
+                key.clone(),
+                if let Some(template) = value.as_str() {
+                    json!(render_workflow_template(template, outputs, request))
+                } else {
+                    value.clone()
+                },
+            );
+        }
+    }
+    if parameters.is_empty() {
+        parameters.insert("input".to_owned(), json!(request.query));
+    }
+    let invocation_id = Uuid::new_v4().simple().to_string();
+    let root = local_dify_root(paths)
+        .join("tmp")
+        .join(format!("rpaz-{invocation_id}"));
+    let output_dir = root.join("outputs");
+    fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
+    let request_path = root.join("request.json");
+    let result_path = root.join("result.json");
+    let stdout_path = root.join("stdout.jsonl");
+    let stderr_path = root.join("stderr.log");
+    let runtime_request = json!({
+        "protocol": RUNTIME_PROTOCOL_VERSION,
+        "run_id": format!("workflow-{invocation_id}"),
+        "package_id": package_id,
+        "package_dir": descriptor.get("package_dir"),
+        "output_dir": output_dir,
+        "entrypoint": descriptor.get("entrypoint"),
+        "callable": descriptor.get("callable"),
+        "parameters": parameters,
+        "database_path": paths.workspace_root.join("databases/workspace.sqlite3"),
+        "package_catalog": catalog,
+        "result_path": result_path,
+    });
+    fs::write(
+        &request_path,
+        serde_json::to_vec_pretty(&runtime_request).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("写入 RPAZ 节点请求失败：{error}"))?;
+    let runtime = locate_runtime(paths)?;
+    let stdout = fs::File::create(&stdout_path).map_err(|error| error.to_string())?;
+    let stderr = fs::File::create(&stderr_path).map_err(|error| error.to_string())?;
+    let mut command = Command::new(runtime.python);
+    command
+        .args(["-m", "drpa_runner.cli", "--request"])
+        .arg(&request_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .env("PYTHONNOUSERSITE", "1")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
+    if let Some(python_path) = runtime.python_path {
+        command.env("PYTHONPATH", python_path);
+    }
+    if let Some(browser) = runtime.browser {
+        command.env("DRPA_BROWSER_PATH", browser);
+    }
+    hide_workflow_child_window(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("启动 RPAZ 包节点失败：{error}"))?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if started.elapsed() >= Duration::from_secs(300) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("RPAZ 包节点执行超过 5 分钟".to_owned());
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    if !status.success() {
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        let events = fs::read_to_string(&stdout_path).unwrap_or_default();
+        return Err(format!(
+            "RPAZ 包执行失败：{}",
+            if stderr.trim().is_empty() {
+                events.trim()
+            } else {
+                stderr.trim()
+            }
+        ));
+    }
+    let result = if result_path.is_file() {
+        serde_json::from_slice::<Value>(
+            &fs::read(&result_path).map_err(|error| format!("读取 RPAZ 包结果失败：{error}"))?,
+        )
+        .map_err(|error| format!("RPAZ 包结果不是有效 JSON：{error}"))?
+    } else {
+        Value::Null
+    };
+    let _ = fs::remove_file(&request_path);
+    let _ = fs::remove_file(&stdout_path);
+    let _ = fs::remove_file(&stderr_path);
+    Ok(match result {
+        Value::Object(object) => {
+            let mut output: BTreeMap<String, Value> = object.clone().into_iter().collect();
+            output.insert("result".to_owned(), Value::Object(object));
+            output
+        }
+        other => BTreeMap::from([("result".to_owned(), other)]),
+    })
+}
+
 #[cfg(windows)]
 fn hide_workflow_child_window(command: &mut Command) {
     use std::os::windows::process::CommandExt;
@@ -1860,7 +2622,7 @@ fn record_run(
                 now_timestamp(),
             ],
         )
-        .map_err(|error| format!("记录 AI 应用运行失败：{error}"))?;
+        .map_err(|error| format!("记录流程运行失败：{error}"))?;
     Ok(())
 }
 
@@ -1872,7 +2634,7 @@ pub(crate) fn list_local_dify_runs(
 ) -> Result<Vec<LocalDifyRunSummary>, String> {
     ensure_root(&paths)?;
     if let Some(app_id) = &app_id {
-        validate_identifier(app_id, "AI 应用")?;
+        validate_identifier(app_id, "流程")?;
     }
     let connection = open_runtime_database(&paths)?;
     let limit = limit.unwrap_or(100).clamp(1, 500) as i64;
@@ -2071,7 +2833,7 @@ fn render_dify_dsl(
                 item.dify_model.as_str()
             }
         })
-        .unwrap_or("gpt-4o-mini");
+        .unwrap_or("deepseek-v4-flash");
     let mut value = json!({
         "version": "0.3.1",
         "kind": "app",
@@ -2209,7 +2971,7 @@ fn import_dsl_source(source: &str, paths: &AppPaths) -> Result<LocalDifyApp, Str
                 .and_then(|model| model.get("name"))
                 .and_then(Value::as_str)
         })
-        .unwrap_or("gpt-4o-mini");
+        .unwrap_or("deepseek-v4-flash");
     let provider_name = model_config
         .pointer("/model/provider")
         .and_then(Value::as_str)
@@ -2285,7 +3047,7 @@ fn import_dsl_source(source: &str, paths: &AppPaths) -> Result<LocalDifyApp, Str
                     .and_then(|model| model.pointer("/completion_params/max_tokens"))
                     .and_then(Value::as_u64)
             })
-            .unwrap_or(4_096)
+            .unwrap_or(98_304)
             .clamp(64, 131_072) as u32,
         workflow,
         published_version: 0,
@@ -2793,6 +3555,114 @@ model_config:
     }
 
     #[test]
+    fn workflow_node_factory_supports_rpaz_and_dify_transform_nodes() {
+        for kind in [
+            "rpaz-package",
+            "question-classifier",
+            "parameter-extractor",
+            "variable-aggregator",
+            "list-operator",
+            "document-extractor",
+            "knowledge-retrieval",
+        ] {
+            let node = create_local_dify_workflow_node(kind.to_owned(), 20.0, 30.0).unwrap();
+            assert_eq!(node.kind, kind);
+            assert_ne!(node.title, "结束");
+        }
+    }
+
+    #[test]
+    fn local_transform_nodes_aggregate_filter_extract_and_retrieve() {
+        let paths = test_paths();
+        ensure_root(&paths).unwrap();
+        let request = LocalDifyRunRequest {
+            request_id: "request-transforms".to_owned(),
+            app_id: "app-transforms".to_owned(),
+            query: "DRPA".to_owned(),
+            inputs: BTreeMap::new(),
+            user: "tester".to_owned(),
+            stream: false,
+            conversation_id: String::new(),
+            provider_route: Vec::new(),
+        };
+        let outputs = HashMap::from([
+            (
+                "left".to_owned(),
+                BTreeMap::from([("result".to_owned(), Value::Null)]),
+            ),
+            (
+                "right".to_owned(),
+                BTreeMap::from([
+                    ("result".to_owned(), json!("selected")),
+                    (
+                        "items".to_owned(),
+                        json!([
+                            {"name": "b", "score": 1},
+                            {"name": "a", "score": 3},
+                            {"name": "c", "score": 2}
+                        ]),
+                    ),
+                ]),
+            ),
+        ]);
+
+        let mut aggregator = local_dify_workflow::new_node("variable-aggregator", 0.0, 0.0);
+        aggregator.config.insert(
+            "variables".to_owned(),
+            json!([["left", "result"], ["right", "result"]]),
+        );
+        assert_eq!(
+            execute_workflow_variable_aggregator(&aggregator, &outputs, &request)["output"],
+            json!("selected")
+        );
+
+        let mut list = local_dify_workflow::new_node("list-operator", 0.0, 0.0);
+        list.config
+            .insert("variable".to_owned(), json!(["right", "items"]));
+        list.config.insert(
+            "filter_by".to_owned(),
+            json!({"enabled": true, "conditions": [{"key": "score", "comparison_operator": "greater_than", "value": 1}]}),
+        );
+        list.config.insert(
+            "order_by".to_owned(),
+            json!({"enabled": true, "key": "name", "value": "asc"}),
+        );
+        list.config
+            .insert("limit".to_owned(), json!({"enabled": true, "size": 1}));
+        let list_result = execute_workflow_list_operator(&list, &outputs, &request);
+        assert_eq!(list_result["result"], json!([{"name": "a", "score": 3}]));
+
+        let document_root = paths.workspace_root.join("documents");
+        fs::create_dir_all(&document_root).unwrap();
+        fs::write(document_root.join("sample.txt"), "document body").unwrap();
+        let document_outputs = HashMap::from([(
+            "start".to_owned(),
+            BTreeMap::from([("file_path".to_owned(), json!("documents/sample.txt"))]),
+        )]);
+        let document = local_dify_workflow::new_node("document-extractor", 0.0, 0.0);
+        assert_eq!(
+            execute_workflow_document_extractor(&paths, &document, &document_outputs, &request)
+                .unwrap()["text"],
+            json!("document body")
+        );
+
+        let knowledge_root = paths.workspace_root.join("knowledge");
+        fs::create_dir_all(&knowledge_root).unwrap();
+        fs::write(
+            knowledge_root.join("guide.md"),
+            "# DRPA Guide\nDRPA workflow knowledge.",
+        )
+        .unwrap();
+        let knowledge = local_dify_workflow::new_node("knowledge-retrieval", 0.0, 0.0);
+        let knowledge_result =
+            execute_workflow_knowledge_retrieval(&paths, &knowledge, &HashMap::new(), &request)
+                .unwrap();
+        assert_eq!(knowledge_result["result"].as_array().unwrap().len(), 1);
+        assert!(knowledge_result["text"].as_str().unwrap().contains("DRPA"));
+        let _ = fs::remove_dir_all(paths.workspace_root);
+    }
+
+    #[test]
     fn runtime_database_persists_run_history() {
         let paths = test_paths();
         ensure_root(&paths).unwrap();
@@ -2895,7 +3765,6 @@ workflow:
     fn workflow_executor_runs_template_and_end_nodes_locally() {
         let paths = test_paths();
         ensure_root(&paths).unwrap();
-        let provider = save_provider_for_test(&paths, provider_input());
         let now = now_timestamp();
         let mut graph = default_graph("workflow", "query");
         graph.nodes.retain(|node| node.kind != "llm");
@@ -2940,7 +3809,7 @@ workflow:
             name: "Workflow".to_owned(),
             description: String::new(),
             mode: "workflow".to_owned(),
-            provider_id: provider.id,
+            provider_id: String::new(),
             system_prompt: String::new(),
             opening_statement: String::new(),
             input_key: "query".to_owned(),

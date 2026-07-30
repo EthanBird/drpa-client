@@ -87,6 +87,47 @@ def test_execute_request_rejects_entrypoint_escape(tmp_path: Path) -> None:
         execute_request(request, EventWriter(stream=io.StringIO()))
 
 
+def test_rpaz_package_can_invoke_an_installed_package(tmp_path: Path) -> None:
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    parent.mkdir()
+    child.mkdir()
+    (parent / "main.py").write_text(
+        "def main(ctx):\n"
+        "    child = ctx.invoke('com.example.child', {'value': 21})\n"
+        "    return {'answer': child['answer']}\n",
+        encoding="utf-8",
+    )
+    (child / "main.py").write_text(
+        "def main(ctx):\n"
+        "    return {'answer': ctx.params['value'] * 2}\n",
+        encoding="utf-8",
+    )
+    result_path = tmp_path / "result.json"
+    request = ExecutionRequest(
+        protocol=1,
+        run_id="composition-run",
+        package_id="com.example.parent",
+        package_dir=parent,
+        output_dir=tmp_path / "output",
+        entrypoint="main.py",
+        callable="main",
+        parameters={},
+        database_path=tmp_path / "databases" / "workspace.sqlite3",
+        package_catalog={
+            "com.example.child": {
+                "package_dir": str(child),
+                "entrypoint": "main.py",
+                "callable": "main",
+            }
+        },
+        result_path=result_path,
+    )
+
+    assert execute_request(request, EventWriter(stream=io.StringIO())) == 0
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {"answer": 42}
+
+
 def test_studio_kernel_preserves_state_and_reports_variables() -> None:
     kernel = StudioKernel()
     first = kernel.execute("one", "value = 40\nprint('ready')")

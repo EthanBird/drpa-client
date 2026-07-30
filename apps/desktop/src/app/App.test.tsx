@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parsePythonSignature, StudioPage } from "../pages/StudioPage";
+import { AgentPage } from "../pages/AgentPage";
 import { WorkbenchPage } from "../pages/WorkbenchPage";
 import { RuntimePage } from "../pages/RuntimePage";
 import { SettingsPage } from "../pages/SettingsPage";
@@ -9,6 +10,13 @@ import { desktopGateway } from "../infra/gateway";
 import { App } from "./App";
 import { useAppStore } from "./store";
 
+const dialogMocks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+  open: vi.fn(),
+  save: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => dialogMocks);
 vi.mock("@monaco-editor/react", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
   return {
@@ -31,29 +39,55 @@ vi.mock("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js", () => ({
 describe("DRPA Next desktop shell", () => {
   afterEach(() => {
     cleanup();
+    delete (window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     vi.restoreAllMocks();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear();
-    const agentSession = { id: "agent-test-session", title: "新对话", projectId: "", createdAt: 1, updatedAt: 1, messages: [] };
+    for (const session of await desktopGateway.listAgentSessions()) {
+      await desktopGateway.deleteAgentSession(session.id);
+    }
+    dialogMocks.confirm.mockReset();
+    dialogMocks.open.mockReset();
+    dialogMocks.save.mockReset();
+    const agentSession = { id: "agent-test-session", title: "新对话", projectId: "", createdAt: 1, updatedAt: 1, messages: [], selectedSkillIds: [], messageCount: 0 };
     useAppStore.setState({
       activeNavigation: "workbench",
       commandOpen: false,
       theme: "light",
       fontScale: "standard",
+      uiDensity: "compact",
+      hidePageHeaders: false,
+      collapsedSidebars: {},
       inspectorOpen: true,
       selectedPackageId: "com.drpa.invoice-hub",
       selectedProfileId: "monthly",
       snapshot: null,
-      agentBaseUrl: "https://api.openai.com/v1",
-      agentModel: "gpt-5.4-mini",
+      agentBaseUrl: "http://127.0.0.1/v1",
+      agentModel: "deepseek-v4-flash",
       agentApiKey: "",
+      agentProviderRef: null,
       agentStreamEnabled: true,
-      agentContextWindow: 128000,
-      agentMaxOutputTokens: 4096,
+      agentContextWindow: 393216,
+      agentMaxOutputTokens: 98304,
       agentMaxRounds: 64,
       agentTemperature: 0.2,
+      agentPythonTimeoutSeconds: 300,
+      agentToolPolicy: {
+        enabled: true,
+        databaseRead: true,
+        databaseConnections: true,
+        arbitraryFileRead: true,
+        knowledgeBaseRead: true,
+        documentRead: true,
+        documentWrite: true,
+        documentConvert: true,
+        projectWrite: true,
+        python: true,
+        workspaceWrite: true,
+        extensions: true,
+      },
       agentProjectId: "",
       agentInspectorOpen: true,
       activeWorkspaceId: "personal",
@@ -69,7 +103,7 @@ describe("DRPA Next desktop shell", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "月度结算", level: 1 })).toBeVisible());
-    expect(screen.getByText("本地脚本包")).toBeVisible();
+    expect(screen.getByText("本地 RPAZ 包")).toBeVisible();
     expect(screen.getByRole("button", { name: "运行任务" })).toBeEnabled();
     await waitFor(() => expect(reportUiReady).toHaveBeenCalledOnce());
   });
@@ -107,13 +141,13 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
 
     expect(await screen.findByRole("dialog", { name: "命令面板" })).toBeVisible();
-    expect(screen.getByPlaceholderText("输入命令或搜索脚本包…")).toHaveFocus();
+    expect(screen.getByPlaceholderText("输入命令或搜索 RPAZ 包…")).toHaveFocus();
   });
 
   it("runs the first matching command from the command palette with Enter", async () => {
     render(<App />);
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
-    const input = await screen.findByPlaceholderText("输入命令或搜索脚本包…");
+    const input = await screen.findByPlaceholderText("输入命令或搜索 RPAZ 包…");
 
     fireEvent.change(input, { target: { value: "记录" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -123,9 +157,9 @@ describe("DRPA Next desktop shell", () => {
 
   it("navigates to the library without recreating host state", async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "脚本包" }));
+    fireEvent.click(screen.getByRole("button", { name: "RPAZ 包" }));
 
-    expect(await screen.findByRole("heading", { name: "脚本包" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "RPAZ 包" })).toBeVisible();
     expect(screen.getByText("发票中心")).toBeVisible();
   });
 
@@ -152,11 +186,11 @@ describe("DRPA Next desktop shell", () => {
     useAppStore.setState({ activeNavigation: "localDify" });
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "AI 应用" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "流程设计" })).toBeVisible();
     expect(await screen.findByRole("heading", { name: "本地 Dify 调试应用" })).toBeVisible();
-    const input = screen.getByLabelText("Local Dify 调试输入");
+    const input = screen.getByLabelText("流程调试输入");
     fireEvent.change(input, { target: { value: "验证本地流式输出" } });
-    fireEvent.click(screen.getByRole("button", { name: "运行 Local Dify 应用" }));
+    fireEvent.click(screen.getByRole("button", { name: "运行流程" }));
 
     await waitFor(() => expect(runApp).toHaveBeenCalledWith(expect.objectContaining({
       appId: "app-browser-preview",
@@ -179,14 +213,14 @@ describe("DRPA Next desktop shell", () => {
     useAppStore.setState({ activeNavigation: "localDify" });
     const { container } = render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "AI 应用" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "新建应用" }));
+    expect(await screen.findByRole("heading", { name: "流程设计" })).toBeVisible();
+    fireEvent.click(screen.getAllByRole("button", { name: "新建流程" })[0]!);
     expect(document.querySelector(".dify-create-dialog")).toBeVisible();
     expect(document.querySelector(".dify-create-dialog > header")).toBeVisible();
     expect(document.querySelector(".dify-create-dialog > footer")).toBeVisible();
-    fireEvent.change(screen.getByLabelText("新建 AI 应用名称"), { target: { value: "可视化工作流" } });
+    fireEvent.change(screen.getByLabelText("新建流程名称"), { target: { value: "可视化工作流" } });
     fireEvent.click(screen.getByRole("button", { name: /Workflow.*自动化与批处理工作流/ }));
-    fireEvent.click(screen.getByRole("button", { name: "创建应用" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建流程" }));
 
     expect(await screen.findByText("工作流编排")).toBeVisible();
     await waitFor(() => expect(container.querySelectorAll(".workflow-node")).toHaveLength(3));
@@ -202,6 +236,38 @@ describe("DRPA Next desktop shell", () => {
       name: "可视化工作流",
       mode: "workflow",
       workflow: expect.objectContaining({ nodes: expect.arrayContaining([expect.objectContaining({ kind: "template-transform" })]) }),
+    })));
+  });
+
+  it("creates a ready-to-run RPAZ workflow from the quick template", async () => {
+    const save = vi.spyOn(desktopGateway, "saveLocalDifyApp");
+    useAppStore.setState({ activeNavigation: "localDify" });
+    const { container } = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "流程设计" })).toBeVisible();
+    fireEvent.click(screen.getAllByRole("button", { name: "新建流程" })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: /Workflow.*自动化与批处理工作流/ }));
+    fireEvent.click(screen.getByRole("button", { name: "创建流程" }));
+
+    const quickFlow = await screen.findByRole("button", { name: "RPAZ 快速流程" });
+    await waitFor(() => expect(quickFlow).toBeEnabled());
+    fireEvent.click(quickFlow);
+
+    await waitFor(() => expect(container.querySelectorAll(".workflow-node")).toHaveLength(3));
+    expect(screen.getByText(/已生成可运行流程/)).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "RPAZ 快速流程包" })).toHaveValue("com.drpa.invoice-hub");
+    fireEvent.click(screen.getByRole("button", { name: "保存工作流" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      workflow: expect.objectContaining({
+        nodes: expect.arrayContaining([expect.objectContaining({
+          kind: "rpaz-package",
+          config: expect.objectContaining({ package_id: "com.drpa.invoice-hub" }),
+        })]),
+        edges: expect.arrayContaining([
+          expect.objectContaining({ source: "start" }),
+          expect.objectContaining({ target: "end" }),
+        ]),
+      }),
     })));
   });
 
@@ -267,6 +333,16 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.change(screen.getByLabelText("数据源类型"), { target: { value: "excel" } });
     expect(screen.getByLabelText("工作簿文件")).toBeVisible();
     expect(screen.getByText(/每个工作表映射为一张只读表/)).toBeVisible();
+
+    saveProfile.mockClear();
+    window.dispatchEvent(new CustomEvent("drpa-data-file-drop", {
+      detail: { paths: ["D:\\data\\dropped.xlsx"] },
+    }));
+    await waitFor(() => expect(saveProfile).toHaveBeenCalledWith(expect.objectContaining({
+      name: "dropped",
+      engine: "excel",
+      database: "D:\\data\\dropped.xlsx",
+    })));
   });
 
   it("loads persisted run details when opening the run history", async () => {
@@ -296,6 +372,48 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.queryByText("紧凑布局")).not.toBeInTheDocument();
   });
 
+  it("applies compact layout, hides page headers, and controls Agent tools from settings", async () => {
+    render(<App />);
+    await waitFor(() => expect(document.documentElement.dataset.uiDensity).toBe("compact"));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+
+    expect(await screen.findByRole("radio", { name: "紧凑" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "舒适" }));
+    await waitFor(() => expect(document.documentElement.dataset.uiDensity).toBe("comfortable"));
+
+    fireEvent.click(screen.getByRole("switch", { name: "隐藏页面大标题" }));
+    await waitFor(() => expect(document.documentElement.dataset.hidePageHeaders).toBe("true"));
+
+    const masterToolSwitch = screen.getByRole("switch", { name: "启用 AI Agent 工具" });
+    const databaseToolSwitch = screen.getByRole("switch", { name: "只读数据库" });
+    expect(masterToolSwitch).toBeChecked();
+    expect(databaseToolSwitch).toBeEnabled();
+    fireEvent.click(masterToolSwitch);
+    expect(databaseToolSwitch).toBeDisabled();
+  });
+
+  it("collapses and restores the global and workbench sidebars", async () => {
+    render(<App />);
+
+    const hideNavigation = await screen.findByRole("button", { name: "隐藏主侧边栏" });
+    fireEvent.click(hideNavigation);
+    expect(screen.getByRole("button", { name: "展开主侧边栏" })).toBeVisible();
+    expect(screen.getByRole("complementary", { name: "主导航图标栏" })).toBeVisible();
+    expect(screen.getByRole("navigation", { name: "主导航" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "数据工作台" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "展开主侧边栏" }));
+    expect(await screen.findByRole("navigation", { name: "主导航" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "数据工作台" }));
+    const hideConnections = await screen.findByRole("button", { name: "隐藏数据连接侧边栏" });
+    fireEvent.click(hideConnections);
+    expect(screen.getByRole("button", { name: "展开数据连接侧边栏" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "查询 1" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "隐藏字段结构侧边栏" }));
+    expect(screen.getByRole("button", { name: "展开字段结构侧边栏" })).toBeVisible();
+  });
+
   it("uses Linux platform capabilities and hides the Windows updater", async () => {
     vi.spyOn(desktopGateway, "getPlatformCapabilities").mockResolvedValue({
       os: "linux",
@@ -310,6 +428,62 @@ describe("DRPA Next desktop shell", () => {
     expect(await screen.findByRole("button", { name: "在文件管理器中打开" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Windows 轻量热更新" })).not.toBeInTheDocument();
     expect(screen.getByText(/XDG 本地数据目录/)).toBeVisible();
+  });
+
+  it("exports and imports user data through native dialogs with visible feedback", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    const exportData = vi.spyOn(desktopGateway, "exportUserData").mockResolvedValue({
+      path: "D:\\backups\\workspace.drpa-data",
+      fileCount: 18,
+      totalBytes: 65_536,
+      workspaceName: "个人工作区",
+      restartRequired: false,
+    });
+    const importData = vi.spyOn(desktopGateway, "importUserData").mockResolvedValue({
+      path: "D:\\backups\\workspace.drpa-data",
+      fileCount: 18,
+      totalBytes: 65_536,
+      workspaceName: "导入工作区",
+      restartRequired: true,
+    });
+    dialogMocks.save.mockResolvedValue("D:\\backups\\workspace");
+    dialogMocks.open.mockResolvedValue("D:\\backups\\workspace.drpa-data");
+    dialogMocks.confirm.mockResolvedValue(true);
+    render(<SettingsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "导出用户数据" }));
+    await waitFor(() => expect(dialogMocks.save).toHaveBeenCalledWith(expect.objectContaining({
+      filters: [{ name: "DRPA 用户数据", extensions: ["drpa-data"] }],
+    })));
+    await waitFor(() => expect(exportData).toHaveBeenCalledWith("D:\\backups\\workspace.drpa-data"));
+    expect(await screen.findByRole("status")).toHaveTextContent(/已导出 18 个文件/);
+
+    fireEvent.click(screen.getByRole("button", { name: "导入用户数据" }));
+    await waitFor(() => expect(dialogMocks.open).toHaveBeenCalled());
+    await waitFor(() => expect(dialogMocks.confirm).toHaveBeenCalled());
+    await waitFor(() => expect(importData).toHaveBeenCalledWith("D:\\backups\\workspace.drpa-data"));
+    expect(await screen.findByRole("status")).toHaveTextContent(/已导入 18 个文件到“导入工作区”/);
+  });
+
+  it("reports a cancelled or failed user-data export", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    const exportData = vi.spyOn(desktopGateway, "exportUserData");
+    dialogMocks.save.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("save dialog unavailable"));
+    render(<SettingsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "导出用户数据" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("已取消导出用户数据");
+    expect(exportData).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "导出用户数据" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/导出失败：.*save dialog unavailable/);
+    expect(exportData).not.toHaveBeenCalled();
   });
 
   it("requires an explicit in-app confirmation before rebuilding the sealed runtime", async () => {
@@ -330,6 +504,34 @@ describe("DRPA Next desktop shell", () => {
     expect(repairRuntime).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认重建" }));
     await waitFor(() => expect(repairRuntime).toHaveBeenCalledOnce());
+  });
+
+  it("shows local CPU, memory, and disk metrics in the runtime page", async () => {
+    vi.spyOn(desktopGateway, "getSystemMetrics").mockResolvedValue({
+      sampledAt: Date.now(),
+      cpu: { usagePercent: 25, logicalCores: 8 },
+      memory: { usedBytes: 8 * 1024 ** 3, totalBytes: 16 * 1024 ** 3, usagePercent: 50 },
+      disk: {
+        usedBytes: 200 * 1024 ** 3,
+        totalBytes: 500 * 1024 ** 3,
+        usagePercent: 40,
+        volumes: [{
+          name: "本地磁盘 C:",
+          mountPoint: "C:\\",
+          usedBytes: 200 * 1024 ** 3,
+          totalBytes: 500 * 1024 ** 3,
+          usagePercent: 40,
+        }],
+      },
+    });
+
+    render(<RuntimePage />);
+
+    expect(await screen.findByRole("region", { name: "本机资源监控" })).toBeVisible();
+    expect(await screen.findByRole("progressbar", { name: "CPU使用率" })).toHaveAttribute("aria-valuenow", "25");
+    expect(screen.getByRole("progressbar", { name: "内存使用率" })).toHaveAttribute("aria-valuenow", "50");
+    expect(screen.getByRole("progressbar", { name: "磁盘使用率" })).toHaveAttribute("aria-valuenow", "40");
+    expect(screen.getByText("C:\\")).toBeVisible();
   });
 
   it("shows the current system account instead of a hard-coded profile", async () => {
@@ -354,6 +556,7 @@ describe("DRPA Next desktop shell", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "AI Agent" })).toBeVisible();
+    expect(await screen.findByText("SESSION.DB")).toBeVisible();
     fireEvent.change(screen.getByLabelText("Agent 开发项目"), { target: { value: project.id } });
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "session-key" } });
     const composer = screen.getByPlaceholderText(/向 Agent 描述/);
@@ -361,8 +564,8 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true });
 
     await waitFor(() => expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-5.4-mini",
+      baseUrl: "http://127.0.0.1/v1",
+      model: "deepseek-v4-flash",
       apiKey: "session-key",
       projectId: project.id,
     })));
@@ -375,37 +578,142 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByLabelText("OpenAI 兼容 URL")).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "新建 Agent 对话" }));
-    expect(screen.getByText("从一个 RPAZ 开发任务开始")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "删除对话 新对话" }));
+    expect(await screen.findByText("从一次对话或一个项目开始")).toBeVisible();
+    fireEvent.click(screen.getAllByRole("button", { name: "删除对话 新对话" })[0]);
     expect(screen.getByRole("dialog", { name: "确认删除对话" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    expect(screen.getByRole("button", { name: "打开对话 新对话" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "打开对话 新对话" })[0]).toBeVisible();
     const previousSession = screen.getByRole("button", { name: "打开对话 校验当前项目" });
     fireEvent.click(previousSession);
     expect(screen.getByText("项目校验通过。")).toBeVisible();
   });
 
-  it("manages local service plugins and exposes a provider endpoint", async () => {
+  it("migrates only legacy Agent sessions missing from session.db before clearing the cache", async () => {
+    const existing = {
+      id: "agent-existing",
+      title: "数据库已有会话",
+      projectId: "",
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [],
+      selectedSkillIds: [],
+      messageCount: 0,
+    };
+    const missing = {
+      id: "agent-missing",
+      title: "待迁移会话",
+      projectId: "",
+      createdAt: 3,
+      updatedAt: 4,
+      messages: [{ id: "legacy-message", role: "user" as const, content: "保留我" }],
+      selectedSkillIds: ["data-analysis"],
+      messageCount: 1,
+    };
+    vi.spyOn(desktopGateway, "listAgentSessions")
+      .mockResolvedValueOnce([{
+        id: existing.id,
+        title: existing.title,
+        projectId: null,
+        createdAt: existing.createdAt,
+        updatedAt: existing.updatedAt,
+        messageCount: 0,
+        selectedSkillIds: [],
+      }])
+      .mockResolvedValue([{
+        id: existing.id,
+        title: existing.title,
+        projectId: null,
+        createdAt: existing.createdAt,
+        updatedAt: existing.updatedAt,
+        messageCount: 0,
+        selectedSkillIds: [],
+      }, {
+        id: missing.id,
+        title: missing.title,
+        projectId: null,
+        createdAt: missing.createdAt,
+        updatedAt: missing.updatedAt,
+        messageCount: 1,
+        selectedSkillIds: missing.selectedSkillIds,
+      }]);
+    const saveSession = vi.spyOn(desktopGateway, "saveAgentSession").mockResolvedValue(missing);
+    useAppStore.setState({
+      activeWorkspaceId: "personal",
+      workspaceScopeLoaded: true,
+      agentWorkspaceStates: {
+        personal: {
+          sessions: [existing, missing],
+          activeSessionId: existing.id,
+          projectId: "",
+        },
+      },
+      agentSessions: [existing, missing],
+      activeAgentSessionId: existing.id,
+    });
+
+    render(<AgentPage />);
+
+    await waitFor(() => expect(saveSession).toHaveBeenCalledTimes(1));
+    expect(saveSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: missing.id,
+      messages: missing.messages,
+    }));
+    expect(saveSession).not.toHaveBeenCalledWith(expect.objectContaining({ id: existing.id }));
+    await waitFor(() => expect(useAppStore.getState().agentWorkspaceStates.personal).toBeUndefined());
+  });
+
+  it("starts a manifest-driven Dify2API plugin and runs its declared debugger endpoint", async () => {
+    const setPluginEnabled = vi.spyOn(desktopGateway, "setPluginEnabled");
     const startPlugin = vi.spyOn(desktopGateway, "startPlugin");
-    const testPluginConnection = vi.spyOn(desktopGateway, "testPluginConnection");
+    const runPluginDebugger = vi.spyOn(desktopGateway, "runPluginDebugger");
+    const createPluginProject = vi.spyOn(desktopGateway, "createPluginProject");
     useAppStore.setState({ activeNavigation: "plugins" });
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "插件" })).toBeVisible();
-    expect((await screen.findAllByText("Dify Loves Hermes"))[0]).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "插件工作台" })).toBeVisible();
+    expect((await screen.findAllByText("Dify2API 网关"))[0]).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "启用" }));
+    await waitFor(() => expect(setPluginEnabled).toHaveBeenCalledWith("dify2api", true));
+    await waitFor(() => expect(screen.getByRole("button", { name: "启动" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "启动" }));
-    await waitFor(() => expect(startPlugin).toHaveBeenCalledWith("dify-loves-hermes"));
-    expect(screen.getAllByText(/Dify App API 转换为 OpenAI 兼容接口/)[0]).toBeVisible();
-    expect(screen.getByText("http://127.0.0.1:34121/v1")).toBeVisible();
-    fireEvent.click(await screen.findByRole("button", { name: "测试 Dify 连接" }));
-    await waitFor(() => expect(testPluginConnection).toHaveBeenCalledWith("dify-loves-hermes"));
-    expect(await screen.findByText(/Dify App API 连接成功/)).toBeVisible();
+    await waitFor(() => expect(startPlugin).toHaveBeenCalledWith("dify2api"));
+    expect(screen.getAllByText(/将 Dify Agent 转换为 OpenAI 兼容服务/)[0]).toBeVisible();
+
+    fireEvent.click(screen.getByRole("tab", { name: "服务 / Provider" }));
+    expect((await screen.findAllByText("http://127.0.0.1:34123/v1"))[0]).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "API 调试" }));
+    expect(await screen.findByRole("heading", { name: "API 调试器" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /服务健康/ }));
+    fireEvent.click(screen.getByRole("button", { name: "运行端点" }));
+    await waitFor(() => expect(runPluginDebugger).toHaveBeenCalledWith("dify2api", "health", {}));
+    expect(await screen.findByText("HTTP 200")).toBeVisible();
+    expect(screen.getByText(/"service": "dify2api"/)).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "插件开发" }));
     fireEvent.change(screen.getByLabelText("插件项目 ID"), { target: { value: "example-tool" } });
     fireEvent.change(screen.getByLabelText("插件项目名称"), { target: { value: "Example Tool" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(createPluginProject).toHaveBeenCalledWith("example-tool", "Example Tool", "bundle"));
     expect(await screen.findByText("Example Tool")).toBeVisible();
+  });
+
+  it("connects an Agent to a plugin Provider through an opaque host credential reference", async () => {
+    await desktopGateway.setPluginEnabled("dify2api", true);
+    await desktopGateway.startPlugin("dify2api");
+    useAppStore.setState({ activeNavigation: "plugins" });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "插件工作台" })).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "服务 / Provider" }));
+    fireEvent.click(await screen.findByRole("button", { name: "用于 AI Agent" }));
+
+    await waitFor(() => expect(useAppStore.getState().activeNavigation).toBe("agent"));
+    expect(useAppStore.getState().agentProviderRef).toEqual({
+      pluginId: "dify2api",
+      providerId: "openai",
+    });
+    expect(useAppStore.getState().agentApiKey).toBe("");
+    expect(await screen.findByText(/密钥不会进入页面/)).toBeVisible();
   });
 
   it("renders streamed Agent Markdown and supports editing or regenerating the latest turn", async () => {
@@ -441,10 +749,15 @@ describe("DRPA Next desktop shell", () => {
     await waitFor(() => expect(screen.getByText("Markdown 已完成。")).toBeVisible());
     expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({
       stream: true,
-      contextWindow: 128000,
-      maxOutputTokens: 4096,
+      contextWindow: 393216,
+      maxOutputTokens: 98304,
       maxRounds: 96,
       temperature: 0.2,
+      toolPolicy: expect.objectContaining({
+        enabled: true,
+        databaseRead: true,
+        arbitraryFileRead: true,
+      }),
       requestId: expect.stringMatching(/^req-/),
     }));
 
@@ -469,6 +782,12 @@ describe("DRPA Next desktop shell", () => {
 
     expect(await screen.findByRole("heading", { name: "知识文档" })).toBeVisible();
     expect(await screen.findByRole("heading", { name: "RPAZ 开发指南" })).toBeVisible();
+    fireEvent.contextMenu(screen.getByRole("tree", { name: "知识库目录" }));
+    fireEvent.click(screen.getByRole("button", { name: "新建根目录" }));
+    const rootDirectoryInput = screen.getByLabelText("新目录名称");
+    fireEvent.change(rootDirectoryInput, { target: { value: "根级目录" } });
+    fireEvent.keyDown(rootDirectoryInput, { key: "Enter" });
+    await waitFor(() => expect(create).toHaveBeenCalledWith("根级目录", "directory"));
     fireEvent.click(screen.getByRole("link", { name: "快速开始" }));
     expect(await screen.findByRole("heading", { name: "快速开始" })).toBeVisible();
 
@@ -558,6 +877,31 @@ describe("DRPA Next desktop shell", () => {
 
     await waitFor(() => expect(openBuild).toHaveBeenCalledOnce());
     expect(await screen.findByText(/RPAZ 已导出并打开所在目录/)).toBeVisible();
+  });
+
+  it("saves a Studio project directly into the local RPAZ package library", async () => {
+    const project = { id: "project-000000000000000000000002", name: "本地发布测试", files: ["main.py"] };
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
+    vi.spyOn(desktopGateway, "readProjectFile").mockResolvedValue("def main(ctx): return {'ok': True}\n");
+    const install = vi.spyOn(desktopGateway, "installStudioProject").mockResolvedValue({
+      id: "local.publish-test",
+      name: "本地发布测试",
+      description: "",
+      version: "0.1.0",
+      runtime: "Python 3.11",
+      trust: "local",
+      accent: "#4f6ef7",
+      initials: "本地",
+      parameters: [],
+      profiles: [],
+    });
+    render(<StudioPage />);
+
+    expect(await screen.findByText("本地发布测试")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "保存到 RPAZ 包" }));
+
+    await waitFor(() => expect(install).toHaveBeenCalledWith(project.id));
+    expect(await screen.findByText(/已保存到 RPAZ 包库/)).toBeVisible();
   });
 
   it("opens the Studio file context menu", async () => {

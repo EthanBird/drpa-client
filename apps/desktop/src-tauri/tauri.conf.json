@@ -11,12 +11,29 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; frame-src 'self' http://127.0.0.1:* http://[::1]:*"
     },
     "windows": [
       {
+        "label": "splashscreen",
+        "title": "DRPA Next",
+        "url": "splash.html",
+        "width": 880,
+        "height": 550,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": true,
+        "center": true
+      },
+      {
         "label": "main",
         "title": "DRPA Next",
+        "visible": false,
         "width": 1440,
         "height": 900,
         "minWidth": 1024,

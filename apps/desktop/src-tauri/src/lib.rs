@@ -4,10 +4,13 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering as AtomicOrdering},
+};
 
 use drpa_host::{HostState, RunLaunch};
-use drpa_package::{PackageManifest, safe_relative_path, validate_package_id};
+use drpa_package::{Entrypoint, PackageManifest, safe_relative_path, validate_package_id};
 use drpa_protocol::{
     PackageSummary, RUNTIME_PROTOCOL_VERSION, RuntimeEvent, WindowsUpdatePhase,
     WindowsUpdateSession, WindowsUpdateStatus, WorkspaceSnapshot,
@@ -15,15 +18,20 @@ use drpa_protocol::{
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
-use zip::write::SimpleFileOptions;
+use zip::{ZipArchive, write::SimpleFileOptions};
 
 mod agent;
 mod agent_config;
+mod agent_documents;
+mod agent_sessions;
+mod automations;
 mod database;
 mod knowledge;
+mod knowledge_base;
 mod local_dify;
 mod local_dify_workflow;
 mod plugins;
+mod system_metrics;
 mod workspaces;
 
 const WINDOWS_UPDATE_SCHEMA: u32 = 2;
@@ -46,6 +54,11 @@ struct StudioKernelManager {
 struct RunProcessManager {
     #[cfg(target_os = "linux")]
     process_groups: Arc<Mutex<HashMap<String, LinuxRunProcessGroup>>>,
+}
+
+struct StartupState {
+    started_at: std::time::Instant,
+    reveal_requested: Arc<AtomicBool>,
 }
 
 #[cfg(target_os = "linux")]
@@ -235,6 +248,32 @@ struct CurrentUser {
     initials: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserDataTransferResult {
+    path: String,
+    file_count: usize,
+    total_bytes: u64,
+    workspace_name: String,
+    restart_required: bool,
+}
+
+struct TemporaryFileCleanup(PathBuf);
+
+impl Drop for TemporaryFileCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+struct TemporaryDirectoryCleanup(PathBuf);
+
+impl Drop for TemporaryDirectoryCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 #[tauri::command]
 fn get_current_user() -> CurrentUser {
     let account_name = std::env::var("USERNAME")
@@ -304,6 +343,52 @@ fn report_ui_ready() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn complete_startup(app: tauri::AppHandle, startup: State<'_, StartupState>) -> Result<(), String> {
+    if startup.reveal_requested.swap(true, AtomicOrdering::AcqRel) {
+        return Ok(());
+    }
+    let remaining = std::time::Duration::from_secs(2).saturating_sub(startup.started_at.elapsed());
+    std::thread::spawn(move || {
+        if !remaining.is_zero() {
+            std::thread::sleep(remaining);
+        }
+        set_startup_progress_handle(&app, 100, "启动完成", "ui://ready");
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        reveal_main_window(&app);
+    });
+    Ok(())
+}
+
+fn reveal_main_window(app: &tauri::AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    if let Some(splash) = app.get_webview_window("splashscreen") {
+        let _ = splash.close();
+    }
+}
+
+fn set_startup_progress_handle(
+    app: &tauri::AppHandle,
+    progress: u8,
+    label: &str,
+    current_file: &str,
+) {
+    let status = serde_json::json!({
+        "progress": progress.min(100),
+        "label": label,
+        "currentFile": current_file,
+    });
+    let Ok(status) = serde_json::to_string(&status) else {
+        return;
+    };
+    if let Some(splash) = app.get_webview_window("splashscreen") {
+        let _ = splash.eval(format!("window.__DRPA_STARTUP_STATUS__ = {status};"));
+    }
+}
+
+#[tauri::command]
 fn report_ui_input_ready() -> Result<(), String> {
     write_ui_test_marker(
         "DRPA_UI_INPUT_READY_FILE",
@@ -343,13 +428,31 @@ async fn start_run(
     paths: State<'_, AppPaths>,
     processes: State<'_, RunProcessManager>,
 ) -> Result<String, String> {
+    dispatch_run_background(
+        state.inner().clone(),
+        paths.inner().clone(),
+        processes.inner().clone(),
+        &package_id,
+        &profile_id,
+        parameters,
+    )
+}
+
+fn dispatch_run_background(
+    state: HostState,
+    paths: AppPaths,
+    processes: RunProcessManager,
+    package_id: &str,
+    profile_id: &str,
+    parameters: serde_json::Value,
+) -> Result<String, String> {
     let launch = state
-        .prepare_run(&package_id, &profile_id, &parameters)
+        .prepare_run(package_id, profile_id, &parameters)
         .map_err(|error| error.to_string())?;
     let run_id = launch.run_id.clone();
-    let background_state = state.inner().clone();
-    let background_paths = paths.inner().clone();
-    let background_processes = processes.inner().clone();
+    let background_state = state;
+    let background_paths = paths;
+    let background_processes = processes;
     let background_run_id = run_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(error) = execute_python_run(
@@ -364,6 +467,60 @@ async fn start_run(
         }
     });
     Ok(run_id)
+}
+
+pub(crate) fn dispatch_automation_run(
+    state: &HostState,
+    paths: &AppPaths,
+    processes: &RunProcessManager,
+    plan: &automations::AutomationPlan,
+) -> Result<serde_json::Value, String> {
+    if plan.action.kind != "rpaz-package" {
+        return Err(format!("暂不支持的自动化动作：{}", plan.action.kind));
+    }
+    let profile_id = if plan.action.entrypoint.trim().is_empty() {
+        "default"
+    } else {
+        plan.action.entrypoint.trim()
+    };
+    let mut parameters = plan.action.parameters.clone();
+    if !parameters.is_object() {
+        parameters = serde_json::json!({"value": parameters});
+    }
+    if let Some(values) = parameters.as_object_mut() {
+        values.insert(
+            "_drpa_automation".to_owned(),
+            serde_json::json!({
+                "planId": plan.id,
+                "planName": plan.name,
+                "deliveryTargets": plan.delivery_targets,
+            }),
+        );
+    }
+    let launch = state
+        .prepare_run(&plan.action.package_id, profile_id, &parameters)
+        .map_err(|error| error.to_string())?;
+    let run_id = launch.run_id.clone();
+    if let Err(error) = execute_python_run(state, paths, processes, &launch, &parameters) {
+        if !state.run_is_cancelled(&run_id) {
+            state.fail_run(&run_id, error.clone());
+        }
+        return Err(error);
+    }
+    let detail = state
+        .get_run_detail(&run_id)
+        .map_err(|error| error.to_string())?;
+    if !matches!(detail.summary.status, drpa_protocol::RunStatus::Success) {
+        return Err(detail
+            .error_message
+            .unwrap_or_else(|| format!("RPAZ 自动化运行未成功：{run_id}")));
+    }
+    Ok(serde_json::json!({
+        "runId": run_id,
+        "status": "success",
+        "outputDirectory": detail.output_dir,
+        "artifacts": detail.artifacts,
+    }))
 }
 
 #[tauri::command]
@@ -657,8 +814,24 @@ fn import_project_file(
 
 #[tauri::command]
 fn build_studio_project(project_id: String, paths: State<'_, AppPaths>) -> Result<String, String> {
-    validate_project_id(&project_id)?;
-    let root = paths.workspace_root.join("projects").join(&project_id);
+    build_studio_project_inner(&project_id, &paths).map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn install_studio_project(
+    project_id: String,
+    paths: State<'_, AppPaths>,
+    state: State<'_, HostState>,
+) -> Result<PackageSummary, String> {
+    let archive = build_studio_project_inner(&project_id, &paths)?;
+    state
+        .install_package(&archive)
+        .map_err(|error| format!("保存到 RPAZ 包库失败：{error}"))
+}
+
+fn build_studio_project_inner(project_id: &str, paths: &AppPaths) -> Result<PathBuf, String> {
+    validate_project_id(project_id)?;
+    let root = paths.workspace_root.join("projects").join(project_id);
     let manifest_source = fs::read_to_string(root.join("manifest.yaml"))
         .map_err(|error| format!("无法读取 manifest.yaml：{error}"))?;
     let manifest =
@@ -686,7 +859,7 @@ fn build_studio_project(project_id: String, paths: State<'_, AppPaths>) -> Resul
             .map_err(|error| error.to_string())?;
     }
     archive.finish().map_err(|error| error.to_string())?;
-    Ok(output.to_string_lossy().into_owned())
+    Ok(output)
 }
 
 #[tauri::command]
@@ -735,7 +908,7 @@ fn open_installed_package(
     validate_package_id(&package_id).map_err(|error| error.to_string())?;
     let package_root = paths.workspace_root.join("packages").join(&package_id);
     let mut versions: Vec<PathBuf> = fs::read_dir(&package_root)
-        .map_err(|_| format!("找不到已安装脚本包：{package_id}"))?
+        .map_err(|_| format!("找不到已安装 RPAZ 包：{package_id}"))?
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.join("manifest.yaml").is_file())
@@ -743,7 +916,7 @@ fn open_installed_package(
     versions.sort();
     let source = versions
         .pop()
-        .ok_or_else(|| format!("脚本包 {package_id} 没有可编辑版本"))?;
+        .ok_or_else(|| format!("RPAZ 包 {package_id} 没有可编辑版本"))?;
     let manifest = PackageManifest::from_yaml(
         &fs::read_to_string(source.join("manifest.yaml")).map_err(|error| error.to_string())?,
     )
@@ -1069,9 +1242,40 @@ async fn start_plugin(
     let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         plugins::start_plugin_inner(&workspace_root, &plugin_id, &python, &manager)
+            .map_err(|error| plugins::redact_plugin_error(&workspace_root, &plugin_id, error))
     })
     .await
     .map_err(|error| format!("插件后台启动任务失败：{error}"))?
+}
+
+#[tauri::command]
+fn list_plugin_tools(
+    plugin_id: String,
+    paths: State<'_, AppPaths>,
+) -> Result<Vec<plugins::PluginToolDescriptor>, String> {
+    plugins::list_plugin_tools_for_workbench(&paths.workspace_root, &plugin_id)
+}
+
+#[tauri::command]
+async fn invoke_plugin_tool(
+    plugin_id: String,
+    tool_name: String,
+    input: serde_json::Value,
+    paths: State<'_, AppPaths>,
+) -> Result<plugins::PluginToolWorkbenchResult, String> {
+    let paths = paths.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let python = locate_runtime(&paths)?.python;
+        plugins::invoke_plugin_tool_for_workbench(
+            &paths.workspace_root,
+            &python,
+            &plugin_id,
+            &tool_name,
+            &input,
+        )
+    })
+    .await
+    .map_err(|error| format!("插件工具后台任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -1097,6 +1301,252 @@ fn get_data_directory(paths: State<'_, AppPaths>) -> String {
 fn open_workspace_data_directory(paths: State<'_, AppPaths>) -> Result<(), String> {
     fs::create_dir_all(&paths.workspace_root).map_err(|error| error.to_string())?;
     open_directory_in_file_explorer(&paths.workspace_root)
+}
+
+const USER_DATA_DIRECTORIES: &[&str] = &[
+    "agent",
+    "automations",
+    "build",
+    "databases",
+    "knowledge",
+    "knowledge-bases",
+    "local-dify",
+    "packages",
+    "plugin-projects",
+    "plugins",
+    "projects",
+    "runs",
+    "system",
+];
+
+#[tauri::command]
+fn export_user_data(
+    target_path: String,
+    paths: State<'_, AppPaths>,
+) -> Result<UserDataTransferResult, String> {
+    let target = PathBuf::from(target_path);
+    if !target.is_absolute() {
+        return Err("导出文件必须使用绝对路径".to_owned());
+    }
+    let parent = target.parent().ok_or_else(|| "导出路径无效".to_owned())?;
+    fs::create_dir_all(parent).map_err(|error| format!("创建导出目录失败：{error}"))?;
+    let canonical_workspace = fs::canonicalize(&paths.workspace_root)
+        .map_err(|error| format!("检查当前工作区失败：{error}"))?;
+    let canonical_parent =
+        fs::canonicalize(parent).map_err(|error| format!("检查导出目录失败：{error}"))?;
+    if canonical_parent.starts_with(&canonical_workspace) {
+        return Err("导出文件不能保存在当前工作区内部，请选择其他目录".to_owned());
+    }
+
+    let export_stage =
+        std::env::temp_dir().join(format!("drpa-export-{}", Uuid::new_v4().simple()));
+    fs::create_dir(&export_stage).map_err(|error| format!("创建导出暂存目录失败：{error}"))?;
+    let _export_stage_cleanup = TemporaryDirectoryCleanup(export_stage.clone());
+    let session_snapshot = export_stage.join("session.db");
+    let has_session_snapshot =
+        agent_sessions::create_export_snapshot(&paths.workspace_root, &session_snapshot)?;
+    let temporary = export_stage.join("user-data.tmp");
+    let file = File::create(&temporary).map_err(|error| format!("创建导出文件失败：{error}"))?;
+    let mut archive = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let workspace_name = workspaces::active_workspace_name(&paths.data_root)
+        .unwrap_or_else(|_| "当前工作区".to_owned());
+    let metadata = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema": 1,
+        "kind": "drpa-user-data",
+        "workspaceName": workspace_name,
+        "exportedAt": chrono::Utc::now().timestamp_millis(),
+    }))
+    .map_err(|error| error.to_string())?;
+    archive
+        .start_file("user-data.json", options)
+        .map_err(|error| format!("写入导出清单失败：{error}"))?;
+    archive
+        .write_all(&metadata)
+        .map_err(|error| format!("写入导出清单失败：{error}"))?;
+
+    let mut file_count = 0usize;
+    let mut total_bytes = 0u64;
+    for directory in USER_DATA_DIRECTORIES {
+        let root = paths.workspace_root.join(directory);
+        if !root.is_dir() {
+            continue;
+        }
+        if *directory == "agent" && has_session_snapshot {
+            let size = session_snapshot
+                .metadata()
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            archive
+                .start_file("agent/session.db", options)
+                .map_err(|error| format!("写入 Agent 会话快照失败：{error}"))?;
+            let mut input = File::open(&session_snapshot)
+                .map_err(|error| format!("读取 Agent 会话快照失败：{error}"))?;
+            std::io::copy(&mut input, &mut archive)
+                .map_err(|error| format!("压缩 Agent 会话快照失败：{error}"))?;
+            file_count += 1;
+            total_bytes = total_bytes.saturating_add(size);
+        }
+        let mut files = Vec::new();
+        collect_files(&root, &root, &mut files)
+            .map_err(|error| format!("扫描 {directory} 失败：{error}"))?;
+        files.sort();
+        for relative in files {
+            let normalized_relative = relative.replace('\\', "/");
+            if *directory == "agent"
+                && matches!(
+                    normalized_relative.as_str(),
+                    "session.db" | "session.db-wal" | "session.db-shm"
+                )
+            {
+                continue;
+            }
+            let source = root.join(&relative);
+            let size = source
+                .metadata()
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            let archive_path = format!("{directory}/{normalized_relative}");
+            archive
+                .start_file(archive_path, options)
+                .map_err(|error| format!("写入用户数据失败：{error}"))?;
+            let mut input = File::open(&source)
+                .map_err(|error| format!("读取 {} 失败：{error}", source.display()))?;
+            std::io::copy(&mut input, &mut archive)
+                .map_err(|error| format!("压缩 {} 失败：{error}", source.display()))?;
+            file_count += 1;
+            total_bytes = total_bytes.saturating_add(size);
+        }
+    }
+    archive
+        .finish()
+        .map_err(|error| format!("完成用户数据导出失败：{error}"))?;
+    let target_staging = parent.join(format!(".drpa-export-{}.tmp", Uuid::new_v4().simple()));
+    let _target_staging_cleanup = TemporaryFileCleanup(target_staging.clone());
+    fs::copy(&temporary, &target_staging)
+        .map_err(|error| format!("提交用户数据导出失败：{error}"))?;
+    if target.exists() {
+        fs::remove_file(&target).map_err(|error| format!("替换已有导出文件失败：{error}"))?;
+    }
+    fs::rename(&target_staging, &target)
+        .map_err(|error| format!("提交用户数据导出失败：{error}"))?;
+    Ok(UserDataTransferResult {
+        path: target.to_string_lossy().into_owned(),
+        file_count,
+        total_bytes,
+        workspace_name,
+        restart_required: false,
+    })
+}
+
+#[tauri::command]
+fn import_user_data(
+    source_path: String,
+    app: tauri::AppHandle,
+    paths: State<'_, AppPaths>,
+    host: State<'_, HostState>,
+) -> Result<UserDataTransferResult, String> {
+    if host.snapshot().stats.active_runs > 0 {
+        return Err("存在正在运行的任务，请等待任务结束后再导入用户数据".to_owned());
+    }
+    let source = PathBuf::from(source_path);
+    if !source.is_absolute() || !source.is_file() {
+        return Err("请选择有效的 DRPA 用户数据文件".to_owned());
+    }
+    let file = File::open(&source).map_err(|error| format!("打开用户数据文件失败：{error}"))?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|error| format!("用户数据文件不是有效 ZIP：{error}"))?;
+    if archive.len() > 100_000 {
+        return Err("用户数据文件条目过多".to_owned());
+    }
+    let stage = paths
+        .data_root
+        .join(".drpa")
+        .join(format!("import-stage-{}", Uuid::new_v4().simple()));
+    fs::create_dir_all(&stage).map_err(|error| format!("创建导入暂存目录失败：{error}"))?;
+    let result = (|| {
+        let mut workspace_name = "导入的用户数据".to_owned();
+        let mut file_count = 0usize;
+        let mut total_bytes = 0u64;
+        let mut manifest_found = false;
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+            let enclosed = entry
+                .enclosed_name()
+                .ok_or_else(|| format!("用户数据包含不安全路径：{}", entry.name()))?
+                .to_owned();
+            let first = enclosed
+                .components()
+                .next()
+                .and_then(|part| part.as_os_str().to_str())
+                .unwrap_or_default();
+            if first == "user-data.json" {
+                let mut metadata = String::new();
+                entry
+                    .read_to_string(&mut metadata)
+                    .map_err(|error| format!("读取导入清单失败：{error}"))?;
+                let value: serde_json::Value = serde_json::from_str(&metadata)
+                    .map_err(|error| format!("导入清单无效：{error}"))?;
+                if value.get("kind").and_then(serde_json::Value::as_str) != Some("drpa-user-data") {
+                    return Err("该文件不是 DRPA 用户数据导出包".to_owned());
+                }
+                manifest_found = true;
+                if let Some(name) = value
+                    .get("workspaceName")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    workspace_name =
+                        format!("导入 · {}", name.chars().take(48).collect::<String>());
+                }
+                continue;
+            }
+            if !USER_DATA_DIRECTORIES.contains(&first) {
+                return Err(format!("用户数据包含不支持的目录：{first}"));
+            }
+            if entry.is_dir() {
+                fs::create_dir_all(stage.join(&enclosed))
+                    .map_err(|error| format!("创建导入目录失败：{error}"))?;
+                continue;
+            }
+            total_bytes = total_bytes.saturating_add(entry.size());
+            if total_bytes > 4 * 1024 * 1024 * 1024 {
+                return Err("用户数据解压后超过 4 GiB 限制".to_owned());
+            }
+            let target = stage.join(&enclosed);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|error| format!("创建导入目录失败：{error}"))?;
+            }
+            let mut output =
+                File::create(&target).map_err(|error| format!("创建导入文件失败：{error}"))?;
+            std::io::copy(&mut entry, &mut output)
+                .map_err(|error| format!("解压用户数据失败：{error}"))?;
+            file_count += 1;
+        }
+        if !manifest_found {
+            return Err("用户数据文件缺少 DRPA 导出清单".to_owned());
+        }
+        let imported = workspaces::create_import_workspace(&paths.data_root, &workspace_name)?;
+        let target = PathBuf::from(&imported.path);
+        copy_directory(&stage, &target).map_err(|error| format!("提交导入工作区失败：{error}"))?;
+        workspaces::activate_workspace(&paths.data_root, &imported.id)?;
+        knowledge::seed_default_knowledge(&target)
+            .map_err(|error| format!("初始化导入知识库失败：{error}"))?;
+        Ok(UserDataTransferResult {
+            path: target.to_string_lossy().into_owned(),
+            file_count,
+            total_bytes,
+            workspace_name: imported.name,
+            restart_required: true,
+        })
+    })();
+    let _ = fs::remove_dir_all(&stage);
+    if result.is_ok() {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            app.request_restart();
+        });
+    }
+    result
 }
 
 #[tauri::command]
@@ -1822,6 +2272,7 @@ fn execute_python_run(
         "callable": launch.callable,
         "parameters": parameters,
         "database_path": database_path,
+        "package_catalog": installed_package_catalog(paths)?,
     });
     let request_file = File::create(&request_path).map_err(|error| error.to_string())?;
     serde_json::to_writer_pretty(request_file, &request).map_err(|error| error.to_string())?;
@@ -1907,6 +2358,49 @@ fn execute_python_run(
     })();
     processes.unregister(&launch.run_id, process_group);
     result
+}
+
+fn installed_package_catalog(paths: &AppPaths) -> Result<serde_json::Value, String> {
+    let packages_root = paths.workspace_root.join("packages");
+    let mut catalog = serde_json::Map::new();
+    if !packages_root.is_dir() {
+        return Ok(serde_json::Value::Object(catalog));
+    }
+    for package_entry in fs::read_dir(&packages_root)
+        .map_err(|error| format!("读取 RPAZ 包目录失败：{error}"))?
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+    {
+        let mut versions = fs::read_dir(package_entry.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.join("manifest.yaml").is_file())
+            .collect::<Vec<_>>();
+        versions.sort();
+        let Some(package_dir) = versions.pop() else {
+            continue;
+        };
+        let Ok(source) = fs::read_to_string(package_dir.join("manifest.yaml")) else {
+            continue;
+        };
+        let Ok(manifest) = PackageManifest::from_yaml(&source) else {
+            continue;
+        };
+        let Entrypoint::Python { module, callable } = manifest.entrypoint else {
+            continue;
+        };
+        catalog.insert(
+            manifest.id,
+            serde_json::json!({
+                "package_dir": package_dir,
+                "entrypoint": module,
+                "callable": callable,
+            }),
+        );
+    }
+    Ok(serde_json::Value::Object(catalog))
 }
 
 fn collect_project_entries(
@@ -2303,21 +2797,43 @@ fn signal_linux_process_group(process_group: u32, signal: libc::c_int) -> Result
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let startup_started = std::time::Instant::now();
     #[cfg(windows)]
     let mut context = tauri::generate_context!();
     #[cfg(not(windows))]
     let context = tauri::generate_context!();
     #[cfg(windows)]
-    let main_window_config = context
-        .config_mut()
+    let main_window_index = context
+        .config()
         .app
         .windows
-        .pop()
+        .iter()
+        .position(|window| window.label == "main")
         .expect("Windows main window configuration is missing");
+    #[cfg(windows)]
+    let main_window_config = context.config_mut().app.windows.remove(main_window_index);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            // Register the completion state before constructing the main WebView.
+            // On fast machines React can invoke `complete_startup` while setup is
+            // still finishing; late registration made that IPC call fail and left
+            // the splash waiting at the final 94% checkpoint.
+            let reveal_requested = Arc::new(AtomicBool::new(false));
+            app.manage(StartupState {
+                started_at: startup_started,
+                reveal_requested: Arc::clone(&reveal_requested),
+            });
+            if let Some(splash) = app.get_webview_window("splashscreen") {
+                let _ = splash.set_always_on_top(false);
+            }
+            set_startup_progress_handle(
+                app.handle(),
+                6,
+                "正在读取应用配置",
+                "desktop://tauri.conf.json",
+            );
             let data_root = if let Some(path) = std::env::var_os("DRPA_DATA_DIR") {
                 PathBuf::from(path)
             } else {
@@ -2334,9 +2850,27 @@ pub fn run() {
                 }
             };
             fs::create_dir_all(&data_root)?;
+            set_startup_progress_handle(
+                app.handle(),
+                18,
+                "正在准备本地数据目录",
+                "workspace://data",
+            );
             let workspace_root =
                 workspaces::resolve_active_workspace(&data_root).map_err(std::io::Error::other)?;
+            set_startup_progress_handle(
+                app.handle(),
+                31,
+                "正在切换隔离工作区",
+                "workspace://active",
+            );
             knowledge::seed_default_knowledge(&workspace_root)?;
+            set_startup_progress_handle(
+                app.handle(),
+                43,
+                "正在加载知识文档",
+                "knowledge://documents",
+            );
             let resource_dir = app.path().resource_dir().ok();
             let app_paths = AppPaths {
                 data_root: data_root.clone(),
@@ -2344,6 +2878,7 @@ pub fn run() {
                 resource_dir,
             };
             let plugin_manager = plugins::PluginManager::default();
+            set_startup_progress_handle(app.handle(), 55, "正在定位运行环境", "runtime://python");
             if let Ok(runtime) = locate_runtime(&app_paths) {
                 let autostart_workspace = workspace_root.clone();
                 let autostart_manager = plugin_manager.clone();
@@ -2358,6 +2893,12 @@ pub fn run() {
 
             #[cfg(windows)]
             {
+                set_startup_progress_handle(
+                    app.handle(),
+                    66,
+                    "正在启动界面引擎",
+                    "webview://user-data",
+                );
                 let webview_data = data_root.join("webview2-user-data");
                 fs::create_dir_all(&webview_data)?;
                 tauri::WebviewWindowBuilder::from_config(app, &main_window_config)?
@@ -2365,6 +2906,12 @@ pub fn run() {
                     .build()?;
             }
 
+            set_startup_progress_handle(
+                app.handle(),
+                76,
+                "正在建立运行索引",
+                "host://workspace.sqlite3",
+            );
             app.manage(
                 HostState::try_new(workspace_root.clone())
                     .map_err(|error| std::io::Error::other(error.to_string()))?,
@@ -2374,15 +2921,42 @@ pub fn run() {
                 sessions: Arc::new(Mutex::new(HashMap::new())),
             });
             app.manage(RunProcessManager::default());
+            app.manage(system_metrics::SystemMetricsMonitor::default());
             app.manage(plugin_manager);
             app.manage(local_dify::LocalDifyServiceManager::default());
+            let scheduler = automations::SchedulerManager::default();
+            let scheduler_runner = scheduler.clone();
+            app.manage(scheduler);
+            scheduler_runner.start(app.handle().clone());
+            set_startup_progress_handle(
+                app.handle(),
+                88,
+                "正在装载本地服务",
+                "services://agent-tools",
+            );
             acknowledge_windows_update_startup(&data_root)?;
+            set_startup_progress_handle(app.handle(), 94, "正在渲染工作台", "ui://index.html");
+            let fallback_app = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(6));
+                if !reveal_requested.swap(true, AtomicOrdering::AcqRel) {
+                    set_startup_progress_handle(
+                        &fallback_app,
+                        100,
+                        "界面已加载",
+                        "ui://fallback-ready",
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    reveal_main_window(&fallback_app);
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_workspace_snapshot,
             report_ui_ready,
             report_ui_input_ready,
+            complete_startup,
             install_package,
             uninstall_package,
             start_run,
@@ -2400,6 +2974,7 @@ pub fn run() {
             delete_studio_project,
             import_project_file,
             build_studio_project,
+            install_studio_project,
             run_studio_project,
             prepare_studio_kernel,
             execute_studio_cell,
@@ -2420,6 +2995,26 @@ pub fn run() {
             database::describe_remote_database_table,
             database::execute_remote_database_sql,
             database::get_remote_database_schema_context,
+            knowledge_base::list_knowledge_bases,
+            knowledge_base::create_knowledge_base,
+            knowledge_base::delete_knowledge_base,
+            knowledge_base::list_knowledge_base_sources,
+            knowledge_base::import_knowledge_base_files,
+            knowledge_base::import_knowledge_base_directory,
+            knowledge_base::add_knowledge_base_text,
+            knowledge_base::add_knowledge_base_url,
+            knowledge_base::delete_knowledge_base_source,
+            knowledge_base::search_knowledge_base,
+            agent_documents::import_agent_document,
+            agent_documents::list_agent_artifacts,
+            agent_documents::export_agent_artifact,
+            automations::list_automation_plans,
+            automations::create_automation_plan,
+            automations::update_automation_plan,
+            automations::delete_automation_plan,
+            automations::set_automation_plan_enabled,
+            automations::run_automation_plan_now,
+            automations::list_automation_runs,
             local_dify::list_local_dify_apps,
             local_dify::create_local_dify_app,
             local_dify::save_local_dify_app,
@@ -2453,6 +3048,16 @@ pub fn run() {
             agent_config::rename_agent_skill_path,
             agent_config::delete_agent_skill_path,
             agent_config::delete_agent_skill,
+            agent_sessions::list_agent_projects,
+            agent_sessions::create_agent_project,
+            agent_sessions::rename_agent_project,
+            agent_sessions::list_agent_sessions,
+            agent_sessions::create_agent_session,
+            agent_sessions::get_agent_session,
+            agent_sessions::save_agent_session,
+            agent_sessions::rename_agent_session,
+            agent_sessions::move_agent_session,
+            agent_sessions::delete_agent_session,
             plugins::list_plugins,
             plugins::install_plugin,
             plugins::save_plugin_config,
@@ -2462,11 +3067,15 @@ pub fn run() {
             plugins::uninstall_plugin,
             plugins::get_plugin_logs,
             plugins::test_plugin_connection,
+            plugins::run_plugin_debugger,
+            list_plugin_tools,
+            invoke_plugin_tool,
             plugins::list_plugin_projects,
             plugins::create_plugin_project,
             plugins::validate_plugin_project,
             plugins::build_plugin_project,
             get_runtime_status,
+            system_metrics::get_system_metrics,
             get_platform_capabilities,
             initialize_runtime,
             repair_runtime,
@@ -2476,6 +3085,8 @@ pub fn run() {
             restart_for_windows_update,
             get_data_directory,
             open_workspace_data_directory,
+            export_user_data,
+            import_user_data,
             open_build_output_directory,
             get_current_user,
             knowledge::list_knowledge_entries,

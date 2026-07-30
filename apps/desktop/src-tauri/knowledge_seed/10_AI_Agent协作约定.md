@@ -34,7 +34,7 @@ DRPA 的 AI Agent 面向 RPAZ 开发：阅读项目、修改文件、校验 mani
 如果 UI 叫“任务配置”，文档和 prompt 不要交替使用“运行模板”“profile”“预设”而不解释。首次出现可写：
 
 ```text
-任务配置（Task Profile）是脚本包的一组本地参数当前值。
+任务配置（Task Profile）是 RPAZ 包的一组本地参数当前值。
 ```
 
 ### 记录事实与假设
@@ -76,7 +76,7 @@ YAML 使用当前 schema 2，不混入尚未实现的字段。
 
 ## 4. Agent 当前工具边界
 
-AI Agent 配置 OpenAI-compatible URL、model 和可选 key。绑定开发项目后，可使用面向 RPAZ 的窄工具：
+AI Agent 默认使用 `http://127.0.0.1/v1` 与 `deepseek-v4-flash`，也可配置其他 OpenAI-compatible URL、model 和可选 key。绑定通用项目后即可运行 Python 和使用项目工具；包含 `manifest.yaml` 的规范化项目还可作为 RPAZ 包校验和构建。
 
 ### 模型与生成参数
 
@@ -85,8 +85,9 @@ AI Agent 配置 OpenAI-compatible URL、model 和可选 key。绑定开发项目
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
 | 流式输出 | 开启 | 使用 OpenAI-compatible SSE，文本分片到达后立即渲染 Markdown |
-| 上下文窗口 | 128000 tokens | 模型可接收的总 token 预算；较早对话会在请求前从前向后裁剪 |
-| 最大输出 | 4096 tokens | 发送为 Chat Completions 的 `max_tokens`，必须小于上下文窗口 |
+| 上下文窗口 | 393216 tokens（384K） | 模型可接收的总 token 预算；较早对话会在请求前从前向后裁剪 |
+| 最大输出 | 98304 tokens | 发送为 Chat Completions 的 `max_tokens`，必须小于上下文窗口 |
+| Python 超时 | 300 秒 | 可按长任务配置到更长，Host 上限为 24 小时 |
 | Temperature | 0.2 | 控制采样随机度，范围 0–2 |
 
 上下文裁剪会为系统提示、AGENTS.md、MEMORY.md、工具定义和输出预算预留空间，再尽量保留最近消息。Token 数量使用本地保守估算；模型接口返回 usage 时，界面显示服务端统计。

@@ -3,6 +3,7 @@
 .local-dify-header-actions { display: flex; align-items: center; gap: 7px; }
 .local-dify-layout { display: grid; grid-template-columns: 238px minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; border-top: 1px solid var(--border-subtle); }
 .local-dify-layout.workflow-focus { grid-template-columns: 188px minmax(0, 1fr); }
+.local-dify-layout.catalog-collapsed, .local-dify-layout.workflow-focus.catalog-collapsed { grid-template-columns: 30px minmax(0, 1fr); }
 .local-dify-catalog { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; border-right: 1px solid var(--border-subtle); background: var(--surface-1); }
 .local-dify-catalog > header { display: flex; align-items: center; gap: 7px; min-height: 42px; padding: 0 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text-2); }
 .local-dify-catalog > header svg { color: var(--accent); }
@@ -43,6 +44,7 @@
 .local-dify-tabs > button span { min-width: 16px; padding: 1px 4px; border-radius: 999px; background: var(--surface-3); color: var(--text-3); font: calc(6px * var(--font-scale)) var(--font-mono); text-align: center; }
 .local-dify-tabs > em { overflow: hidden; margin-left: auto; color: var(--text-3); font: normal calc(6px * var(--font-scale)) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .local-dify-debug { display: grid; grid-template-columns: minmax(0, 1fr) 245px; min-height: 0; overflow: hidden; }
+.local-dify-debug.inspector-collapsed { grid-template-columns: minmax(0, 1fr) 30px; }
 .dify-chat-stage { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .dify-chat-toolbar { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 11px; border-bottom: 1px solid var(--border-subtle); color: var(--text-3); }
 .dify-chat-toolbar > span { display: flex; align-items: center; gap: 7px; color: var(--text-2); font-size: calc(7px * var(--font-scale)); font-weight: 700; }
@@ -165,7 +167,9 @@
 .dify-provider-dialog > main > footer > span { overflow: hidden; flex: 1; color: var(--text-3); font-size: calc(7px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 1180px) {
   .local-dify-layout { grid-template-columns: 205px minmax(0, 1fr); }
+  .local-dify-layout.catalog-collapsed, .local-dify-layout.workflow-focus.catalog-collapsed { grid-template-columns: 30px minmax(0, 1fr); }
   .local-dify-debug { grid-template-columns: minmax(0, 1fr) 220px; }
+  .local-dify-debug.inspector-collapsed { grid-template-columns: minmax(0, 1fr) 30px; }
   .dify-runs-table > .head, .dify-runs-table details > summary { grid-template-columns: 65px minmax(180px, 1fr) 110px 55px 60px; }
   .dify-runs-table > .head > span:last-child, .dify-runs-table summary > time { display: none; }
 }

@@ -13,7 +13,7 @@ DRPA Local Dify 是面向离线开发与测试的轻量 AI 应用平台。它复
 - Dify YAML DSL 导入、原始文件保留、规范化编辑与重新导出。
 - Dify Service API：`parameters`、`chat-messages`、`completion-messages` 与 `workflows/run`。
 - 本地发布版本与每个应用独立的 Bearer Token。
-- Local Dify → Dify Loves Hermes → 远程 Dify 的 Provider 链路。
+- 可直接使用插件页导出的 Dify2API 或其他 OpenAI 兼容 Provider。
 - Workflow / Chatflow 可视化画布、节点属性、连线、缩放、校验、撤销重做和调试抽屉。
 - Start、LLM、Template、If/Else、HTTP、Python Code、Answer、End 本地执行器。
 - Dify `workflow.graph` 导入导出和 `/v1/workflows/run` 原生执行。
@@ -126,34 +126,15 @@ POST /v1/workflows/run
 
 `streaming` 响应使用 Dify 风格的 SSE `message` 与 `message_end` 事件。`workflows/run` 执行已发布应用的 Workflow IR，并把最终结果写入 `data.outputs.answer`。
 
-## Dify Loves Hermes 套娃链路
+## Dify2API Provider
 
-`dify-loves-hermes` 0.3 会透传：
+插件页内置的 `dify2api` 能力包可把 Dify Agent 转换为标准 OpenAI
+Chat Completions Provider。启动后，从插件的 Provider 卡片选择“用于 AI
+Agent”即可应用 Endpoint、模型名和独立的本地代理 Key。
 
-```text
-X-DRPA-Trace-Id
-X-DRPA-Provider-Route
-X-DRPA-Hop-Count
-```
-
-因此可以配置：
-
-```text
-DRPA AI Agent
-  → Dify Loves Hermes
-  → DRPA Local Dify Service
-  → OpenAI-compatible Provider
-```
-
-也可以配置：
-
-```text
-DRPA Local Dify
-  → Dify Loves Hermes
-  → Dify Cloud App API
-```
-
-Local Dify 在调用 Provider 前把当前 App ID 加入路由。重复 App ID 或超过四跳时终止执行并写入失败运行记录，避免配置形成无限调用环。
+Local Dify 也可以把该 Endpoint 作为普通 OpenAI Provider 使用，但不要让
+Local Dify 应用经 Dify2API 再指回同一个 Local Dify Service；Dify2API
+不会复用 Dify `conversation_id`，也不承担工作流路由或递归调用检测。
 
 ## DSL 导入导出
 

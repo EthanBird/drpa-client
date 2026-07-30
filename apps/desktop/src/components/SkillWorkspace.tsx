@@ -25,6 +25,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../app/store";
 import type { AgentSkillEntry, AgentSkillPackage, AgentWorkspaceConfig } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
+import { SidebarToggle, useSidebarCollapsed } from "./SidebarToggle";
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
@@ -53,6 +54,8 @@ function fileTemplate(path: string) {
 }
 
 export function SkillWorkspace() {
+  const packagesCollapsed = useSidebarCollapsed("skills-packages");
+  const filesCollapsed = useSidebarCollapsed("skills-files");
   const theme = useAppStore((state) => state.theme);
   const [workspace, setWorkspace] = useState<AgentWorkspaceConfig | null>(null);
   const [skillPackage, setSkillPackage] = useState<AgentSkillPackage | null>(null);
@@ -235,14 +238,16 @@ export function SkillWorkspace() {
   return (
     <section className="settings-card settings-card-wide skills-library-card skills-workspace-card">
       <header><FileCode2 size={18} /><div><h2>Skills 2.0 能力工作区</h2><p>使用目录树和 Monaco 编辑清单、指令、工作流、工具代码、资源及可调用代码库。</p></div><button className="button ghost small" type="button" onClick={() => void refresh(selectedSkill, selectedPath)} disabled={busy}><RefreshCw size={12} /> 刷新</button></header>
-      <div className="skills-workspace-layout">
-        <aside className="skills-package-list">
+      <div className={`skills-workspace-layout${packagesCollapsed ? " packages-collapsed" : ""}${filesCollapsed ? " files-collapsed" : ""}`}>
+        {packagesCollapsed ? <SidebarToggle id="skills-packages" side="left" label="Skills 列表侧边栏" restore /> : <aside className="skills-package-list collapsible-sidebar">
+          <SidebarToggle id="skills-packages" side="left" label="Skills 列表侧边栏" />
           <div className="skill-create-row"><input aria-label="新 Skill 名称" value={newSkillName} onChange={(event) => setNewSkillName(event.target.value.toLowerCase())} onKeyDown={(event) => { if (event.key === "Enter") void createSkill(); }} placeholder="new-skill" /><button type="button" aria-label="创建 Skill" onClick={() => void createSkill()} disabled={busy || !newSkillName.trim()}><Plus size={14} /></button></div>
           <div className="skill-list">{workspace?.skills.map((skill) => <button type="button" className={selectedSkill === skill.name ? "active" : ""} onClick={() => void loadSkill(skill.name)} key={skill.name}><strong>{skill.displayName || skill.name}</strong><span>{skill.description}</span><small>v{skill.version || "1.0.0"} · {skill.toolCount || 0} tools · {skill.libraryCount || 0} libs</small></button>)}</div>
           <button className="button ghost small danger-text skills-delete-package" type="button" disabled={!selectedSkill || busy} onClick={() => setPendingDeleteSkill(selectedSkill)}><Trash2 size={12} /> 删除能力包</button>
-        </aside>
+        </aside>}
 
-        <aside className="skill-file-explorer">
+        {filesCollapsed ? <SidebarToggle id="skills-files" side="left" label="Skill 文件侧边栏" restore /> : <aside className="skill-file-explorer collapsible-sidebar">
+          <SidebarToggle id="skills-files" side="left" label="Skill 文件侧边栏" />
           <header><span><FolderOpen size={13} /> 能力包文件</span><code>{selectedSkill || "-"}</code></header>
           <div className="skill-path-create">
             <div><button type="button" className={createKind === "file" ? "active" : ""} onClick={() => setCreateKind("file")} title="新建文件"><FilePlus2 size={12} /></button><button type="button" className={createKind === "directory" ? "active" : ""} onClick={() => setCreateKind("directory")} title="新建目录"><FolderPlus size={12} /></button></div>
@@ -252,7 +257,7 @@ export function SkillWorkspace() {
           <div className="skill-file-tree" role="tree" aria-label="Skill 文件目录">
             {tree.map((node) => <SkillTreeRow key={node.path} node={node} depth={0} selectedPath={selectedPath} expanded={expanded} renamingPath={renamingPath} renameValue={renameValue} renameRef={renameRef} onRenameValue={setRenameValue} onCommitRename={() => void commitRename()} onCancelRename={() => setRenamingPath("")} onSelect={(entry) => { if (entry.kind === "directory") { setSelectedPath(entry.path); setExpanded((current) => toggleSet(current, entry.path)); } else void loadFile(selectedSkill, entry.path); }} onToggle={(path) => setExpanded((current) => toggleSet(current, path))} onRename={beginRename} onDelete={setPendingDeletePath} />)}
           </div>
-        </aside>
+        </aside>}
 
         <div className="skill-monaco-pane">
           <header><div><strong>{selectedPath || "选择一个文件"}</strong><span>{notice}</span></div>{dirty && <em>未保存</em>}<button className="button secondary small" type="button" disabled={!selectedPath || selectedEntry?.kind !== "file" || busy || !dirty} onClick={() => void save()}><Save size={12} /> 保存</button></header>

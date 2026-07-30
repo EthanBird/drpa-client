@@ -22,6 +22,7 @@ on:
       - "examples/bing_daily_image.rpaz"
       - "installer/**"
       - "offline/**"
+      - "plugins/**"
       - "runtime/python/**"
       - "tools/offline/**"
       - "tools/windows/**"
@@ -158,7 +159,7 @@ jobs:
           $smokeEnvironment = Join-Path $portable "data/runtime-environment/environment"
           & $runtimePython "$portable/runtime/bootstrap_runtime.py" --environment $smokeEnvironment
           if ($LASTEXITCODE -ne 0) { throw "Installed-layout runtime bootstrap failed" }
-          & "$smokeEnvironment/Scripts/python.exe" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); print('DRPA_WINDOWS_RUNTIME_OK')"
+          & "$smokeEnvironment/Scripts/python.exe" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat, docx, openpyxl, pptx, pypdf, reportlab; from drpa_runner import document_worker; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert document_worker.PROTOCOL_VERSION == 1; print('DRPA_WINDOWS_RUNTIME_OK')"
           if ($LASTEXITCODE -ne 0) { throw "Installed-layout Python/Jupyter import smoke failed" }
           Remove-Item (Join-Path $portable "data") -Recurse -Force
 

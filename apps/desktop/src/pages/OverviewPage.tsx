@@ -24,7 +24,7 @@ export function OverviewPage() {
       <section className="metric-grid" aria-label="工作区指标">
         <MetricCard icon={<Activity size={17} />} label="活动任务" value={String(snapshot.stats.activeRuns)} detail="运行中与排队任务" tone="blue" />
         <MetricCard icon={<CheckCircle2 size={17} />} label="30 天成功率" value={`${snapshot.stats.successRate}%`} detail="基于已完成任务" tone="green" />
-        <MetricCard icon={<Box size={17} />} label="已安装脚本包" value={String(snapshot.stats.packages)} detail="来自本地工作区" tone="violet" />
+        <MetricCard icon={<Box size={17} />} label="已安装 RPAZ 包" value={String(snapshot.stats.packages)} detail="来自本地工作区" tone="violet" />
         <MetricCard icon={<Clock3 size={17} />} label="预计节省时间" value={`${snapshot.stats.savedHours} 小时`} detail="根据任务记录估算" tone="amber" />
       </section>
       <div className="overview-grid">
@@ -52,7 +52,7 @@ export function OverviewPage() {
           <header className="panel-header"><div><h2>工作区健康状态</h2><p>Host 实时诊断</p></div><span className="status-badge success">正常</span></header>
           <HealthRow label="Host 控制平面" detail="桌面命令已连接" value="可用" />
           <HealthRow label="Python 3.11 运行环境" detail="封装运行时等待嵌入桌面发行物" value="待接入" />
-          <HealthRow label="脚本包存储" detail={`${snapshot.stats.packages} 个本地脚本包`} value="正常" />
+          <HealthRow label="RPAZ 包存储" detail={`${snapshot.stats.packages} 个本地 RPAZ 包`} value="正常" />
           <HealthRow label="产物存储" detail="按运行隔离输出目录" value="正常" progress={0} />
           <button className="health-action" type="button" onClick={() => setActiveNavigation("runtimes")}>打开运行环境 <ArrowUpRight size={14} /></button>
         </section>

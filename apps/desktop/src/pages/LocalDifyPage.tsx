@@ -43,6 +43,7 @@ import type {
 } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 import { LocalDifyWorkflowDesigner } from "../components/LocalDifyWorkflowDesigner";
+import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
 
 type StudioTab = "workflow" | "debug" | "config" | "runs" | "api";
 
@@ -55,10 +56,10 @@ interface PreviewMessage {
 const emptyProvider: LocalDifyProviderInput = {
   id: "",
   name: "",
-  baseUrl: "https://api.openai.com/v1",
-  model: "gpt-4o-mini",
-  contextWindow: 128000,
-  maxOutputTokens: 4096,
+  baseUrl: "http://127.0.0.1/v1",
+  model: "deepseek-v4-flash",
+  contextWindow: 393216,
+  maxOutputTokens: 98304,
   temperature: 0.2,
   streaming: true,
   supportsTools: true,
@@ -67,7 +68,7 @@ const emptyProvider: LocalDifyProviderInput = {
   timeoutSeconds: 120,
   customHeaders: {},
   difyProvider: "langgenius/openai/openai",
-  difyModel: "gpt-4o-mini",
+  difyModel: "deepseek-v4-flash",
   apiKey: "",
 };
 
@@ -104,6 +105,8 @@ function formatTime(value: number): string {
 }
 
 export function LocalDifyPage() {
+  const catalogCollapsed = useSidebarCollapsed("ai-app-catalog");
+  const debugInspectorCollapsed = useSidebarCollapsed("ai-app-debug-inspector");
   const [apps, setApps] = useState<LocalDifyApp[]>([]);
   const [providers, setProviders] = useState<LocalDifyProvider[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -115,7 +118,7 @@ export function LocalDifyPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [createName, setCreateName] = useState("新 AI 应用");
+  const [createName, setCreateName] = useState("新流程");
   const [createMode, setCreateMode] = useState<LocalDifyAppMode>("chat");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
@@ -175,7 +178,7 @@ export function LocalDifyPage() {
       const app = await desktopGateway.createLocalDifyApp(createName, createMode);
       await reload(app.id);
       setCreateOpen(false);
-      setNotice("AI 应用已创建");
+      setNotice("流程已创建");
     } catch (error) {
       setNotice(String(error));
     } finally {
@@ -188,7 +191,7 @@ export function LocalDifyPage() {
     try {
       const saved = await desktopGateway.saveLocalDifyApp(app);
       await reload(saved.id);
-      setNotice("应用配置已保存");
+      setNotice("流程配置已保存");
       return saved;
     } catch (error) {
       setNotice(String(error));
@@ -210,7 +213,7 @@ export function LocalDifyPage() {
       await desktopGateway.deleteLocalDifyApp(draft.id);
       setDeleteOpen(false);
       await reload();
-      setNotice("AI 应用已删除");
+      setNotice("流程已删除");
     } catch (error) {
       setNotice(String(error));
     } finally {
@@ -387,17 +390,18 @@ export function LocalDifyPage() {
   return (
     <div className="page local-dify-page">
       <header className="page-header local-dify-header">
-        <div><div className="eyebrow">LOCAL AI APPLICATION PLATFORM</div><h1>AI 应用</h1><p>兼容 Dify DSL 与 Service API 的本地开发、调试和发布工作台。</p></div>
+        <div><div className="eyebrow">LOCAL WORKFLOW PLATFORM</div><h1>流程设计</h1><p>兼容 Dify DSL 与 Service API 的本地开发、调试和发布工作台。</p></div>
         <div className="local-dify-header-actions">
           <button className="button secondary" type="button" onClick={() => void importDsl()}><Upload size={14} /> 导入 DSL</button>
           <button className="button secondary" type="button" onClick={() => { setProviderDraft(providerInput(providers[0])); setProvidersOpen(true); }}><Network size={14} /> Providers</button>
-          <button className="button primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={14} /> 新建应用</button>
+          <button className="button primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={14} /> 新建流程</button>
         </div>
       </header>
 
-      <div className={`local-dify-layout ${tab === "workflow" ? "workflow-focus" : ""}`}>
-        <aside className="local-dify-catalog">
-          <header><Sparkles size={14} /><strong>本地应用</strong><span>{apps.length}</span></header>
+      <div className={`local-dify-layout ${tab === "workflow" ? "workflow-focus" : ""}${catalogCollapsed ? " catalog-collapsed" : ""}`}>
+        {catalogCollapsed ? <SidebarToggle id="ai-app-catalog" side="left" label="流程侧边栏" restore /> : <aside className="local-dify-catalog collapsible-sidebar">
+          <SidebarToggle id="ai-app-catalog" side="left" label="流程侧边栏" />
+          <header><Sparkles size={14} /><strong>本地流程</strong><span>{apps.length}</span></header>
           <div className="local-dify-app-list">
             {apps.map((app) => (
               <button key={app.id} className={app.id === selectedId ? "active" : ""} type="button" onClick={() => setSelectedId(app.id)}>
@@ -406,26 +410,26 @@ export function LocalDifyPage() {
                 <ChevronRight size={13} />
               </button>
             ))}
-            {apps.length === 0 && <div className="local-dify-empty"><Bot size={24} /><strong>创建第一个 AI 应用</strong><span>从 Chat 或 Completion 开始。</span></div>}
+            {apps.length === 0 && <div className="local-dify-empty"><Bot size={24} /><strong>创建第一个流程</strong><span>从 Chat、Completion 或 Workflow 开始。</span></div>}
           </div>
           <footer><span className={service?.running ? "service-dot running" : "service-dot"} /><div><strong>Local Dify Service</strong><small>{service?.running ? service.endpoint : "服务未启动"}</small></div></footer>
-        </aside>
+        </aside>}
 
         {draft ? (
           <main className="local-dify-workspace">
             <header className="local-dify-app-header">
               <div className={`dify-app-logo ${draft.mode}`}><Bot size={20} /></div>
-              <div><div><h2>{draft.name}</h2><span className="status-badge neutral">{draft.mode}</span>{draft.apiEnabled && <span className="status-badge success">v{draft.publishedVersion} 已发布</span>}</div><p>{draft.description || "暂无应用描述"}</p></div>
+              <div><div><h2>{draft.name}</h2><span className="status-badge neutral">{draft.mode}</span>{draft.apiEnabled && <span className="status-badge success">v{draft.publishedVersion} 已发布</span>}</div><p>{draft.description || "暂无流程描述"}</p></div>
               <div className="local-dify-app-actions">
-                <button className="button ghost small" type="button" aria-label="删除 AI 应用" onClick={() => setDeleteOpen(true)}><Trash2 size={13} /></button>
+                <button className="button ghost small" type="button" aria-label="删除流程" onClick={() => setDeleteOpen(true)}><Trash2 size={13} /></button>
                 <button className="button secondary small" type="button" onClick={() => void exportDsl()} disabled={busy}><Download size={13} /> 导出 DSL</button>
                 <button className="button primary small" type="button" onClick={() => void publish()} disabled={busy}><CloudUpload size={13} /> 发布</button>
               </div>
             </header>
-            <nav className="local-dify-tabs" aria-label="AI 应用工作区">
+            <nav className="local-dify-tabs" aria-label="流程设计工作区">
               {(draft.mode === "workflow" || draft.mode === "advanced-chat") && <button className={tab === "workflow" ? "active" : ""} type="button" onClick={() => setTab("workflow")}><Workflow size={13} /> 工作流</button>}
               <button className={tab === "debug" ? "active" : ""} type="button" onClick={() => setTab("debug")}><MessageSquareText size={13} /> 调试预览</button>
-              <button className={tab === "config" ? "active" : ""} type="button" onClick={() => setTab("config")}><SlidersHorizontal size={13} /> 应用配置</button>
+              <button className={tab === "config" ? "active" : ""} type="button" onClick={() => setTab("config")}><SlidersHorizontal size={13} /> 流程配置</button>
               <button className={tab === "runs" ? "active" : ""} type="button" onClick={() => setTab("runs")}><Activity size={13} /> 运行记录 <span>{runs.length}</span></button>
               <button className={tab === "api" ? "active" : ""} type="button" onClick={() => setTab("api")}><Server size={13} /> API 与导出</button>
               <em>{notice}</em>
@@ -441,7 +445,7 @@ export function LocalDifyPage() {
               onNotice={setNotice}
             />}
 
-            {tab === "debug" && <section className="local-dify-debug">
+            {tab === "debug" && <section className={`local-dify-debug${debugInspectorCollapsed ? " inspector-collapsed" : ""}`}>
               <div className="dify-chat-stage">
                 <div className="dify-chat-toolbar"><span><span className="service-dot running" /> Preview</span><code>{selectedProvider?.model ?? "未选择模型"}</code><button type="button" title="清空对话" onClick={() => setMessages(draft.openingStatement ? [{ id: `opening-${Date.now()}`, role: "assistant", content: draft.openingStatement }] : [])}><RefreshCw size={12} /></button></div>
                 <div className="dify-chat-messages">
@@ -451,23 +455,24 @@ export function LocalDifyPage() {
                   </article>)}
                   {messages.length === 0 && <div className="dify-chat-welcome"><Sparkles size={26} /><h3>测试 {draft.name}</h3><p>输入消息以验证 Prompt、Provider、流式输出和运行记录。</p></div>}
                 </div>
-                <div className="dify-chat-composer"><textarea aria-label="Local Dify 调试输入" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void runApp(); }} placeholder="输入测试消息，Ctrl+Enter 运行…" /><footer><span>{draft.inputKey} · {selectedProvider?.streaming ? "Streaming" : "Blocking"}</span><button className="button primary" type="button" aria-label="运行 Local Dify 应用" onClick={() => void runApp()} disabled={busy || !query.trim()}>{busy ? <LoaderCircle className="spin" size={14} /> : <Send size={14} />} 运行</button></footer></div>
+                <div className="dify-chat-composer"><textarea aria-label="流程调试输入" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void runApp(); }} placeholder="输入测试消息，Ctrl+Enter 运行…" /><footer><span>{draft.inputKey} · {selectedProvider?.streaming ? "Streaming" : "Blocking"}</span><button className="button primary" type="button" aria-label="运行流程" onClick={() => void runApp()} disabled={busy || !query.trim()}>{busy ? <LoaderCircle className="spin" size={14} /> : <Send size={14} />} 运行</button></footer></div>
               </div>
-              <aside className="dify-debug-inspector">
+              {debugInspectorCollapsed ? <SidebarToggle id="ai-app-debug-inspector" side="right" label="调试参数侧边栏" restore /> : <aside className="dify-debug-inspector collapsible-sidebar">
+                <SidebarToggle id="ai-app-debug-inspector" side="right" label="调试参数侧边栏" />
                 <header><Settings2 size={14} /><div><strong>调试参数</strong><small>保存后立即用于下一次运行</small></div></header>
                 <label><span>Provider</span><select value={draft.providerId} onChange={(event) => setDraft({ ...draft, providerId: event.target.value })}><option value="">请选择 Provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
                 <label><span>Temperature</span><input type="number" min={0} max={2} step={0.1} value={draft.temperature} onChange={(event) => setDraft({ ...draft, temperature: event.currentTarget.valueAsNumber })} /></label>
                 <label><span>最大输出 tokens</span><input type="number" min={64} max={131072} step={64} value={draft.maxOutputTokens} onChange={(event) => setDraft({ ...draft, maxOutputTokens: event.currentTarget.valueAsNumber })} /></label>
                 <div className="dify-provider-summary"><Network size={14} /><span><strong>{selectedProvider?.name ?? "未配置 Provider"}</strong><small>{selectedProvider?.baseUrl ?? "打开 Providers 创建连接"}</small><code>{selectedProvider?.model ?? ""}</code></span></div>
                 <button className="button secondary" type="button" onClick={() => void saveApp()} disabled={busy}><Save size={13} /> 保存调试配置</button>
-              </aside>
+              </aside>}
             </section>}
 
             {tab === "config" && <section className="local-dify-config">
-              <div className="dify-config-section"><header><Braces size={15} /><div><h3>基本信息</h3><p>这些字段会进入本地应用配置和导出的 Dify DSL。</p></div></header><div className="dify-form-grid">
-                <label><span>应用名称</span><input aria-label="AI 应用名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-                <label><span>应用模式</span><select aria-label="AI 应用模式" value={draft.mode} onChange={(event) => setDraft({ ...draft, mode: event.target.value as LocalDifyAppMode })}><option value="chat">Chat</option><option value="completion">Completion</option><option value="advanced-chat">Chatflow</option><option value="workflow">Workflow</option></select></label>
-                <label className="wide"><span>应用描述</span><textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+              <div className="dify-config-section"><header><Braces size={15} /><div><h3>基本信息</h3><p>这些字段会进入本地流程配置和导出的 Dify DSL。</p></div></header><div className="dify-form-grid">
+                <label><span>流程名称</span><input aria-label="流程名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+                <label><span>流程模式</span><select aria-label="流程模式" value={draft.mode} onChange={(event) => setDraft({ ...draft, mode: event.target.value as LocalDifyAppMode })}><option value="chat">Chat</option><option value="completion">Completion</option><option value="advanced-chat">Chatflow</option><option value="workflow">Workflow</option></select></label>
+                <label className="wide"><span>流程描述</span><textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
                 <label><span>输入变量</span><input value={draft.inputKey} onChange={(event) => setDraft({ ...draft, inputKey: event.target.value })} /></label>
                 <label><span>Provider</span><select value={draft.providerId} onChange={(event) => setDraft({ ...draft, providerId: event.target.value })}><option value="">请选择 Provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
               </div></div>
@@ -475,12 +480,12 @@ export function LocalDifyPage() {
                 <label className="wide"><span>系统指令</span><textarea className="prompt" aria-label="Local Dify 系统指令" value={draft.systemPrompt} onChange={(event) => setDraft({ ...draft, systemPrompt: event.target.value })} /></label>
                 <label className="wide"><span>开场白</span><textarea value={draft.openingStatement} onChange={(event) => setDraft({ ...draft, openingStatement: event.target.value })} /></label>
               </div></div>
-              <footer><button className="button primary" type="button" onClick={() => void saveApp()} disabled={busy}><Save size={14} /> 保存应用配置</button></footer>
+              <footer><button className="button primary" type="button" onClick={() => void saveApp()} disabled={busy}><Save size={14} /> 保存流程配置</button></footer>
             </section>}
 
             {tab === "runs" && <section className="local-dify-runs">
               <header><div><h3>本地运行记录</h3><p>记录 Provider、模型、耗时、Token 和完整输入输出。</p></div><button className="button secondary small" type="button" onClick={() => void desktopGateway.listLocalDifyRuns(draft.id, 100).then(setRuns)}><RefreshCw size={12} /> 刷新</button></header>
-              <div className="dify-runs-table"><div className="head"><span>状态</span><span>输入 / 输出</span><span>Provider</span><span>Token</span><span>耗时</span><span>时间</span></div>{runs.map((run) => <details key={run.id}><summary><span className={`status-badge ${run.status === "success" ? "success" : "failed"}`}>{run.status}</span><span><strong>{run.query}</strong><small>{run.answer || run.error}</small></span><code>{run.model}</code><code>{run.promptTokens + run.completionTokens}</code><code>{run.durationMs}ms</code><time>{formatTime(run.createdAt)}</time></summary><div><section><strong>输入</strong><pre>{run.query}</pre></section><section><strong>{run.error ? "错误" : "输出"}</strong><pre>{run.error || run.answer}</pre></section><small>run={run.id} · provider={run.providerId}</small></div></details>)}{runs.length === 0 && <div className="local-dify-empty"><Activity size={24} /><strong>还没有运行记录</strong><span>在调试预览中运行一次应用。</span></div>}</div>
+              <div className="dify-runs-table"><div className="head"><span>状态</span><span>输入 / 输出</span><span>Provider</span><span>Token</span><span>耗时</span><span>时间</span></div>{runs.map((run) => <details key={run.id}><summary><span className={`status-badge ${run.status === "success" ? "success" : "failed"}`}>{run.status}</span><span><strong>{run.query}</strong><small>{run.answer || run.error}</small></span><code>{run.model}</code><code>{run.promptTokens + run.completionTokens}</code><code>{run.durationMs}ms</code><time>{formatTime(run.createdAt)}</time></summary><div><section><strong>输入</strong><pre>{run.query}</pre></section><section><strong>{run.error ? "错误" : "输出"}</strong><pre>{run.error || run.answer}</pre></section><small>run={run.id} · provider={run.providerId}</small></div></details>)}{runs.length === 0 && <div className="local-dify-empty"><Activity size={24} /><strong>还没有运行记录</strong><span>在调试预览中运行一次流程。</span></div>}</div>
             </section>}
 
             {tab === "api" && <section className="local-dify-api">
@@ -491,12 +496,12 @@ export function LocalDifyPage() {
               </div>
             </section>}
           </main>
-        ) : <main className="local-dify-no-selection"><Bot size={42} /><h2>Local Dify Studio</h2><p>创建应用，配置 OpenAI 兼容 Provider，然后在本机调试并导出 Dify DSL。</p><button className="button primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={14} /> 新建 AI 应用</button></main>}
+        ) : <main className="local-dify-no-selection"><Bot size={42} /><h2>流程设计工作室</h2><p>创建流程，配置 OpenAI 兼容 Provider，然后在本机调试并导出 Dify DSL。</p><button className="button primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={14} /> 新建流程</button></main>}
       </div>
 
-      {createOpen && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog dify-create-dialog" role="dialog" aria-modal="true" aria-label="新建 AI 应用"><header><div><Sparkles size={18} /><h2>新建 AI 应用</h2></div><button type="button" aria-label="关闭" onClick={() => setCreateOpen(false)}><X size={16} /></button></header><p>选择应用类型；Workflow 与 Chatflow 提供完整可视化编排画布。</p><label><span>应用名称</span><input aria-label="新建 AI 应用名称" value={createName} autoFocus onChange={(event) => setCreateName(event.target.value)} /></label><div className="dify-mode-picker"><button className={createMode === "chat" ? "active" : ""} type="button" onClick={() => setCreateMode("chat")}><MessageSquareText size={18} /><strong>Chat</strong><span>多轮对话和开场白</span></button><button className={createMode === "completion" ? "active" : ""} type="button" onClick={() => setCreateMode("completion")}><Braces size={18} /><strong>Completion</strong><span>单次文本生成</span></button><button className={createMode === "workflow" ? "active" : ""} type="button" onClick={() => setCreateMode("workflow")}><Workflow size={18} /><strong>Workflow</strong><span>自动化与批处理工作流</span></button><button className={createMode === "advanced-chat" ? "active" : ""} type="button" onClick={() => setCreateMode("advanced-chat")}><GitBranch size={18} /><strong>Chatflow</strong><span>带流程编排的对话应用</span></button></div><footer><button className="button ghost" type="button" onClick={() => setCreateOpen(false)}>取消</button><button className="button primary" type="button" onClick={() => void createApp()} disabled={busy || !createName.trim()}><Plus size={13} /> 创建应用</button></footer></section></div>}
+      {createOpen && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog dify-create-dialog" role="dialog" aria-modal="true" aria-label="新建流程"><header><div><Sparkles size={18} /><h2>新建流程</h2></div><button type="button" aria-label="关闭" onClick={() => setCreateOpen(false)}><X size={16} /></button></header><p>选择流程类型；Workflow 与 Chatflow 提供完整可视化编排画布。</p><label><span>流程名称</span><input aria-label="新建流程名称" value={createName} autoFocus onChange={(event) => setCreateName(event.target.value)} /></label><div className="dify-mode-picker"><button className={createMode === "chat" ? "active" : ""} type="button" onClick={() => setCreateMode("chat")}><MessageSquareText size={18} /><strong>Chat</strong><span>多轮对话和开场白</span></button><button className={createMode === "completion" ? "active" : ""} type="button" onClick={() => setCreateMode("completion")}><Braces size={18} /><strong>Completion</strong><span>单次文本生成</span></button><button className={createMode === "workflow" ? "active" : ""} type="button" onClick={() => setCreateMode("workflow")}><Workflow size={18} /><strong>Workflow</strong><span>自动化与批处理工作流</span></button><button className={createMode === "advanced-chat" ? "active" : ""} type="button" onClick={() => setCreateMode("advanced-chat")}><GitBranch size={18} /><strong>Chatflow</strong><span>带流程编排的对话流程</span></button></div><footer><button className="button ghost" type="button" onClick={() => setCreateOpen(false)}>取消</button><button className="button primary" type="button" onClick={() => void createApp()} disabled={busy || !createName.trim()}><Plus size={13} /> 创建流程</button></footer></section></div>}
 
-      {deleteOpen && draft && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-label="确认删除 AI 应用"><header><div><Trash2 size={18} /><h2>删除 AI 应用</h2></div></header><p>将删除“{draft.name}”的配置和本地 API Token；历史运行记录继续保留用于诊断。</p><footer><button className="button ghost" type="button" onClick={() => setDeleteOpen(false)}>取消</button><button className="button danger" type="button" onClick={() => void removeApp()} disabled={busy}>确认删除</button></footer></section></div>}
+      {deleteOpen && draft && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-label="确认删除流程"><header><div><Trash2 size={18} /><h2>删除流程</h2></div></header><p>将删除“{draft.name}”的配置和本地 API Token；历史运行记录继续保留用于诊断。</p><footer><button className="button ghost" type="button" onClick={() => setDeleteOpen(false)}>取消</button><button className="button danger" type="button" onClick={() => void removeApp()} disabled={busy}>确认删除</button></footer></section></div>}
 
       {providersOpen && <div className="modal-backdrop dify-provider-backdrop" role="presentation"><section className="dify-provider-dialog" role="dialog" aria-modal="true" aria-label="Local Dify Providers"><aside><header><Network size={15} /><strong>Providers</strong><button type="button" aria-label="新建 Provider" onClick={() => setProviderDraft({ ...emptyProvider })}><Plus size={14} /></button></header>{providers.map((provider) => <button key={provider.id} className={providerDraft.id === provider.id ? "active" : ""} type="button" onClick={() => setProviderDraft(providerInput(provider))}><span className="service-dot running" /><span><strong>{provider.name}</strong><small>{provider.model}</small></span><ChevronRight size={12} /></button>)}</aside><main><header><div><h2>{providerDraft.id ? "编辑 Provider" : "新建 Provider"}</h2><p>OpenAI Chat Completions 兼容连接与 Dify 云端映射。</p></div><button type="button" aria-label="关闭 Providers" onClick={() => setProvidersOpen(false)}><X size={16} /></button></header><div className="dify-provider-form">
         <label><span>名称</span><input aria-label="Provider 名称" value={providerDraft.name} onChange={(event) => setProviderDraft({ ...providerDraft, name: event.target.value })} /></label><label><span>Model</span><input aria-label="Provider 模型" value={providerDraft.model} onChange={(event) => setProviderDraft({ ...providerDraft, model: event.target.value })} /></label><label className="wide"><span>OpenAI 兼容 URL</span><input aria-label="Provider URL" value={providerDraft.baseUrl} onChange={(event) => setProviderDraft({ ...providerDraft, baseUrl: event.target.value })} /></label><label className="wide"><span>API Key {providerDraft.id && providers.find((item) => item.id === providerDraft.id)?.hasApiKey ? "（已保存，留空则保持）" : "（可选）"}</span><input aria-label="Provider API Key" type="password" autoComplete="off" value={providerDraft.apiKey} onChange={(event) => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} /></label><label><span>上下文窗口</span><input type="number" value={providerDraft.contextWindow} onChange={(event) => setProviderDraft({ ...providerDraft, contextWindow: event.currentTarget.valueAsNumber })} /></label><label><span>最大输出</span><input type="number" value={providerDraft.maxOutputTokens} onChange={(event) => setProviderDraft({ ...providerDraft, maxOutputTokens: event.currentTarget.valueAsNumber })} /></label><label><span>超时（秒）</span><input type="number" value={providerDraft.timeoutSeconds} onChange={(event) => setProviderDraft({ ...providerDraft, timeoutSeconds: event.currentTarget.valueAsNumber })} /></label><label className="switch-field"><span>流式输出</span><button className={`switch ${providerDraft.streaming ? "on" : ""}`} type="button" role="switch" aria-checked={providerDraft.streaming} onClick={() => setProviderDraft({ ...providerDraft, streaming: !providerDraft.streaming })}><span /></button></label><label><span>Dify 云端 Provider</span><input value={providerDraft.difyProvider} onChange={(event) => setProviderDraft({ ...providerDraft, difyProvider: event.target.value })} /></label><label><span>Dify 云端 Model</span><input value={providerDraft.difyModel} onChange={(event) => setProviderDraft({ ...providerDraft, difyModel: event.target.value })} /></label>

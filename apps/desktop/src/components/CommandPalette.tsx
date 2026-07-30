@@ -1,4 +1,4 @@
-import { ArrowRight, Blocks, BookOpen, Bot, Code2, Command, Database, Library, ListTodo, Play, PlugZap, Search, Settings, Workflow, Zap } from "lucide-react";
+import { ArrowRight, Blocks, BookOpen, BookOpenCheck, Bot, Code2, Command, Database, Library, ListTodo, Play, PlugZap, Search, Settings, Workflow, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { NavigationId } from "../domain/models";
@@ -11,15 +11,16 @@ const commands: Array<{
   icon: typeof Search;
   navigation?: NavigationId;
 }> = [
-  { id: "run", label: "打开运行工作台", detail: "运行脚本包", icon: Play, navigation: "workbench" },
+  { id: "run", label: "打开运行工作台", detail: "运行 RPAZ 包", icon: Play, navigation: "workbench" },
   { id: "workbench", label: "配置任务参数", detail: "运行工作台", icon: Blocks, navigation: "workbench" },
-  { id: "library", label: "安装脚本包", detail: "脚本包管理", icon: Library, navigation: "library" },
+  { id: "library", label: "安装 RPAZ 包", detail: "RPAZ 包管理", icon: Library, navigation: "library" },
   { id: "studio", label: "新建 RPaz 项目", detail: "开发工作室", icon: Code2, navigation: "studio" },
   { id: "data", label: "打开数据工作台", detail: "SQLite 与 SQL 查询", icon: Database, navigation: "data" },
-  { id: "local-dify", label: "打开 AI 应用", detail: "Local Dify 开发与测试", icon: Workflow, navigation: "localDify" },
+  { id: "local-dify", label: "打开流程设计", detail: "本地流程开发与测试", icon: Workflow, navigation: "localDify" },
   { id: "agent", label: "打开 AI Agent", detail: "RPAZ 开发助手", icon: Bot, navigation: "agent" },
   { id: "plugins", label: "打开插件", detail: "服务、Provider 与工具扩展", icon: PlugZap, navigation: "plugins" },
   { id: "docs", label: "打开知识文档", detail: "本地 Markdown 知识库", icon: BookOpen, navigation: "docs" },
+  { id: "knowledge-base", label: "打开知识库", detail: "面向 AI 的多源向量检索", icon: BookOpenCheck, navigation: "knowledgeBase" },
   { id: "runs", label: "打开运行记录", detail: "执行与审计", icon: ListTodo, navigation: "runs" },
   { id: "automation", label: "打开自动化计划", detail: "任务编排", icon: Zap, navigation: "automations" },
   { id: "settings", label: "打开设置", detail: "应用配置", icon: Settings, navigation: "settings" },
@@ -61,7 +62,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                 runCommand(filtered[0]);
               }
             }}
-            placeholder="输入命令或搜索脚本包…"
+            placeholder="输入命令或搜索 RPAZ 包…"
           />
           <kbd>ESC</kbd>
         </div>

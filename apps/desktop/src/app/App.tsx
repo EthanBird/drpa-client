@@ -19,6 +19,7 @@ import { useAppStore } from "./store";
 const StudioPage = lazy(() => import("../pages/StudioPage").then((module) => ({ default: module.StudioPage })));
 const DataPage = lazy(() => import("../pages/DataPage").then((module) => ({ default: module.DataPage })));
 const LocalDifyPage = lazy(() => import("../pages/LocalDifyPage").then((module) => ({ default: module.LocalDifyPage })));
+const KnowledgeBasePage = lazy(() => import("../pages/KnowledgeBasePage").then((module) => ({ default: module.KnowledgeBasePage })));
 
 function waitForTwoPaints(): Promise<void> {
   const schedule = (callback: FrameRequestCallback) => {
@@ -34,6 +35,8 @@ export function App() {
   const commandOpen = useAppStore((state) => state.commandOpen);
   const theme = useAppStore((state) => state.theme);
   const fontScale = useAppStore((state) => state.fontScale);
+  const uiDensity = useAppStore((state) => state.uiDensity);
+  const hidePageHeaders = useAppStore((state) => state.hidePageHeaders);
   const dragActive = useAppStore((state) => state.dragActive);
   const operationNotice = useAppStore((state) => state.operationNotice);
   const setCommandOpen = useAppStore((state) => state.setCommandOpen);
@@ -50,10 +53,16 @@ export function App() {
         if (disposed) return;
         setSnapshot(snapshot);
         await waitForTwoPaints();
-        if (!disposed) await desktopGateway.reportUiReady();
+        if (!disposed) {
+          await desktopGateway.reportUiReady();
+          await desktopGateway.completeStartup();
+        }
       })
       .catch((error: unknown) => {
-        if (!disposed) setOperationNotice(`桌面初始化失败：${String(error)}`);
+        if (!disposed) {
+          setOperationNotice(`桌面初始化失败：${String(error)}`);
+          void desktopGateway.completeStartup();
+        }
       });
     return () => { disposed = true; };
   }, [setOperationNotice, setSnapshot]);
@@ -66,6 +75,14 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.fontScale = fontScale;
   }, [fontScale]);
+
+  useEffect(() => {
+    document.documentElement.dataset.uiDensity = uiDensity;
+  }, [uiDensity]);
+
+  useEffect(() => {
+    document.documentElement.dataset.hidePageHeaders = String(hidePageHeaders);
+  }, [hidePageHeaders]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -128,9 +145,24 @@ export function App() {
           setOperationNotice(`已将 ${event.payload.paths.length} 个文件交给知识文档`);
           return;
         }
+        if (activeNavigation === "knowledgeBase") {
+          window.dispatchEvent(new CustomEvent("drpa-knowledge-base-file-drop", { detail: { paths: event.payload.paths } }));
+          setOperationNotice(`已将 ${event.payload.paths.length} 个文件交给向量知识库`);
+          return;
+        }
+        if (activeNavigation === "agent") {
+          window.dispatchEvent(new CustomEvent("drpa-agent-document-drop", { detail: { paths: event.payload.paths } }));
+          setOperationNotice(`已将 ${event.payload.paths.length} 个文档交给 AI Agent`);
+          return;
+        }
+        if (activeNavigation === "data") {
+          window.dispatchEvent(new CustomEvent("drpa-data-file-drop", { detail: { paths: event.payload.paths } }));
+          setOperationNotice(`已将 ${event.payload.paths.length} 个文件交给数据工作台`);
+          return;
+        }
         const archives = event.payload.paths.filter((path) => path.toLowerCase().endsWith(".rpaz"));
         if (archives.length === 0) {
-          setOperationNotice("拖入的文件不是 .rpaz 脚本包");
+          setOperationNotice("拖入的文件不是 .rpaz RPAZ 包");
           return;
         }
         try {
@@ -139,7 +171,7 @@ export function App() {
           setSnapshot(await desktopGateway.getWorkspaceSnapshot());
           if (installed) selectPackage(installed.id, installed.profiles[0]?.id);
           setActiveNavigation("library");
-          setOperationNotice(`已通过拖拽安装 ${archives.length} 个脚本包`);
+          setOperationNotice(`已通过拖拽安装 ${archives.length} 个 RPAZ 包`);
         } catch (error) {
           setOperationNotice(`拖拽安装失败：${String(error)}`);
         }
@@ -159,21 +191,22 @@ export function App() {
         {activeNavigation === "workbench" && <WorkbenchPage />}
         {activeNavigation === "runs" && <RunsPage />}
         {activeNavigation === "automations" && <AutomationsPage />}
-        {activeNavigation === "localDify" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载 AI 应用工作台…</h2></div></div>}><LocalDifyPage /></Suspense>}
+        {activeNavigation === "localDify" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载流程设计工作台…</h2></div></div>}><LocalDifyPage /></Suspense>}
         {activeNavigation === "agent" && <AgentPage />}
         {activeNavigation === "plugins" && <PluginsPage />}
         {activeNavigation === "docs" && <DocsPage />}
+        {activeNavigation === "knowledgeBase" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载向量知识库…</h2></div></div>}><KnowledgeBasePage /></Suspense>}
         {activeNavigation === "runtimes" && <RuntimePage />}
         {activeNavigation === "secrets" && (
           <PlaceholderPage
             eyebrow="敏感数据保护"
             title="凭据保险箱"
-            description="任务只绑定凭据引用；真实值不会进入脚本包、运行历史、日志或命令行。"
+            description="任务只绑定凭据引用；真实值不会进入 RPAZ 包、运行历史、日志或命令行。"
           />
         )}
         {activeNavigation === "settings" && <SettingsPage />}
       </AppShell>
-      {dragActive && <div className="drop-overlay"><div><strong>{activeNavigation === "docs" ? "释放以导入 Markdown" : activeNavigation === "studio" ? "释放以添加项目文件" : "释放以安装 RPAZ"}</strong><span>{activeNavigation === "docs" ? "支持同时导入多个 `.md` / `.markdown` 文档" : activeNavigation === "studio" ? "文件将添加到当前项目目录" : "支持同时拖入多个 `.rpaz` 脚本包"}</span></div></div>}
+      {dragActive && <div className="drop-overlay"><div><strong>{activeNavigation === "docs" ? "释放以导入 Markdown" : activeNavigation === "knowledgeBase" ? "释放以索引到向量知识库" : activeNavigation === "agent" ? "释放以附加到当前对话" : activeNavigation === "studio" ? "释放以添加项目文件" : activeNavigation === "data" ? "释放以创建文件数据源" : "释放以安装 RPAZ"}</strong><span>{activeNavigation === "docs" ? "支持同时导入多个 `.md` / `.markdown` 文档" : activeNavigation === "knowledgeBase" ? "支持 PDF、Word、Excel、PowerPoint 与文本资料" : activeNavigation === "agent" ? "支持 PDF、DOCX、XLSX 与 PPTX" : activeNavigation === "studio" ? "文件将添加到当前项目目录" : activeNavigation === "data" ? "支持 SQLite、XLS、XLSX、XLSB 与 ODS" : "支持同时拖入多个 `.rpaz` RPAZ 包"}</span></div></div>}
       {operationNotice && <button className="global-notice" type="button" onClick={() => setOperationNotice("")}>{operationNotice}<span>×</span></button>}
       {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} />}
     </div>

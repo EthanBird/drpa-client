@@ -32,11 +32,11 @@ struct WorkspaceRegistry {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkspaceInfo {
-    id: String,
-    name: String,
-    path: String,
-    active: bool,
-    created_at: u64,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) active: bool,
+    pub(crate) created_at: u64,
 }
 
 impl Default for WorkspaceRegistry {
@@ -139,6 +139,57 @@ fn create_workspace_inner(data_root: &Path, name: &str) -> Result<WorkspaceInfo,
     registry.workspaces.push(record.clone());
     write_registry(data_root, &registry)?;
     workspace_info(data_root, &registry.active_id, &record)
+}
+
+pub(crate) fn create_import_workspace(
+    data_root: &Path,
+    preferred_name: &str,
+) -> Result<WorkspaceInfo, String> {
+    let base = preferred_name.trim();
+    let base = if base.is_empty() {
+        "导入的用户数据"
+    } else {
+        base
+    };
+    for suffix in 0..1_000 {
+        let name = if suffix == 0 {
+            base.to_owned()
+        } else {
+            format!("{base} ({})", suffix + 1)
+        };
+        match create_workspace_inner(data_root, &name) {
+            Ok(workspace) => return Ok(workspace),
+            Err(error) if error == "已存在同名工作区" => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err("无法为导入数据分配工作区名称".to_owned())
+}
+
+pub(crate) fn activate_workspace(data_root: &Path, workspace_id: &str) -> Result<(), String> {
+    validate_workspace_id(workspace_id)?;
+    let mut registry = load_registry(data_root)?;
+    normalize_registry(&mut registry);
+    if !registry
+        .workspaces
+        .iter()
+        .any(|workspace| workspace.id == workspace_id)
+    {
+        return Err("导入工作区没有写入注册表".to_owned());
+    }
+    registry.active_id = workspace_id.to_owned();
+    write_registry(data_root, &registry)
+}
+
+pub(crate) fn active_workspace_name(data_root: &Path) -> Result<String, String> {
+    let mut registry = load_registry(data_root)?;
+    normalize_registry(&mut registry);
+    registry
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == registry.active_id)
+        .map(|workspace| workspace.name.clone())
+        .ok_or_else(|| "当前工作区不在注册表中".to_owned())
 }
 
 fn workspace_info(

@@ -1,0 +1,125 @@
+schema: 1
+id: dify2api
+name: Dify2API 网关
+version: 1.0.0
+description: 将 Dify Agent 转换为 OpenAI 兼容服务，并在 DRPA 内完成连通性、模型、对话与请求链路调试。
+types:
+  - provider-adapter
+  - service
+  - debugger
+config_schema: config.schema.json
+services:
+  - id: gateway
+    title: OpenAI 兼容网关
+    primary: true
+    runtime: executable
+    entry_by_platform:
+      windows: service/dify2api-server.exe
+      linux: service/dify2api-server
+    args:
+      - -server
+      - -config
+      - "{state}"
+    transport: http
+    endpoint: "http://{config.listen_addr}/v1"
+    health:
+      kind: http
+      endpoint: "http://{config.listen_addr}/healthz"
+      startup_timeout_seconds: 12
+      request_timeout_millis: 800
+      interval_millis: 150
+    logs:
+      stdout: true
+      stderr: true
+      format: drpa-event-line
+providers:
+  - id: openai
+    title: Dify Agent（OpenAI 兼容）
+    protocol: openai
+    service_id: gateway
+    endpoint: "http://{config.listen_addr}/v1"
+    model_config_key: model_name
+    api_key_config_key: proxy_api_key
+debugger:
+  endpoints:
+    - id: health
+      title: 服务健康
+      kind: health
+      method: GET
+      endpoint: "http://{config.listen_addr}/healthz"
+      timeout_seconds: 5
+    - id: upstream
+      title: 测试 Dify 连接
+      kind: connection
+      method: GET
+      endpoint: "http://{config.listen_addr}/drpa/debug/upstream"
+      bearer_config_key: proxy_api_key
+      timeout_seconds: 25
+    - id: models
+      title: 查询兼容模型
+      kind: openai-models
+      method: GET
+      endpoint: "http://{config.listen_addr}/v1/models"
+      bearer_config_key: proxy_api_key
+      timeout_seconds: 10
+    - id: chat
+      title: 对话调试
+      kind: openai-chat
+      method: POST
+      endpoint: "http://{config.listen_addr}/v1/chat/completions"
+      bearer_config_key: proxy_api_key
+      timeout_seconds: 30
+      request_defaults:
+        model: "{config.model_name}"
+        messages:
+          - role: user
+            content: 请简要介绍你自己。
+        stream: false
+    - id: tool-call
+      title: 工具调用调试
+      kind: openai-chat
+      method: POST
+      endpoint: "http://{config.listen_addr}/v1/chat/completions"
+      bearer_config_key: proxy_api_key
+      timeout_seconds: 30
+      request_defaults:
+        model: "{config.model_name}"
+        messages:
+          - role: user
+            content: 请查询上海当前时间，并调用可用工具。
+        tools:
+          - type: function
+            function:
+              name: get_time
+              description: 查询指定城市的当前时间
+              parameters:
+                type: object
+                properties:
+                  city:
+                    type: string
+                required:
+                  - city
+        tool_choice: auto
+        stream: false
+  panels:
+    - id: traffic
+      title: 请求链路
+      kind: structured-log
+      config:
+        event_prefix: "DRPA_PLUGIN_EVENT "
+        group_by: req_id
+    - id: service-log
+      title: 服务日志
+      kind: log
+      config:
+        service_id: gateway
+default_config:
+  dify_base_url: https://api.dify.ai/v1
+  dify_api_key: ""
+  listen_addr: 127.0.0.1:34123
+  model_name: dify-agent
+  proxy_api_key: ""
+  enable_tool_emu: true
+  strip_think_tags: true
+  default_user: drpa
+  show_agent_thought: false

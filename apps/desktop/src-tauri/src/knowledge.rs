@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::AppPaths;
 
 const KNOWLEDGE_DIRECTORY: &str = "knowledge";
-const SEED_MARKER: &str = ".drpa-default-knowledge-v4";
+const SEED_MARKER: &str = ".drpa-default-knowledge-v5";
 const MAX_MARKDOWN_BYTES: u64 = 8 * 1024 * 1024;
 
 const DEFAULT_DOCUMENTS: &[(&str, &str)] = &[
@@ -71,6 +71,70 @@ const DEFAULT_DOCUMENTS: &[(&str, &str)] = &[
         "RPAZ 开发指南/13_LocalDify工作流设计器.md",
         include_str!("../knowledge_seed/13_LocalDify工作流设计器.md"),
     ),
+    (
+        "DRPA使用说明/README.md",
+        include_str!("../knowledge_seed/DRPA使用说明/README.md"),
+    ),
+    (
+        "DRPA使用说明/01_总览/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/01_总览/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/02_RPAZ包/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/02_RPAZ包/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/03_开发工作室/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/03_开发工作室/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/04_数据工作台/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/04_数据工作台/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/05_运行工作台/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/05_运行工作台/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/06_运行记录/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/06_运行记录/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/07_自动化计划/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/07_自动化计划/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/08_流程设计/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/08_流程设计/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/09_AI_Agent/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/09_AI_Agent/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/10_知识库/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/10_知识库/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/11_插件/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/11_插件/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/12_运行环境/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/12_运行环境/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/13_凭据保险箱/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/13_凭据保险箱/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/14_设置/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/14_设置/使用说明.md"),
+    ),
+    (
+        "DRPA使用说明/15_知识文档/使用说明.md",
+        include_str!("../knowledge_seed/DRPA使用说明/15_知识文档/使用说明.md"),
+    ),
 ];
 
 #[derive(Serialize)]
@@ -102,7 +166,7 @@ pub(crate) fn seed_default_knowledge(workspace_root: &Path) -> std::io::Result<(
     }
     atomic_write(
         &marker,
-        b"DRPA default knowledge v4. User documents are never overwritten.\n",
+        b"DRPA default knowledge v5. User documents are never overwritten.\n",
     )
 }
 
@@ -544,6 +608,32 @@ mod tests {
         seed_default_knowledge(&root).unwrap();
         let guide = root.join("knowledge/RPAZ 开发指南/00_阅读指南.md");
         assert!(guide.is_file());
+        assert!(root.join("knowledge/DRPA使用说明/README.md").is_file());
+        for directory in [
+            "01_总览",
+            "02_RPAZ包",
+            "03_开发工作室",
+            "04_数据工作台",
+            "05_运行工作台",
+            "06_运行记录",
+            "07_自动化计划",
+            "08_流程设计",
+            "09_AI_Agent",
+            "10_知识库",
+            "11_插件",
+            "12_运行环境",
+            "13_凭据保险箱",
+            "14_设置",
+            "15_知识文档",
+        ] {
+            assert!(
+                root.join("knowledge/DRPA使用说明")
+                    .join(directory)
+                    .join("使用说明.md")
+                    .is_file(),
+                "missing usage manual for {directory}"
+            );
+        }
         fs::write(&guide, "用户修改").unwrap();
         seed_default_knowledge(&root).unwrap();
         assert_eq!(fs::read_to_string(&guide).unwrap(), "用户修改");

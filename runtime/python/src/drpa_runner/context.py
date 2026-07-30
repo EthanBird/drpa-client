@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import importlib.util
+import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,8 @@ class RuntimeContext:
         output_dir: Path,
         database_path: Path,
         events: EventWriter,
+        package_catalog: dict[str, dict[str, Any]] | None = None,
+        invocation_stack: list[str] | None = None,
     ) -> None:
         self.run_id = run_id
         self.package_id = package_id
@@ -32,6 +37,8 @@ class RuntimeContext:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.sql = SqlClient(database_path)
         self._events = events
+        self._package_catalog = package_catalog or {}
+        self._invocation_stack = list(invocation_stack or [package_id])
         self.log = self._build_logger()
 
     def progress(self, value: int | float, message: str = "") -> None:
@@ -68,6 +75,57 @@ class RuntimeContext:
         download_dir.mkdir(parents=True, exist_ok=True)
         options.set_download_path(str(download_dir))
         return ChromiumPage(options)
+
+    def invoke(self, package_id: str, params: dict[str, Any] | None = None) -> Any:
+        """Invoke an installed RPAZ package and return its Python result.
+
+        The child package shares the read-only workspace database and receives its
+        own output subdirectory. Circular calls and excessive nesting are rejected.
+        """
+
+        descriptor = self._package_catalog.get(package_id)
+        if descriptor is None:
+            raise KeyError(f"installed RPAZ package not found: {package_id}")
+        if package_id in self._invocation_stack:
+            chain = " -> ".join([*self._invocation_stack, package_id])
+            raise RuntimeError(f"circular RPAZ package invocation: {chain}")
+        if len(self._invocation_stack) >= 16:
+            raise RuntimeError("RPAZ package invocation depth exceeds 16")
+        package_dir = Path(str(descriptor["package_dir"])).resolve()
+        entrypoint = resolve_child(package_dir, str(descriptor["entrypoint"]), must_exist=True)
+        callable_name = str(descriptor.get("callable") or "main")
+        child_output = resolve_child(
+            self.output_dir,
+            Path("packages") / package_id.replace(".", "_") / uuid.uuid4().hex,
+        )
+        child = RuntimeContext(
+            run_id=self.run_id,
+            package_id=package_id,
+            params=dict(params or {}),
+            package_dir=package_dir,
+            output_dir=child_output,
+            database_path=self.sql.database_path,
+            events=self._events,
+            package_catalog=self._package_catalog,
+            invocation_stack=[*self._invocation_stack, package_id],
+        )
+        module_name = f"drpa_package_{package_id.replace('.', '_')}_{uuid.uuid4().hex}"
+        spec = importlib.util.spec_from_file_location(module_name, entrypoint)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"unable to load RPAZ package entrypoint: {entrypoint.name}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+            entry = getattr(module, callable_name, None)
+            if not callable(entry):
+                raise TypeError(f"RPAZ package must define callable {callable_name}(ctx)")
+            return entry(child)
+        finally:
+            child.sql.close()
+            sys.modules.pop(module_name, None)
+
+    invoke_package = invoke
 
     def _build_logger(self) -> logging.Logger:
         logger = logging.getLogger(f"drpa.runtime.{self.run_id}")

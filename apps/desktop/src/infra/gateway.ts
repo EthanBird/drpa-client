@@ -4,6 +4,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { mockSnapshot } from "../data/mockSnapshot";
 import type {
+  AgentDocumentArtifact,
+  AgentDocumentAttachment,
+  AgentDocumentExport,
+  AgentConversationProject,
+  AgentConversationSession,
+  AgentConversationSessionSummary,
   AgentTurnRequest,
   AgentTurnResult,
   AgentStreamEvent,
@@ -33,10 +39,15 @@ import type {
   DifyCompatibilityReport,
   PackageSummary,
   PlatformCapabilities,
+  PluginDebuggerResponse,
+  PluginJsonValue,
   PluginLogLine,
   PluginConnectionTest,
   PluginProjectSummary,
   PluginSummary,
+  PluginToolDescriptor,
+  PluginToolWorkbenchResult,
+  SystemMetricsSnapshot,
   RuntimeStatus,
   RunDetail,
   StudioCellResult,
@@ -47,6 +58,13 @@ import type {
   WindowsUpdateStatus,
   WorkspaceInfo,
   WorkspaceSnapshot,
+  UserDataTransferResult,
+  KnowledgeBaseSearchResult,
+  KnowledgeBaseSource,
+  KnowledgeBaseSummary,
+  AutomationPlan,
+  AutomationPlanInput,
+  AutomationRun,
 } from "../domain/models";
 
 export interface DesktopGateway {
@@ -55,6 +73,7 @@ export interface DesktopGateway {
   switchWorkspace(workspaceId: string): Promise<void>;
   getWorkspaceSnapshot(): Promise<WorkspaceSnapshot>;
   reportUiReady(): Promise<void>;
+  completeStartup(): Promise<void>;
   reportUiInputReady(): Promise<void>;
   installPackage(archivePath: string): Promise<PackageSummary>;
   uninstallPackage(packageId: string): Promise<void>;
@@ -62,6 +81,13 @@ export interface DesktopGateway {
   cancelRun(runId: string): Promise<void>;
   getRunDetail(runId: string): Promise<RunDetail>;
   openRunOutputDirectory(runId: string): Promise<void>;
+  listAutomationPlans(): Promise<AutomationPlan[]>;
+  createAutomationPlan(input: AutomationPlanInput): Promise<AutomationPlan>;
+  updateAutomationPlan(input: AutomationPlanInput): Promise<AutomationPlan>;
+  deleteAutomationPlan(planId: string): Promise<void>;
+  setAutomationPlanEnabled(planId: string, enabled: boolean): Promise<AutomationPlan>;
+  runAutomationPlanNow(planId: string): Promise<AutomationRun>;
+  listAutomationRuns(planId?: string, limit?: number): Promise<AutomationRun[]>;
   listStudioProjects(): Promise<StudioProject[]>;
   createStudioProject(name: string): Promise<StudioProject>;
   openInstalledPackage(packageId: string): Promise<StudioProject>;
@@ -73,6 +99,7 @@ export interface DesktopGateway {
   deleteStudioProject(projectId: string): Promise<void>;
   importProjectFile(projectId: string, sourcePath: string, targetDirectory: string): Promise<string>;
   buildStudioProject(projectId: string): Promise<string>;
+  installStudioProject(projectId: string): Promise<PackageSummary>;
   openBuildOutputDirectory(): Promise<void>;
   runStudioProject(projectId: string, parameters: Record<string, unknown>): Promise<string>;
   executeStudioCell(projectId: string, code: string): Promise<StudioCellResult>;
@@ -118,7 +145,23 @@ export interface DesktopGateway {
   stopLocalDifyService(): Promise<LocalDifyServiceStatus>;
   runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResult>;
   listenAgentStream(requestId: string, onEvent: (event: AgentStreamEvent) => void): Promise<() => void>;
+  selectAgentDocumentFiles(): Promise<string[]>;
+  selectAgentArtifactExportPath(suggestedName: string): Promise<string | null>;
+  importAgentDocument(sourcePath: string, sessionId: string): Promise<AgentDocumentAttachment>;
+  listAgentArtifacts(sessionId: string): Promise<AgentDocumentArtifact[]>;
+  exportAgentArtifact(sessionId: string, artifactId: string, destinationPath: string): Promise<AgentDocumentExport>;
+  listAgentProjects(): Promise<AgentConversationProject[]>;
+  createAgentProject(name: string): Promise<AgentConversationProject>;
+  renameAgentProject(projectId: string, name: string): Promise<AgentConversationProject>;
+  listAgentSessions(projectId?: string): Promise<AgentConversationSessionSummary[]>;
+  createAgentSession(projectId?: string, title?: string, selectedSkillIds?: string[]): Promise<AgentConversationSession>;
+  getAgentSession(sessionId: string): Promise<AgentConversationSession>;
+  saveAgentSession(session: AgentConversationSession): Promise<AgentConversationSession>;
+  renameAgentSession(sessionId: string, title: string): Promise<AgentConversationSession>;
+  moveAgentSession(sessionId: string, projectId?: string): Promise<AgentConversationSession>;
+  deleteAgentSession(sessionId: string): Promise<void>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
+  getSystemMetrics(): Promise<SystemMetricsSnapshot>;
   getPlatformCapabilities(): Promise<PlatformCapabilities>;
   initializeRuntime(): Promise<RuntimeStatus>;
   repairRuntime(): Promise<RuntimeStatus>;
@@ -128,6 +171,8 @@ export interface DesktopGateway {
   restartForWindowsUpdate(sessionId: string): Promise<void>;
   getDataDirectory(): Promise<string>;
   openWorkspaceDataDirectory(): Promise<void>;
+  exportUserData(targetPath: string): Promise<UserDataTransferResult>;
+  importUserData(sourcePath: string): Promise<UserDataTransferResult>;
   getCurrentUser(): Promise<CurrentUser>;
   getAgentWorkspaceConfig(): Promise<AgentWorkspaceConfig>;
   writeAgentWorkspaceDocument(document: "agents" | "memory", content: string): Promise<void>;
@@ -150,11 +195,24 @@ export interface DesktopGateway {
   uninstallPlugin(pluginId: string): Promise<void>;
   getPluginLogs(pluginId: string): Promise<PluginLogLine[]>;
   testPluginConnection(pluginId: string): Promise<PluginConnectionTest>;
+  runPluginDebugger(pluginId: string, endpointId: string, request?: PluginJsonValue): Promise<PluginDebuggerResponse>;
+  listPluginTools(pluginId: string): Promise<PluginToolDescriptor[]>;
+  invokePluginTool(pluginId: string, toolName: string, input: Record<string, unknown>): Promise<PluginToolWorkbenchResult>;
   listPluginProjects(): Promise<PluginProjectSummary[]>;
-  createPluginProject(pluginId: string, name: string, projectType: "tool" | "service"): Promise<PluginProjectSummary>;
+  createPluginProject(pluginId: string, name: string, projectType: "tool" | "service" | "bundle"): Promise<PluginProjectSummary>;
   validatePluginProject(pluginId: string): Promise<PluginProjectSummary>;
   buildPluginProject(pluginId: string): Promise<string>;
   listKnowledgeEntries(): Promise<KnowledgeEntry[]>;
+  listKnowledgeBases(): Promise<KnowledgeBaseSummary[]>;
+  createKnowledgeBase(name: string, description: string): Promise<KnowledgeBaseSummary>;
+  deleteKnowledgeBase(knowledgeBaseId: string): Promise<void>;
+  listKnowledgeBaseSources(knowledgeBaseId: string): Promise<KnowledgeBaseSource[]>;
+  importKnowledgeBaseFiles(knowledgeBaseId: string, paths: string[]): Promise<KnowledgeBaseSource[]>;
+  importKnowledgeBaseDirectory(knowledgeBaseId: string, directoryPath: string): Promise<KnowledgeBaseSource[]>;
+  addKnowledgeBaseText(knowledgeBaseId: string, title: string, content: string): Promise<KnowledgeBaseSource>;
+  addKnowledgeBaseUrl(knowledgeBaseId: string, url: string): Promise<KnowledgeBaseSource>;
+  deleteKnowledgeBaseSource(knowledgeBaseId: string, sourceId: string): Promise<void>;
+  searchKnowledgeBase(knowledgeBaseIds: string[], query: string, limit: number): Promise<KnowledgeBaseSearchResult[]>;
   readKnowledgeFile(relativePath: string): Promise<string>;
   writeKnowledgeFile(relativePath: string, content: string): Promise<void>;
   createKnowledgeEntry(relativePath: string, kind: "file" | "directory"): Promise<void>;
@@ -177,6 +235,32 @@ let mockWorkspaces: WorkspaceInfo[] = [{
   active: true,
   createdAt: Date.now(),
 }];
+let mockAutomationPlans: AutomationPlan[] = [];
+let mockAutomationRuns: AutomationRun[] = [];
+let mockKnowledgeBases: KnowledgeBaseSummary[] = [{
+  id: "kb-browser-preview",
+  name: "产品资料",
+  description: "浏览器预览中的向量知识库示例。",
+  sourceCount: 1,
+  chunkCount: 2,
+  status: "ready",
+  updatedAt: Date.now(),
+}];
+let mockKnowledgeBaseSources: KnowledgeBaseSource[] = [{
+  id: "source-browser-preview",
+  knowledgeBaseId: "kb-browser-preview",
+  name: "DRPA 简介.md",
+  kind: "file",
+  status: "ready",
+  chunkCount: 2,
+  sizeBytes: 680,
+  uri: "DRPA 简介.md",
+  lastError: "",
+  updatedAt: Date.now(),
+}];
+const mockAgentArtifacts = new Map<string, AgentDocumentArtifact[]>();
+let mockAgentProjects: AgentConversationProject[] = [];
+let mockAgentSessions: AgentConversationSession[] = [];
 const mockStudioContents = new Map<string, Map<string, string>>();
 const mockKnowledgeDirectories = new Set(["RPAZ 开发指南"]);
 const mockKnowledgeContents = new Map<string, string>([
@@ -190,10 +274,10 @@ let mockRemoteDatabaseProfiles: RemoteDatabaseProfile[] = [];
 let mockLocalDifyProviders: LocalDifyProvider[] = [{
   id: "provider-browser-preview",
   name: "OpenAI 兼容 Provider",
-  baseUrl: "http://127.0.0.1:34121/v1",
-  model: "dify-app",
-  contextWindow: 128000,
-  maxOutputTokens: 4096,
+  baseUrl: "http://127.0.0.1/v1",
+  model: "deepseek-v4-flash",
+  contextWindow: 393216,
+  maxOutputTokens: 98304,
   temperature: 0.2,
   streaming: true,
   supportsTools: true,
@@ -202,7 +286,7 @@ let mockLocalDifyProviders: LocalDifyProvider[] = [{
   timeoutSeconds: 120,
   customHeaders: {},
   difyProvider: "langgenius/openai/openai",
-  difyModel: "gpt-4o-mini",
+  difyModel: "deepseek-v4-flash",
   hasApiKey: false,
   updatedAt: Date.now(),
 }];
@@ -217,7 +301,7 @@ let mockLocalDifyApps: LocalDifyApp[] = [{
   openingStatement: "你好，这是一个本地 Dify 调试应用。",
   inputKey: "query",
   temperature: 0.2,
-  maxOutputTokens: 4096,
+  maxOutputTokens: 98304,
   workflow: { schema: 1, viewport: { x: 80, y: 120, zoom: 1 }, nodes: [], edges: [] },
   publishedVersion: 1,
   apiEnabled: true,
@@ -242,6 +326,13 @@ function mockWorkflowNode(kind: string, x: number, y: number): LocalDifyWorkflow
     "if-else": { title: "条件分支", height: 112, config: { cases: [{ case_id: "true", logical_operator: "and", conditions: [{ variable_selector: ["start", "query"], comparison_operator: "contains", value: "" }] }] } },
     "http-request": { title: "HTTP 请求", height: 108, config: { method: "get", url: "https://example.com", headers: "", body: { type: "none", data: [] } } },
     code: { title: "代码执行", height: 112, config: { code_language: "python3", code: "def main(input: str):\n    return {'result': input}\n", variables: [], outputs: { result: { type: "string" } } } },
+    "question-classifier": { title: "问题分类器", height: 116, config: { query_variable_selector: ["start", "query"], classes: [{ id: "1", name: "类别 1" }, { id: "2", name: "类别 2" }] } },
+    "parameter-extractor": { title: "参数提取器", height: 112, config: { query: ["start", "query"], parameters: [{ name: "result", type: "string", description: "需要提取的结果" }], instruction: "从输入文本中提取结构化参数。" } },
+    "variable-aggregator": { title: "变量聚合器", height: 96, config: { variables: [["start", "query"]], output_type: "any" } },
+    "list-operator": { title: "列表操作", height: 108, config: { variable: ["start", "query"], filter_by: { enabled: false, conditions: [] }, order_by: { enabled: false, key: "", value: "asc" }, limit: { enabled: true, size: 10 } } },
+    "document-extractor": { title: "文档提取器", height: 92, config: { variable_selector: ["start", "file_path"], is_array_file: false } },
+    "knowledge-retrieval": { title: "知识检索", height: 104, config: { query_variable_selector: ["start", "query"], top_k: 5 } },
+    "rpaz-package": { title: "RPAZ 包", height: 96, config: { package_id: "", parameters: { input: "{{#start.query#}}" } } },
     answer: { title: "直接回复", height: 84, config: { answer: "{{#llm.text#}}" } },
     end: { title: "结束", height: 84, config: { outputs: [{ variable: "answer", value_selector: ["llm", "text"] }] } },
   };
@@ -267,11 +358,17 @@ function mockWorkflowGraph(mode: LocalDifyAppMode, inputKey = "query"): LocalDif
 }
 const mockAgentSkills = new Map<string, string>([[
   "rpaz-development",
-  "---\nname: rpaz-development\ndescription: 创建、修改、校验或构建 RPAZ 脚本包时使用。\n---\n\n# RPAZ Development\n",
+  "---\nname: rpaz-development\ndescription: 创建、修改、校验或构建 RPAZ 包时使用。\n---\n\n# RPAZ Development\n",
+], [
+  "data-analysis",
+  "---\nname: data-analysis\ndescription: 使用只读查询、Python 与文档能力完成可复核的数据分析。\n---\n\n# 数据分析\n",
 ]]);
 const mockAgentSkillManifests = new Map<string, string>([[
   "rpaz-development",
-  "schema: 2\nid: rpaz-development\nname: RPAZ Development\nversion: 2.0.0\ndescription: 创建、修改、校验或构建 RPAZ 脚本包时使用。\ntools: []\nlibraries: []\n",
+  "schema: 2\nid: rpaz-development\nname: RPAZ Development\nversion: 2.0.0\ndescription: 创建、修改、校验或构建 RPAZ 包时使用。\ntools: []\nlibraries: []\n",
+], [
+  "data-analysis",
+  "schema: 2\nid: data-analysis\nname: 数据分析\nversion: 2.0.0\ndescription: 使用只读查询、Python 与文档能力完成可复核的数据分析。\ntools: []\nlibraries: []\n",
 ]]);
 const mockAgentSkillFiles = new Map<string, string>();
 const mockAgentSkillDirectories = new Set<string>();
@@ -279,30 +376,168 @@ let mockPluginProjects: PluginProjectSummary[] = [];
 let mockPluginRunning = false;
 let mockPluginEnabled = false;
 let mockPluginConfig: Record<string, unknown> = {
-  base_url: "http://127.0.0.1:5001/v1",
-  api_key: "",
-  app_type: "chat",
-  input_key: "query",
-  model: "dify-app",
-  port: 34121,
-  tool_bridge: true,
+  dify_base_url: "https://api.dify.ai/v1",
+  dify_api_key: "",
+  listen_addr: "127.0.0.1:34123",
+  model_name: "dify-agent",
+  proxy_api_key: "browser-preview-local-token",
+  enable_tool_emu: true,
+  strip_think_tags: true,
+  default_user: "drpa",
+  show_agent_thought: false,
 };
 
 function mockPlugins(): PluginSummary[] {
+  const listenAddress = typeof mockPluginConfig.listen_addr === "string"
+    ? mockPluginConfig.listen_addr
+    : "127.0.0.1:34123";
+  const endpoint = `http://${listenAddress}/v1`;
+  const serviceStatus = mockPluginRunning ? "running" : mockPluginEnabled ? "stopped" : "disabled";
   return [{
-    id: "dify-loves-hermes",
-    name: "Dify Loves Hermes",
-    version: "0.3.0",
-    description: "将本地或远程 Dify App API 转换为 OpenAI 兼容接口，并补充工具调用与 Provider 链路追踪。",
-    types: ["provider-adapter", "service"],
+    id: "dify2api",
+    name: "Dify2API 网关",
+    version: "1.0.0",
+    description: "将 Dify Agent 转换为 OpenAI 兼容服务，并在 DRPA 内完成连通性、模型、对话与请求链路调试。",
+    types: ["provider-adapter", "service", "debugger"],
     enabled: mockPluginEnabled,
     autostart: false,
-    status: mockPluginRunning ? "running" : mockPluginEnabled ? "stopped" : "disabled",
-    endpoint: `http://127.0.0.1:${Number(mockPluginConfig.port ?? 34121)}/v1`,
+    status: serviceStatus,
+    endpoint,
     toolCount: 0,
-    config: mockPluginConfig,
-    configSchema: { type: "object", properties: {} },
-    directory: "浏览器预览数据/plugins/dify-loves-hermes",
+    serviceCount: 1,
+    toolProviderCount: 0,
+    services: [{
+      id: "gateway",
+      title: "OpenAI 兼容网关",
+      primary: true,
+      transport: "http",
+      status: serviceStatus,
+      endpoint,
+      healthcheck: `http://${listenAddress}/healthz`,
+    }],
+    providers: [{
+      id: "openai",
+      title: "Dify Agent（OpenAI 兼容）",
+      protocol: "openai",
+      serviceId: "gateway",
+      endpoint,
+      modelConfigKey: "model_name",
+      apiKeyConfigKey: "proxy_api_key",
+    }],
+    debugger: {
+      endpoints: [
+        {
+          id: "health",
+          title: "服务健康",
+          kind: "health",
+          method: "GET",
+          endpoint: `http://${listenAddress}/healthz`,
+          bearerConfigKey: "",
+          requestDefaults: null,
+          timeoutSeconds: 5,
+        },
+        {
+          id: "upstream",
+          title: "测试 Dify 连接",
+          kind: "connection",
+          method: "GET",
+          endpoint: `http://${listenAddress}/drpa/debug/upstream`,
+          bearerConfigKey: "proxy_api_key",
+          requestDefaults: null,
+          timeoutSeconds: 25,
+        },
+        {
+          id: "models",
+          title: "查询兼容模型",
+          kind: "openai-models",
+          method: "GET",
+          endpoint: `${endpoint}/models`,
+          bearerConfigKey: "proxy_api_key",
+          requestDefaults: null,
+          timeoutSeconds: 10,
+        },
+        {
+          id: "chat",
+          title: "对话调试",
+          kind: "openai-chat",
+          method: "POST",
+          endpoint: `${endpoint}/chat/completions`,
+          bearerConfigKey: "proxy_api_key",
+          requestDefaults: {
+            model: typeof mockPluginConfig.model_name === "string" ? mockPluginConfig.model_name : "dify-agent",
+            messages: [{ role: "user", content: "请简要介绍你自己。" }],
+            stream: false,
+          },
+          timeoutSeconds: 30,
+        },
+        {
+          id: "tool-call",
+          title: "工具调用调试",
+          kind: "openai-chat",
+          method: "POST",
+          endpoint: `${endpoint}/chat/completions`,
+          bearerConfigKey: "proxy_api_key",
+          requestDefaults: {
+            model: typeof mockPluginConfig.model_name === "string" ? mockPluginConfig.model_name : "dify-agent",
+            messages: [{ role: "user", content: "请查询上海当前时间，并调用可用工具。" }],
+            tools: [{
+              type: "function",
+              function: {
+                name: "get_time",
+                description: "查询指定城市的当前时间",
+                parameters: {
+                  type: "object",
+                  properties: { city: { type: "string" } },
+                  required: ["city"],
+                },
+              },
+            }],
+            tool_choice: "auto",
+            stream: false,
+          },
+          timeoutSeconds: 30,
+        },
+      ],
+      panels: [
+        {
+          id: "traffic",
+          title: "请求链路",
+          kind: "structured-log",
+          endpoint: "",
+          config: { groupBy: "req_id" },
+        },
+        {
+          id: "service-log",
+          title: "服务日志",
+          kind: "log",
+          endpoint: "",
+          config: { serviceId: "gateway" },
+        },
+      ],
+    },
+    config: Object.fromEntries(
+      Object.entries(mockPluginConfig).filter(([key]) => !["dify_api_key", "proxy_api_key"].includes(key)),
+    ),
+    configuredSecrets: {
+      dify_api_key: Boolean(mockPluginConfig.dify_api_key),
+      proxy_api_key: Boolean(mockPluginConfig.proxy_api_key),
+    },
+    configSchema: {
+      type: "object",
+      properties: {
+        dify_base_url: { type: "string", title: "Dify API 地址" },
+        dify_api_key: { type: "string", title: "Dify App API Key", secret: true },
+        listen_addr: { type: "string", title: "本地监听地址", pattern: "^127\\.0\\.0\\.1:[0-9]{2,5}$" },
+        model_name: { type: "string", title: "对外模型名" },
+        proxy_api_key: { type: "string", title: "本地代理 API Key", secret: true, minLength: 24 },
+        enable_tool_emu: { type: "boolean", title: "启用工具调用适配" },
+        strip_think_tags: { type: "boolean", title: "移除 think 标签" },
+        default_user: { type: "string", title: "默认用户标识" },
+        show_agent_thought: { type: "boolean", title: "显示 Agent Thought" },
+      },
+      required: ["dify_base_url", "dify_api_key", "listen_addr", "model_name", "proxy_api_key"],
+    },
+    directory: "浏览器预览数据/plugins/dify2api",
     lastError: "",
   }];
 }
@@ -376,6 +611,7 @@ const mockGateway: DesktopGateway = {
     return structuredClone(mockSnapshot);
   },
   async reportUiReady() {},
+  async completeStartup() {},
   async reportUiInputReady() {},
   async installPackage() {
     throw new Error("浏览器预览模式不能读取本地 rpaz，请在桌面应用中测试安装。 ");
@@ -409,6 +645,72 @@ const mockGateway: DesktopGateway = {
     };
   },
   async openRunOutputDirectory() {},
+  async listAutomationPlans() {
+    return structuredClone(mockAutomationPlans);
+  },
+  async createAutomationPlan(input) {
+    const now = Date.now();
+    const plan: AutomationPlan = {
+      ...structuredClone(input),
+      id: `automation-${now}`,
+      createdAt: now,
+      updatedAt: now,
+      nextRunAt: input.enabled ? now + 3_600_000 : undefined,
+    };
+    mockAutomationPlans = [...mockAutomationPlans, plan];
+    return structuredClone(plan);
+  },
+  async updateAutomationPlan(input) {
+    const current = mockAutomationPlans.find((plan) => plan.id === input.id);
+    if (!current) throw new Error("自动化计划不存在");
+    const updated: AutomationPlan = {
+      ...current,
+      ...structuredClone(input),
+      updatedAt: Date.now(),
+      nextRunAt: input.enabled ? Date.now() + 3_600_000 : undefined,
+    };
+    mockAutomationPlans = mockAutomationPlans.map((plan) => plan.id === updated.id ? updated : plan);
+    return structuredClone(updated);
+  },
+  async deleteAutomationPlan(planId) {
+    mockAutomationPlans = mockAutomationPlans.filter((plan) => plan.id !== planId);
+  },
+  async setAutomationPlanEnabled(planId, enabled) {
+    const current = mockAutomationPlans.find((plan) => plan.id === planId);
+    if (!current) throw new Error("自动化计划不存在");
+    const updated = { ...current, enabled, updatedAt: Date.now(), nextRunAt: enabled ? Date.now() + 3_600_000 : undefined };
+    mockAutomationPlans = mockAutomationPlans.map((plan) => plan.id === planId ? updated : plan);
+    return structuredClone(updated);
+  },
+  async runAutomationPlanNow(planId) {
+    const plan = mockAutomationPlans.find((item) => item.id === planId);
+    if (!plan) throw new Error("自动化计划不存在");
+    const now = Date.now();
+    const run: AutomationRun = {
+      id: `automation-run-${now}`,
+      planId,
+      planName: plan.name,
+      trigger: "manual",
+      status: "succeeded",
+      queuedAt: now,
+      startedAt: now,
+      finishedAt: now + 240,
+      attempt: 1,
+      result: { preview: true },
+      error: "",
+      deliveryResults: plan.deliveryTargets.filter((target) => target.enabled).map((target) => ({
+        targetId: target.id,
+        targetName: target.name,
+        status: "dispatched",
+        error: "",
+      })),
+    };
+    mockAutomationRuns = [run, ...mockAutomationRuns];
+    return structuredClone(run);
+  },
+  async listAutomationRuns(planId, limit = 100) {
+    return structuredClone(mockAutomationRuns.filter((run) => !planId || run.planId === planId).slice(0, limit));
+  },
   async listStudioProjects() {
     return structuredClone(mockStudioProjects);
   },
@@ -466,6 +768,23 @@ const mockGateway: DesktopGateway = {
   },
   async buildStudioProject(projectId) {
     return `${projectId}.rpaz`;
+  },
+  async installStudioProject(projectId) {
+    const project = mockStudioProjects.find((item) => item.id === projectId);
+    const installed: PackageSummary = {
+      id: `local.${projectId}`,
+      name: project?.name ?? projectId,
+      description: "由开发工作室保存到本地 RPAZ 包库。",
+      version: "0.1.0",
+      runtime: "Python 3.11",
+      trust: "local",
+      accent: "#4f6ef7",
+      initials: "RP",
+      parameters: [],
+      profiles: [],
+    };
+    mockSnapshot.packages = [installed, ...mockSnapshot.packages.filter((item) => item.id !== installed.id)];
+    return structuredClone(installed);
   },
   async openBuildOutputDirectory() {},
   async runStudioProject() {
@@ -542,14 +861,14 @@ const mockGateway: DesktopGateway = {
       schema: 2,
       id: `app-${now}`,
       name,
-      description: "用于本地测试与 Dify DSL 导出的 AI 应用。",
+      description: "用于本地测试与 Dify DSL 导出的流程。",
       mode,
       providerId: mockLocalDifyProviders[0]?.id ?? "",
       systemPrompt: "你是一个准确、简洁的 AI 助手。",
-      openingStatement: "你好，我是本地 AI 应用。",
+      openingStatement: "你好，我是本地流程助手。",
       inputKey: "query",
       temperature: 0.2,
-      maxOutputTokens: 4096,
+      maxOutputTokens: 98304,
       workflow: mockWorkflowGraph(mode),
       publishedVersion: 0,
       apiEnabled: false,
@@ -718,8 +1037,132 @@ const mockGateway: DesktopGateway = {
     mockAgentStreamListeners.set(requestId, onEvent);
     return () => { mockAgentStreamListeners.delete(requestId); };
   },
+  async selectAgentDocumentFiles() {
+    return [];
+  },
+  async selectAgentArtifactExportPath(suggestedName) {
+    return suggestedName;
+  },
+  async importAgentDocument(sourcePath, sessionId) {
+    const name = sourcePath.split(/[\\/]/).at(-1) ?? "document.pdf";
+    return {
+      id: `att-${Date.now()}`,
+      name,
+      format: name.split(".").at(-1)?.toLowerCase() ?? "",
+      sizeBytes: 1024,
+      importedAt: new Date().toISOString(),
+    };
+  },
+  async listAgentArtifacts(sessionId) {
+    return structuredClone(mockAgentArtifacts.get(sessionId) ?? []);
+  },
+  async exportAgentArtifact(_sessionId, artifactId, destinationPath) {
+    return { artifactId, path: destinationPath, sizeBytes: 1024 };
+  },
+  async listAgentProjects() {
+    return structuredClone(mockAgentProjects.map((project) => ({
+      ...project,
+      sessionCount: mockAgentSessions.filter((session) => session.projectId === project.id).length,
+    })));
+  },
+  async createAgentProject(name) {
+    const now = Date.now();
+    const project: AgentConversationProject = {
+      id: `project-${Math.random().toString(16).slice(2, 26)}`,
+      name: name.trim() || "新项目",
+      path: `浏览器预览数据/projects/${now}`,
+      createdAt: now,
+      updatedAt: now,
+      sessionCount: 0,
+    };
+    mockAgentProjects = [...mockAgentProjects, project];
+    return structuredClone(project);
+  },
+  async renameAgentProject(projectId, name) {
+    const project = mockAgentProjects.find((item) => item.id === projectId);
+    if (!project) throw new Error("Agent 项目不存在");
+    Object.assign(project, { name: name.trim() || project.name, updatedAt: Date.now() });
+    return structuredClone(project);
+  },
+  async listAgentSessions(projectId) {
+    return structuredClone(mockAgentSessions
+      .filter((session) => projectId === undefined
+        || (projectId === "" ? !session.projectId : session.projectId === projectId))
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .map((session) => ({
+        id: session.id,
+        title: session.title,
+        projectId: session.projectId || null,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        messageCount: session.messages.length,
+        selectedSkillIds: session.selectedSkillIds,
+      })));
+  },
+  async createAgentSession(projectId = "", title = "新对话", selectedSkillIds = []) {
+    const now = Date.now();
+    const session: AgentConversationSession = {
+      id: `agent-${now}-${Math.random().toString(16).slice(2)}`,
+      title,
+      projectId,
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+      selectedSkillIds,
+      messageCount: 0,
+    };
+    mockAgentSessions = [session, ...mockAgentSessions];
+    return structuredClone(session);
+  },
+  async getAgentSession(sessionId) {
+    const session = mockAgentSessions.find((item) => item.id === sessionId);
+    if (!session) throw new Error("Agent 会话不存在");
+    return structuredClone(session);
+  },
+  async saveAgentSession(session) {
+    const normalized = {
+      ...structuredClone(session),
+      projectId: session.projectId ?? "",
+      selectedSkillIds: session.selectedSkillIds ?? [],
+      messageCount: session.messages.length,
+    };
+    mockAgentSessions = mockAgentSessions.some((item) => item.id === session.id)
+      ? mockAgentSessions.map((item) => item.id === session.id ? normalized : item)
+      : [normalized, ...mockAgentSessions];
+    return structuredClone(normalized);
+  },
+  async renameAgentSession(sessionId, title) {
+    const session = await this.getAgentSession(sessionId);
+    return this.saveAgentSession({ ...session, title, updatedAt: Date.now() });
+  },
+  async moveAgentSession(sessionId, projectId = "") {
+    const session = await this.getAgentSession(sessionId);
+    return this.saveAgentSession({ ...session, projectId, updatedAt: Date.now() });
+  },
+  async deleteAgentSession(sessionId) {
+    mockAgentSessions = mockAgentSessions.filter((session) => session.id !== sessionId);
+  },
   async getRuntimeStatus() {
     return { state: "ready", bundleVersion: "浏览器预览", pythonVersion: "3.11.9", runtimeRoot: "内存预览", environmentRoot: "内存预览", browserExecutable: "内存预览", message: "浏览器预览使用模拟运行环境" };
+  },
+  async getSystemMetrics() {
+    return {
+      sampledAt: Date.now(),
+      cpu: { usagePercent: 18.4, logicalCores: 8 },
+      memory: { usedBytes: 6_442_450_944, totalBytes: 17_179_869_184, usagePercent: 37.5 },
+      disk: {
+        usedBytes: 214_748_364_800,
+        totalBytes: 536_870_912_000,
+        usagePercent: 40,
+        volumes: [{
+          name: "本地磁盘 C:",
+          mountPoint: "C:\\",
+          usedBytes: 214_748_364_800,
+          totalBytes: 536_870_912_000,
+          usagePercent: 40,
+        }],
+      },
+    };
   },
   async getPlatformCapabilities() {
     return {
@@ -741,11 +1184,98 @@ const mockGateway: DesktopGateway = {
     return "浏览器预览数据（内存）";
   },
   async openWorkspaceDataDirectory() {},
+  async exportUserData(targetPath) {
+    return { path: targetPath, fileCount: 12, totalBytes: 65_536, workspaceName: "浏览器预览", restartRequired: false };
+  },
+  async importUserData(sourcePath) {
+    return { path: sourcePath, fileCount: 12, totalBytes: 65_536, workspaceName: "导入 · 浏览器预览", restartRequired: true };
+  },
   async getCurrentUser() {
     return { displayName: "本地用户", accountName: "browser-preview", initials: "本地" };
   },
   async listKnowledgeEntries() {
     return structuredClone(mockKnowledgeEntries());
+  },
+  async listKnowledgeBases() {
+    return structuredClone(mockKnowledgeBases);
+  },
+  async createKnowledgeBase(name, description) {
+    const now = Date.now();
+    const library: KnowledgeBaseSummary = {
+      id: `kb-${now}`,
+      name,
+      description,
+      sourceCount: 0,
+      chunkCount: 0,
+      status: "ready",
+      updatedAt: now,
+    };
+    mockKnowledgeBases = [library, ...mockKnowledgeBases];
+    return structuredClone(library);
+  },
+  async deleteKnowledgeBase(knowledgeBaseId) {
+    mockKnowledgeBases = mockKnowledgeBases.filter((library) => library.id !== knowledgeBaseId);
+    mockKnowledgeBaseSources = mockKnowledgeBaseSources.filter((source) => source.knowledgeBaseId !== knowledgeBaseId);
+  },
+  async listKnowledgeBaseSources(knowledgeBaseId) {
+    return structuredClone(mockKnowledgeBaseSources.filter((source) => source.knowledgeBaseId === knowledgeBaseId));
+  },
+  async importKnowledgeBaseFiles(knowledgeBaseId, paths) {
+    const now = Date.now();
+    const imported = paths.map((path, index): KnowledgeBaseSource => ({
+      id: `source-${now}-${index}`,
+      knowledgeBaseId,
+      name: path.split(/[\\/]/).at(-1) ?? "资料",
+      kind: "file",
+      status: "ready",
+      chunkCount: 1,
+      sizeBytes: 1024,
+      uri: path,
+      lastError: "",
+      updatedAt: now,
+    }));
+    mockKnowledgeBaseSources = [...imported, ...mockKnowledgeBaseSources];
+    mockKnowledgeBases = mockKnowledgeBases.map((library) => library.id === knowledgeBaseId ? {
+      ...library,
+      sourceCount: library.sourceCount + imported.length,
+      chunkCount: library.chunkCount + imported.length,
+      updatedAt: now,
+    } : library);
+    return structuredClone(imported);
+  },
+  async importKnowledgeBaseDirectory(knowledgeBaseId, directoryPath) {
+    return this.importKnowledgeBaseFiles(knowledgeBaseId, [`${directoryPath}/资料.md`]);
+  },
+  async addKnowledgeBaseText(knowledgeBaseId, title, content) {
+    const [source] = await this.importKnowledgeBaseFiles(knowledgeBaseId, [title]);
+    return { ...source!, kind: "text", sizeBytes: new Blob([content]).size };
+  },
+  async addKnowledgeBaseUrl(knowledgeBaseId, url) {
+    const [source] = await this.importKnowledgeBaseFiles(knowledgeBaseId, [url]);
+    return { ...source!, kind: "url", uri: url };
+  },
+  async deleteKnowledgeBaseSource(knowledgeBaseId, sourceId) {
+    mockKnowledgeBaseSources = mockKnowledgeBaseSources.filter((source) => !(source.knowledgeBaseId === knowledgeBaseId && source.id === sourceId));
+  },
+  async searchKnowledgeBase(knowledgeBaseIds, query, limit) {
+    return mockKnowledgeBaseSources
+      .filter((source) => knowledgeBaseIds.includes(source.knowledgeBaseId))
+      .slice(0, limit)
+      .map((source, index): KnowledgeBaseSearchResult => {
+        const library = mockKnowledgeBases.find((item) => item.id === source.knowledgeBaseId);
+        return {
+          knowledgeBaseId: source.knowledgeBaseId,
+          knowledgeBaseName: library?.name ?? "知识库",
+          sourceId: source.id,
+          sourceName: source.name,
+          chunkId: `${source.id}-chunk-${index + 1}`,
+          content: `这是与“${query}”相关的浏览器预览知识片段。`,
+          citation: `${library?.name ?? "知识库"} / ${source.name} #${index + 1}`,
+          score: 0.86 - index * 0.03,
+          vectorScore: 0.88 - index * 0.03,
+          keywordScore: 0.8 - index * 0.03,
+        };
+      });
   },
   async readKnowledgeFile(relativePath) {
     const content = mockKnowledgeContents.get(relativePath);
@@ -855,16 +1385,122 @@ const mockGateway: DesktopGateway = {
   },
   async listPlugins() { return mockPlugins(); },
   async installPlugin() { return mockPlugins()[0]; },
-  async savePluginConfig(_pluginId, config) { mockPluginConfig = config; },
+  async savePluginConfig(_pluginId, config) {
+    mockPluginConfig = {
+      ...config,
+      dify_api_key: typeof config.dify_api_key === "string" && config.dify_api_key
+        ? config.dify_api_key
+        : mockPluginConfig.dify_api_key,
+      proxy_api_key: typeof config.proxy_api_key === "string" && config.proxy_api_key
+        ? config.proxy_api_key
+        : mockPluginConfig.proxy_api_key,
+    };
+  },
   async setPluginEnabled(_pluginId, enabled) { mockPluginEnabled = enabled; if (!enabled) mockPluginRunning = false; },
   async startPlugin() { mockPluginEnabled = true; mockPluginRunning = true; },
   async stopPlugin() { mockPluginRunning = false; },
   async uninstallPlugin() { mockPluginEnabled = false; mockPluginRunning = false; },
-  async getPluginLogs() { return mockPluginRunning ? [{ timestamp: Date.now(), stream: "stderr", message: "listening on http://127.0.0.1:34121/v1" }] : []; },
-  async testPluginConnection() { return { ok: true, message: "Dify App API 连接成功", duration_ms: 18, details: { input_fields: 1 } }; },
+  async getPluginLogs() {
+    return mockPluginRunning
+      ? [{
+          timestamp: Date.now(),
+          stream: "stdout",
+          message: "Dify2API gateway is listening",
+          serviceId: "gateway",
+          event: {
+            kind: "service.ready",
+            title: "Dify2API 已就绪",
+            detail: { endpoint: mockPlugins()[0].endpoint },
+          },
+        }]
+      : [];
+  },
+  async testPluginConnection() {
+    return {
+      ok: true,
+      message: "Dify 上游连接成功",
+      duration_ms: 18,
+      details: { service: "dify2api", model: mockPluginConfig.model_name ?? "dify-agent" },
+    };
+  },
+  async runPluginDebugger(_pluginId, endpointId, request): Promise<PluginDebuggerResponse> {
+    const model = typeof mockPluginConfig.model_name === "string"
+      ? mockPluginConfig.model_name
+      : "dify-agent";
+    const common = {
+      endpointId,
+      status: 200,
+      durationMs: 12,
+      contentType: "application/json",
+      truncated: false,
+    };
+    if (endpointId === "health") {
+      return {
+        ...common,
+        body: { status: "ok", service: "dify2api", model, tool_emulation: true },
+      };
+    }
+    if (endpointId === "upstream") {
+      return {
+        ...common,
+        body: { ok: true, message: "Dify API is reachable", duration_ms: 18 },
+      };
+    }
+    if (endpointId === "models") {
+      return {
+        ...common,
+        body: { object: "list", data: [{ id: model, object: "model", owned_by: "dify" }] },
+      };
+    }
+    if (endpointId === "chat" || endpointId === "tool-call") {
+      return {
+        ...common,
+        durationMs: 36,
+        body: {
+          id: "chatcmpl-browser-preview",
+          object: "chat.completion",
+          model,
+          request: request ?? null,
+          choices: endpointId === "tool-call"
+            ? [{
+              index: 0,
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{
+                  id: "call-browser-preview",
+                  type: "function",
+                  function: { name: "get_time", arguments: "{\"city\":\"上海\"}" },
+                }],
+              },
+              finish_reason: "tool_calls",
+            }]
+            : [{
+              index: 0,
+              message: { role: "assistant", content: "这是 Dify2API 插件调试器的浏览器预览响应。" },
+              finish_reason: "stop",
+            }],
+        },
+      };
+    }
+    throw new Error(`插件未声明调试入口：${endpointId}`);
+  },
+  async listPluginTools() { return []; },
+  async invokePluginTool(_pluginId, toolName, input) {
+    return {
+      ok: true,
+      output: { tool: toolName, input: input as unknown as PluginJsonValue },
+      durationMs: 3,
+    };
+  },
   async listPluginProjects() { return mockPluginProjects; },
   async createPluginProject(pluginId, name, projectType) {
-    const project = { id: pluginId, name, version: "0.1.0", description: "DRPA 插件项目", types: [projectType === "tool" ? "tool-provider" : "provider-adapter", ...(projectType === "service" ? ["service"] : [])], directory: `浏览器预览数据/plugin-projects/${pluginId}`, valid: true, validationMessage: "插件清单与入口文件有效" };
+    const types = projectType === "tool"
+      ? ["tool-provider"]
+      : projectType === "service"
+        ? ["provider-adapter", "service"]
+        : ["provider-adapter", "service", "tool-provider", "debugger"];
+    const project = { id: pluginId, name, version: "0.1.0", description: "DRPA 插件项目", types, directory: `浏览器预览数据/plugin-projects/${pluginId}`, valid: true, validationMessage: "插件清单与入口文件有效" };
     mockPluginProjects = [...mockPluginProjects, project];
     return project;
   },
@@ -878,6 +1514,7 @@ const tauriGateway: DesktopGateway = {
   switchWorkspace: (workspaceId) => invoke<void>("switch_workspace", { workspaceId }),
   getWorkspaceSnapshot: () => invoke<WorkspaceSnapshot>("get_workspace_snapshot"),
   reportUiReady: () => invoke<void>("report_ui_ready"),
+  completeStartup: () => invoke<void>("complete_startup"),
   reportUiInputReady: () => invoke<void>("report_ui_input_ready"),
   installPackage: (archivePath) => invoke<PackageSummary>("install_package", { archivePath }),
   uninstallPackage: (packageId) => invoke<void>("uninstall_package", { packageId }),
@@ -885,6 +1522,13 @@ const tauriGateway: DesktopGateway = {
   cancelRun: (runId) => invoke<void>("cancel_run", { runId }),
   getRunDetail: (runId) => invoke<RunDetail>("get_run_detail", { runId }),
   openRunOutputDirectory: (runId) => invoke<void>("open_run_output_directory", { runId }),
+  listAutomationPlans: () => invoke<AutomationPlan[]>("list_automation_plans"),
+  createAutomationPlan: (input) => invoke<AutomationPlan>("create_automation_plan", { input }),
+  updateAutomationPlan: (input) => invoke<AutomationPlan>("update_automation_plan", { input }),
+  deleteAutomationPlan: (planId) => invoke<void>("delete_automation_plan", { planId }),
+  setAutomationPlanEnabled: (planId, enabled) => invoke<AutomationPlan>("set_automation_plan_enabled", { planId, enabled }),
+  runAutomationPlanNow: (planId) => invoke<AutomationRun>("run_automation_plan_now", { planId }),
+  listAutomationRuns: (planId, limit) => invoke<AutomationRun[]>("list_automation_runs", { planId, limit }),
   listStudioProjects: () => invoke<StudioProject[]>("list_studio_projects"),
   createStudioProject: (name) => invoke<StudioProject>("create_studio_project", { name }),
   openInstalledPackage: (packageId) => invoke<StudioProject>("open_installed_package", { packageId }),
@@ -896,6 +1540,7 @@ const tauriGateway: DesktopGateway = {
   deleteStudioProject: (projectId) => invoke<void>("delete_studio_project", { projectId }),
   importProjectFile: (projectId, sourcePath, targetDirectory) => invoke<string>("import_project_file", { projectId, sourcePath, targetDirectory }),
   buildStudioProject: (projectId) => invoke<string>("build_studio_project", { projectId }),
+  installStudioProject: (projectId) => invoke<PackageSummary>("install_studio_project", { projectId }),
   openBuildOutputDirectory: () => invoke<void>("open_build_output_directory"),
   runStudioProject: (projectId, parameters) => invoke<string>("run_studio_project", { projectId, parameters }),
   executeStudioCell: (projectId, code) => invoke<StudioCellResult>("execute_studio_cell", { projectId, code }),
@@ -952,7 +1597,62 @@ const tauriGateway: DesktopGateway = {
   stopLocalDifyService: () => invoke<LocalDifyServiceStatus>("stop_local_dify_service"),
   runAgentTurn: (request) => invoke<AgentTurnResult>("run_agent_turn", { request }),
   listenAgentStream: async (requestId, onEvent) => listen<AgentStreamEvent>(`agent-stream-${requestId}`, (event) => onEvent(event.payload)),
+  selectAgentDocumentFiles: async () => {
+    const selected = await open({
+      multiple: true,
+      directory: false,
+      filters: [{ name: "对话文档", extensions: ["pdf", "docx", "xlsx", "pptx"] }],
+    });
+    if (!selected) return [];
+    return Array.isArray(selected) ? selected : [selected];
+  },
+  selectAgentArtifactExportPath: async (suggestedName) => {
+    const extension = suggestedName.split(".").at(-1) ?? "";
+    const selected = await import("@tauri-apps/plugin-dialog").then(({ save }) => save({
+      defaultPath: suggestedName,
+      filters: extension ? [{ name: "文档产物", extensions: [extension] }] : undefined,
+    }));
+    return selected ?? null;
+  },
+  importAgentDocument: (sourcePath, sessionId) => invoke<AgentDocumentAttachment>("import_agent_document", { sourcePath, sessionId }),
+  listAgentArtifacts: (sessionId) => invoke<AgentDocumentArtifact[]>("list_agent_artifacts", { sessionId }),
+  exportAgentArtifact: (sessionId, artifactId, destinationPath) => invoke<AgentDocumentExport>("export_agent_artifact", { sessionId, artifactId, destinationPath }),
+  listAgentProjects: () => invoke<AgentConversationProject[]>("list_agent_projects"),
+  createAgentProject: (name) => invoke<AgentConversationProject>("create_agent_project", { name }),
+  renameAgentProject: (projectId, name) => invoke<AgentConversationProject>("rename_agent_project", { projectId, name }),
+  listAgentSessions: (projectId) => invoke<AgentConversationSessionSummary[]>("list_agent_sessions", { projectId }),
+  createAgentSession: async (projectId, title, selectedSkillIds) => {
+    const session = await invoke<AgentConversationSession>("create_agent_session", {
+      projectId: projectId || null,
+      title,
+      selectedSkillIds,
+    });
+    return { ...session, projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+  },
+  getAgentSession: async (sessionId) => {
+    const session = await invoke<AgentConversationSession>("get_agent_session", { sessionId });
+    return { ...session, projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+  },
+  saveAgentSession: async (session) => {
+    const saved = await invoke<AgentConversationSession>("save_agent_session", {
+      session: { ...session, projectId: session.projectId || null },
+    });
+    return { ...saved, projectId: saved.projectId ?? "", selectedSkillIds: saved.selectedSkillIds ?? [] };
+  },
+  renameAgentSession: async (sessionId, title) => {
+    const session = await invoke<AgentConversationSession>("rename_agent_session", { sessionId, title });
+    return { ...session, projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+  },
+  moveAgentSession: async (sessionId, projectId) => {
+    const session = await invoke<AgentConversationSession>("move_agent_session", {
+      sessionId,
+      projectId: projectId || null,
+    });
+    return { ...session, projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+  },
+  deleteAgentSession: (sessionId) => invoke<void>("delete_agent_session", { sessionId }),
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),
+  getSystemMetrics: () => invoke<SystemMetricsSnapshot>("get_system_metrics"),
   getPlatformCapabilities: () => invoke<PlatformCapabilities>("get_platform_capabilities"),
   initializeRuntime: () => invoke<RuntimeStatus>("initialize_runtime"),
   repairRuntime: () => invoke<RuntimeStatus>("repair_runtime"),
@@ -962,6 +1662,8 @@ const tauriGateway: DesktopGateway = {
   restartForWindowsUpdate: (sessionId) => invoke<void>("restart_for_windows_update", { sessionId }),
   getDataDirectory: () => invoke<string>("get_data_directory"),
   openWorkspaceDataDirectory: () => invoke<void>("open_workspace_data_directory"),
+  exportUserData: (targetPath) => invoke<UserDataTransferResult>("export_user_data", { targetPath }),
+  importUserData: (sourcePath) => invoke<UserDataTransferResult>("import_user_data", { sourcePath }),
   getCurrentUser: () => invoke<CurrentUser>("get_current_user"),
   getAgentWorkspaceConfig: () => invoke<AgentWorkspaceConfig>("get_agent_workspace_config"),
   writeAgentWorkspaceDocument: (document, content) => invoke<void>("write_agent_workspace_document", { document, content }),
@@ -984,11 +1686,24 @@ const tauriGateway: DesktopGateway = {
   uninstallPlugin: (pluginId) => invoke<void>("uninstall_plugin", { pluginId }),
   getPluginLogs: (pluginId) => invoke<PluginLogLine[]>("get_plugin_logs", { pluginId }),
   testPluginConnection: (pluginId) => invoke<PluginConnectionTest>("test_plugin_connection", { pluginId }),
+  runPluginDebugger: (pluginId, endpointId, request) => invoke<PluginDebuggerResponse>("run_plugin_debugger", { pluginId, endpointId, request }),
+  listPluginTools: (pluginId) => invoke<PluginToolDescriptor[]>("list_plugin_tools", { pluginId }),
+  invokePluginTool: (pluginId, toolName, input) => invoke<PluginToolWorkbenchResult>("invoke_plugin_tool", { pluginId, toolName, input }),
   listPluginProjects: () => invoke<PluginProjectSummary[]>("list_plugin_projects"),
   createPluginProject: (pluginId, name, projectType) => invoke<PluginProjectSummary>("create_plugin_project", { pluginId, name, projectType }),
   validatePluginProject: (pluginId) => invoke<PluginProjectSummary>("validate_plugin_project", { pluginId }),
   buildPluginProject: (pluginId) => invoke<string>("build_plugin_project", { pluginId }),
   listKnowledgeEntries: () => invoke<KnowledgeEntry[]>("list_knowledge_entries"),
+  listKnowledgeBases: () => invoke<KnowledgeBaseSummary[]>("list_knowledge_bases"),
+  createKnowledgeBase: (name, description) => invoke<KnowledgeBaseSummary>("create_knowledge_base", { name, description }),
+  deleteKnowledgeBase: (knowledgeBaseId) => invoke<void>("delete_knowledge_base", { knowledgeBaseId }),
+  listKnowledgeBaseSources: (knowledgeBaseId) => invoke<KnowledgeBaseSource[]>("list_knowledge_base_sources", { knowledgeBaseId }),
+  importKnowledgeBaseFiles: (knowledgeBaseId, paths) => invoke<KnowledgeBaseSource[]>("import_knowledge_base_files", { knowledgeBaseId, sourcePaths: paths }),
+  importKnowledgeBaseDirectory: (knowledgeBaseId, directoryPath) => invoke<KnowledgeBaseSource[]>("import_knowledge_base_directory", { knowledgeBaseId, directoryPath }),
+  addKnowledgeBaseText: (knowledgeBaseId, title, content) => invoke<KnowledgeBaseSource>("add_knowledge_base_text", { knowledgeBaseId, title, content }),
+  addKnowledgeBaseUrl: (knowledgeBaseId, url) => invoke<KnowledgeBaseSource>("add_knowledge_base_url", { knowledgeBaseId, url }),
+  deleteKnowledgeBaseSource: (knowledgeBaseId, sourceId) => invoke<void>("delete_knowledge_base_source", { knowledgeBaseId, sourceId }),
+  searchKnowledgeBase: (knowledgeBaseIds, query, limit) => invoke<KnowledgeBaseSearchResult[]>("search_knowledge_base", { knowledgeBaseIds, query, limit }),
   readKnowledgeFile: (relativePath) => invoke<string>("read_knowledge_file", { relativePath }),
   writeKnowledgeFile: (relativePath, content) => invoke<void>("write_knowledge_file", { relativePath, content }),
   createKnowledgeEntry: (relativePath, kind) => invoke<void>("create_knowledge_entry", { relativePath, kind }),

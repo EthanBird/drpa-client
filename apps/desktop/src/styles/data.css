@@ -1,9 +1,13 @@
 .data-page { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+:root[data-hide-page-headers="true"] .data-page { grid-template-rows: auto minmax(0, 1fr); }
 .data-header { min-height: 92px; }
 .data-header .header-actions { flex-wrap: wrap; justify-content: flex-end; }
 .data-header .button kbd { margin-left: 2px; border-color: rgba(255,255,255,.24); background: rgba(255,255,255,.12); color: inherit; box-shadow: none; }
 .data-header .ai-sql-button { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); color: var(--accent-strong); }
 .data-workspace { display: grid; grid-template-columns: 258px minmax(420px, 1fr) 258px; min-width: 0; min-height: 0; gap: 1px; overflow: hidden; background: var(--border-subtle); }
+.data-workspace.schema-collapsed { grid-template-columns: 30px minmax(420px, 1fr) 258px; }
+.data-workspace.inspector-collapsed { grid-template-columns: 258px minmax(420px, 1fr) 30px; }
+.data-workspace.schema-collapsed.inspector-collapsed { grid-template-columns: 30px minmax(420px, 1fr) 30px; }
 .data-schema-pane, .data-query-pane, .data-inspector-pane { min-width: 0; min-height: 0; background: var(--surface-1); }
 .data-schema-pane, .data-inspector-pane { display: flex; flex-direction: column; overflow: hidden; }
 .data-pane-title { display: flex; flex: 0 0 38px; align-items: center; gap: 7px; padding: 0 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text-2); font-size: calc(10px * var(--font-scale)); font-weight: 750; letter-spacing: .04em; }
@@ -154,6 +158,8 @@
 @media (max-width: 1180px) {
   .data-header { min-height: 78px; padding: 13px 16px; }
   .data-header p { display: none; }
-  .data-workspace { grid-template-columns: 210px minmax(420px, 1fr); }
-  .data-inspector-pane { display: none; }
+  .data-workspace { grid-template-columns: 180px minmax(320px, 1fr) 180px; }
+  .data-workspace.schema-collapsed { grid-template-columns: 30px minmax(320px, 1fr) 180px; }
+  .data-workspace.inspector-collapsed { grid-template-columns: 180px minmax(320px, 1fr) 30px; }
+  .data-workspace.schema-collapsed.inspector-collapsed { grid-template-columns: 30px minmax(320px, 1fr) 30px; }
 }

@@ -1,8 +1,13 @@
 use std::collections::HashSet;
-use std::fs::{self, File};
+use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    mpsc::{self, Receiver, RecvTimeoutError},
+};
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -16,6 +21,7 @@ use crate::AppPaths;
 const MAX_DOCUMENT_BYTES: usize = 256 * 1024;
 const MAX_MEMORY_CONTEXT_BYTES: usize = 25 * 1024;
 const MAX_SKILL_OUTPUT_BYTES: usize = 256 * 1024;
+const SKILL_IO_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const INITIALIZED_MARKER: &str = ".workspace-v2";
 const LEGACY_MARKER: &str = ".workspace-v1";
 
@@ -23,7 +29,7 @@ const DEFAULT_AGENTS: &str = r#"# DRPA Agent 工作约定
 
 ## 目标
 
-- 聚焦 RPAZ 脚本包的创建、读取、修改、校验、构建与知识维护。
+- 聚焦 RPAZ 包的创建、读取、修改、校验、构建与知识维护。
 - 先读取相关文件再修改；保持改动小而可验证。
 - 修改项目后运行 `rpaz_validate`，需要交付归档时运行 `rpaz_build`。
 
@@ -32,6 +38,7 @@ const DEFAULT_AGENTS: &str = r#"# DRPA Agent 工作约定
 - Skill 是由 `skill.yaml`、`instructions.md`、工作流、资源、代码和测试组成的能力包。
 - Skill 可以声明 Python 或命令工具，也可以携带供工具调用的代码库。
 - 只在任务匹配时加载 Skill 正文；工具由 DRPA ToolRegistry 统一发现和执行。
+- `permissions` 是能力声明和调度元数据，不等于操作系统沙箱；只启用来源可信的 Skill。
 "#;
 
 const DEFAULT_MEMORY: &str = r#"# Agent Memory
@@ -43,10 +50,10 @@ const DEFAULT_SKILL_MANIFEST: &str = r#"schema: 2
 id: rpaz-development
 name: RPAZ Development
 version: 2.0.0
-description: 创建、修改、校验或构建 RPAZ 脚本包时使用。
+description: 创建、修改、校验或构建 RPAZ 包时使用。
 activation:
   intents:
-    - 创建脚本包
+    - 创建 RPAZ 包
     - 修改 RPAZ
     - 调试脚本
   file_patterns:
@@ -67,6 +74,40 @@ const DEFAULT_SKILL_INSTRUCTIONS: &str = r#"# RPAZ Development
 3. 输出文件统一通过 `ctx.output_file()` 创建；长任务报告进度。
 4. 修改后调用 `rpaz_validate`，修复全部结构错误。
 5. 需要归档时调用 `rpaz_build`，报告生成路径和文件数量。
+"#;
+
+const DATA_ANALYSIS_SKILL_MANIFEST: &str = r#"schema: 2
+id: data-analysis
+name: 数据分析
+version: 2.0.0
+description: 使用数据工作台只读查询、Python 与文档能力完成可复核的数据分析。
+activation:
+  intents:
+    - 数据分析
+    - 指标诊断
+    - 数据质量
+    - 报告生成
+  file_patterns:
+    - '*.csv'
+    - '*.xls'
+    - '*.xlsx'
+    - '*.sqlite'
+    - '*.db'
+permissions:
+  workspace_read: true
+  workspace_write: false
+  network: false
+tools: []
+libraries: []
+"#;
+
+const DATA_ANALYSIS_SKILL_INSTRUCTIONS: &str = r#"# 数据分析
+
+1. 先确认问题、统计口径、数据粒度和时间范围，再读取连接与表结构。
+2. 数据库只使用 `data_query` 执行只读 SQL；禁止生成或尝试执行写入、DDL 与破坏性语句。
+3. 需要清洗、计算、制图或验证时，在已绑定的通用项目中使用 Python，并保留可复核的代码与中间口径。
+4. 主动检查缺失值、重复值、异常范围、分母和样本量；不要把相关性写成因果性。
+5. 结论先行，随后给证据、口径、限制与可执行建议；生成报告或表格时使用文档工具。
 "#;
 
 const PYTHON_SKILL_RUNNER: &str = r#"
@@ -372,6 +413,7 @@ pub(crate) fn load_workspace_config(workspace_root: &Path) -> Result<AgentWorksp
 pub(crate) fn render_agent_context(
     workspace_root: &Path,
     project_root: Option<&Path>,
+    selected_skill_ids: &[String],
 ) -> Result<String, String> {
     ensure_agent_workspace(workspace_root)?;
     let root = agent_root(workspace_root);
@@ -384,11 +426,22 @@ pub(crate) fn render_agent_context(
         .transpose()?
         .unwrap_or_default();
     let skills = list_skills_for_agent(workspace_root)?;
+    let selected = selected_skill_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if let Some(missing) = selected
+        .iter()
+        .find(|name| !skills.iter().any(|skill| skill.name == **name))
+    {
+        return Err(format!("所选 Skill 不存在：{missing}"));
+    }
     let catalog = if skills.is_empty() {
         "- 暂无 Skill".to_owned()
     } else {
         skills
             .iter()
+            .filter(|skill| selected.is_empty() || selected.contains(skill.name.as_str()))
             .map(|skill| {
                 format!(
                     "- {}：{}（v{}，{} 个工具，{} 个代码库）",
@@ -402,12 +455,27 @@ pub(crate) fn render_agent_context(
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let selected_instructions = if selected.is_empty() {
+        "未固定选择 Skill；按任务从目录渐进加载。".to_owned()
+    } else {
+        selected_skill_ids
+            .iter()
+            .map(|name| {
+                read_skill_for_agent(workspace_root, name).map(|content| {
+                    format!("<selected_skill name=\"{name}\">\n{content}\n</selected_skill>")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n\n")
+    };
     Ok(format!(
         "\n\n<workspace_agents>\n{global}\n</workspace_agents>\n\
          <project_agents>\n{project}\n</project_agents>\n\
          <agent_memory>\n{memory}\n</agent_memory>\n\
          <available_skills>\n{catalog}\n</available_skills>\n\
-         Skill 采用渐进加载：任务匹配时调用 agent_read_skill。Skill 可能包含由 ToolRegistry 暴露的可执行工具。"
+         <selected_skills>\n{selected_instructions}\n</selected_skills>\n\
+         未固定选择 Skill 时采用渐进加载：任务匹配时调用 agent_read_skill。Skill 可能包含由 ToolRegistry 暴露的可执行工具。\
+         Skill 清单中的 permissions 只是能力声明和调度元数据，不代表操作系统级沙箱；只执行来源可信且经用户启用的 Skill。"
     ))
 }
 
@@ -549,10 +617,20 @@ pub(crate) fn write_skill_package(
     Ok(())
 }
 
-pub(crate) fn skill_tool_definitions(workspace_root: &Path) -> Result<Vec<Value>, String> {
+pub(crate) fn skill_tool_definitions(
+    workspace_root: &Path,
+    selected_skill_ids: &[String],
+) -> Result<Vec<Value>, String> {
     ensure_agent_workspace(workspace_root)?;
+    let selected = selected_skill_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
     let mut definitions = Vec::new();
     for summary in list_skills_for_agent(workspace_root)? {
+        if !selected.is_empty() && !selected.contains(summary.name.as_str()) {
+            continue;
+        }
         if summary.format != "skill-v2" || summary.tool_count == 0 {
             continue;
         }
@@ -642,6 +720,7 @@ fn execute_skill_tool_inner(
             "workspaceRoot": workspace_root.to_string_lossy(),
             "projectRoot": project_root.map(|path| path.to_string_lossy().into_owned()),
             "permissions": manifest.permissions,
+            "permissionEnforcement": "declaration-only; not an operating-system sandbox",
         }
     });
     let timeout = Duration::from_secs(tool.timeout_seconds.clamp(1, 300));
@@ -702,6 +781,16 @@ fn ensure_agent_workspace(workspace_root: &Path) -> Result<(), String> {
     write_if_missing(
         &default_skill.join("instructions.md"),
         DEFAULT_SKILL_INSTRUCTIONS,
+    )?;
+    let data_analysis_skill = skills.join("data-analysis");
+    fs::create_dir_all(&data_analysis_skill).map_err(|error| error.to_string())?;
+    write_if_missing(
+        &data_analysis_skill.join("skill.yaml"),
+        DATA_ANALYSIS_SKILL_MANIFEST,
+    )?;
+    write_if_missing(
+        &data_analysis_skill.join("instructions.md"),
+        DATA_ANALYSIS_SKILL_INSTRUCTIONS,
     )?;
     write_if_missing(&root.join(INITIALIZED_MARKER), "2\n")?;
     Ok(())
@@ -858,45 +947,90 @@ fn run_json_process(
     request: &Value,
     timeout: Duration,
 ) -> Result<Value, String> {
-    let temporary = std::env::temp_dir().join(format!("drpa-skill-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temporary).map_err(|error| error.to_string())?;
-    let stdout_path = temporary.join("stdout.json");
-    let stderr_path = temporary.join("stderr.log");
-    let stdout = File::create(&stdout_path).map_err(|error| error.to_string())?;
-    let stderr = File::create(&stderr_path).map_err(|error| error.to_string())?;
     command
         .args(args)
         .current_dir(current_dir)
         .stdin(Stdio::piped())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8");
-    hide_child_window(&mut command);
+    configure_skill_process(&mut command);
+    let started = Instant::now();
     let mut child = command
         .spawn()
         .map_err(|error| format!("启动 Skill 工具失败：{error}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(request.to_string().as_bytes())
-            .map_err(|error| error.to_string())?;
-    }
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break status;
+
+    let mut process_tree = SkillProcessTree::attach(&mut child);
+    let Some(stdout) = child.stdout.take() else {
+        process_tree.terminate(&mut child);
+        return Err("无法捕获 Skill 工具标准输出".to_owned());
+    };
+    let Some(stderr) = child.stderr.take() else {
+        process_tree.terminate(&mut child);
+        return Err("无法捕获 Skill 工具错误输出".to_owned());
+    };
+    let Some(stdin) = child.stdin.take() else {
+        process_tree.terminate(&mut child);
+        return Err("无法写入 Skill 工具标准输入".to_owned());
+    };
+    let output_bytes = Arc::new(AtomicUsize::new(0));
+    let output_exceeded = Arc::new(AtomicBool::new(false));
+    let stdout_receiver =
+        capture_skill_stream(stdout, output_bytes.clone(), output_exceeded.clone());
+    let stderr_receiver = capture_skill_stream(stderr, output_bytes, output_exceeded.clone());
+    let stdin_receiver = write_skill_stdin(stdin, request.to_string().into_bytes());
+
+    let mut status = None;
+    let mut failure = None;
+    loop {
+        if output_exceeded.load(Ordering::Relaxed) {
+            failure = Some(format!(
+                "Skill 工具输出超过 {} KiB 安全上限",
+                MAX_SKILL_OUTPUT_BYTES / 1024
+            ));
+            break;
+        }
+        match child.try_wait() {
+            Ok(Some(exit_status)) => {
+                status = Some(exit_status);
+                break;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                failure = Some(format!("等待 Skill 工具失败：{error}"));
+                break;
+            }
         }
         if started.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = fs::remove_dir_all(&temporary);
-            return Err(format!("Skill 工具执行超过 {} 秒", timeout.as_secs()));
+            failure = Some(format!("Skill 工具执行超过 {} 秒", timeout.as_secs()));
+            break;
         }
         thread::sleep(Duration::from_millis(30));
-    };
-    let stdout = read_limited_bytes(&stdout_path, MAX_SKILL_OUTPUT_BYTES);
-    let stderr = read_limited_bytes(&stderr_path, MAX_SKILL_OUTPUT_BYTES);
-    let _ = fs::remove_dir_all(&temporary);
+    }
+
+    // Always tear down the process group/job, including after the direct child
+    // exits successfully. A tool may have spawned a descendant that inherited
+    // stdout/stderr; leaving it alive would keep the pipes open forever.
+    process_tree.terminate(&mut child);
+    let drain_deadline = Instant::now() + SKILL_IO_DRAIN_TIMEOUT;
+    let stdout = receive_skill_stream(stdout_receiver, "标准输出", drain_deadline);
+    let stderr = receive_skill_stream(stderr_receiver, "错误输出", drain_deadline);
+    let stdin = receive_skill_stdin(stdin_receiver, drain_deadline);
+
+    if failure.is_none() && output_exceeded.load(Ordering::Relaxed) {
+        failure = Some(format!(
+            "Skill 工具输出超过 {} KiB 安全上限",
+            MAX_SKILL_OUTPUT_BYTES / 1024
+        ));
+    }
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
+    let stdout = stdout?;
+    let stderr = stderr?;
+    stdin?;
+    let status = status.ok_or_else(|| "Skill 工具没有返回退出状态".to_owned())?;
     if !status.success() {
         return Err(format!(
             "Skill 工具退出码 {}：{}",
@@ -908,12 +1042,77 @@ fn run_json_process(
         .map_err(|error| format!("Skill 工具输出不是有效 JSON：{error}；输出：{stdout}"))
 }
 
-fn read_limited_bytes(path: &Path, limit: usize) -> String {
-    let mut content = Vec::new();
-    if let Ok(file) = File::open(path) {
-        let _ = file.take(limit as u64).read_to_end(&mut content);
+fn capture_skill_stream<R>(
+    mut reader: R,
+    total_bytes: Arc<AtomicUsize>,
+    output_exceeded: Arc<AtomicBool>,
+) -> Receiver<Result<String, String>>
+where
+    R: Read + Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut retained = Vec::with_capacity(MAX_SKILL_OUTPUT_BYTES.min(16 * 1024));
+        let mut buffer = [0u8; 8192];
+        let result = loop {
+            let count = match reader.read(&mut buffer) {
+                Ok(0) => break Ok(()),
+                Ok(count) => count,
+                Err(error) => break Err(format!("读取 Skill 工具输出失败：{error}")),
+            };
+            let previous = total_bytes.fetch_add(count, Ordering::Relaxed);
+            let allowed = MAX_SKILL_OUTPUT_BYTES.saturating_sub(previous).min(count);
+            retained.extend_from_slice(&buffer[..allowed]);
+            if previous.saturating_add(count) > MAX_SKILL_OUTPUT_BYTES {
+                output_exceeded.store(true, Ordering::Relaxed);
+                break Ok(());
+            }
+        };
+        let captured = result.map(|()| String::from_utf8_lossy(&retained).into_owned());
+        let _ = sender.send(captured);
+    });
+    receiver
+}
+
+fn write_skill_stdin<W>(mut writer: W, payload: Vec<u8>) -> Receiver<Result<(), String>>
+where
+    W: Write + Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let result = writer
+            .write_all(&payload)
+            .map_err(|error| format!("写入 Skill 工具输入失败：{error}"));
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
+fn receive_skill_stream(
+    receiver: Receiver<Result<String, String>>,
+    label: &str,
+    deadline: Instant,
+) -> Result<String, String> {
+    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(result) => result,
+        Err(RecvTimeoutError::Timeout) => Err(format!(
+            "Skill 工具{label}管道未在进程树清理后关闭；已停止等待"
+        )),
+        Err(RecvTimeoutError::Disconnected) => Err(format!("Skill 工具{label}读取线程意外结束")),
     }
-    String::from_utf8_lossy(&content).into_owned()
+}
+
+fn receive_skill_stdin(
+    receiver: Receiver<Result<(), String>>,
+    deadline: Instant,
+) -> Result<(), String> {
+    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(result) => result,
+        Err(RecvTimeoutError::Timeout) => {
+            Err("Skill 工具标准输入未在进程树清理后关闭；已停止等待".to_owned())
+        }
+        Err(RecvTimeoutError::Disconnected) => Err("Skill 工具输入线程意外结束".to_owned()),
+    }
 }
 
 fn resolve_skill_file(
@@ -1109,14 +1308,167 @@ fn skills_root(workspace_root: &Path) -> PathBuf {
     agent_root(workspace_root).join("skills")
 }
 
-#[cfg(windows)]
-fn hide_child_window(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    command.creation_flags(0x0800_0000);
+struct SkillProcessTree {
+    #[cfg(windows)]
+    job: Option<WindowsSkillJob>,
+    #[cfg(unix)]
+    process_group: i32,
 }
 
-#[cfg(not(windows))]
-fn hide_child_window(_command: &mut Command) {}
+impl SkillProcessTree {
+    fn attach(child: &mut Child) -> Self {
+        #[cfg(windows)]
+        {
+            Self {
+                job: WindowsSkillJob::attach(child),
+            }
+        }
+        #[cfg(unix)]
+        {
+            Self {
+                process_group: child.id() as i32,
+            }
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = child;
+            Self {}
+        }
+    }
+
+    fn terminate(&mut self, child: &mut Child) {
+        #[cfg(windows)]
+        {
+            if let Some(job) = self.job.as_ref() {
+                job.terminate();
+            } else {
+                terminate_windows_process_tree(child.id());
+            }
+        }
+        #[cfg(unix)]
+        {
+            // SAFETY: configure_skill_process starts the tool in a dedicated
+            // process group whose id is the direct child's pid.
+            let _ = unsafe { libc::kill(-self.process_group, libc::SIGKILL) };
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(windows)]
+struct WindowsSkillJob {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(windows)]
+impl WindowsSkillJob {
+    fn attach(child: &mut Child) -> Option<Self> {
+        use std::ffi::c_void;
+        use std::mem::size_of;
+        use std::os::windows::io::AsRawHandle;
+        use std::ptr;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+
+        // SAFETY: null attributes/name request an unnamed job owned by this
+        // process; the returned handle is closed by Drop below.
+        let handle = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+        if handle.is_null() {
+            return None;
+        }
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: limits has the exact layout required by the selected
+        // information class and remains alive for the duration of the call.
+        let configured = unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast::<c_void>(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        } != 0;
+        // SAFETY: Child owns a live process handle; AssignProcessToJobObject
+        // borrows it for the duration of this call.
+        let assigned = configured
+            && unsafe { AssignProcessToJobObject(handle, child.as_raw_handle().cast::<c_void>()) }
+                != 0;
+        if !assigned {
+            // SAFETY: handle was returned by CreateJobObjectW and has not yet
+            // been closed.
+            let _ = unsafe { CloseHandle(handle) };
+            return None;
+        }
+        Some(Self { handle })
+    }
+
+    fn terminate(&self) {
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        // SAFETY: handle is a live job handle owned by self.
+        let _ = unsafe { TerminateJobObject(self.handle, 1) };
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsSkillJob {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        // SAFETY: handle is a live job handle owned by self. Kill-on-close is
+        // configured, and the explicit termination also covers normal child
+        // exit with still-running descendants.
+        let _ = unsafe { TerminateJobObject(self.handle, 1) };
+        let _ = unsafe { CloseHandle(self.handle) };
+    }
+}
+
+#[cfg(windows)]
+fn terminate_windows_process_tree(process_id: u32) {
+    let mut command = Command::new("taskkill");
+    command
+        .args(["/PID", &process_id.to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    configure_skill_process(&mut command);
+    let Ok(mut killer) = command.spawn() else {
+        return;
+    };
+    let started = Instant::now();
+    loop {
+        if killer.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        if started.elapsed() >= Duration::from_secs(1) {
+            let _ = killer.kill();
+            let _ = killer.wait();
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(windows)]
+fn configure_skill_process(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+}
+
+#[cfg(unix)]
+fn configure_skill_process(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(any(windows, unix)))]
+fn configure_skill_process(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
@@ -1127,8 +1479,19 @@ mod tests {
         let workspace = std::env::temp_dir().join(format!("drpa-agent-config-{}", Uuid::new_v4()));
         let config = load_workspace_config(&workspace).unwrap();
         assert!(config.agents_markdown.contains("Skills 2.0"));
-        assert_eq!(config.skills[0].name, "rpaz-development");
-        assert_eq!(config.skills[0].format, "skill-v2");
+        assert!(config.agents_markdown.contains("不等于操作系统沙箱"));
+        assert!(
+            config
+                .skills
+                .iter()
+                .any(|skill| skill.name == "rpaz-development" && skill.format == "skill-v2")
+        );
+        assert!(
+            config
+                .skills
+                .iter()
+                .any(|skill| skill.name == "data-analysis" && skill.format == "skill-v2")
+        );
 
         let manifest = r#"schema: 2
 id: test-skill
@@ -1177,7 +1540,7 @@ libraries:
                 .iter()
                 .any(|entry| entry.path == "lib/helper.py" && entry.kind == "file")
         );
-        let definitions = skill_tool_definitions(&workspace).unwrap();
+        let definitions = skill_tool_definitions(&workspace, &[]).unwrap();
         assert_eq!(definitions[0]["function"]["name"], "skill_test-skill__echo");
         if let Some(python) = find_test_python() {
             let executed = execute_skill_tool(
@@ -1197,6 +1560,67 @@ libraries:
             );
         }
         assert!(resolve_skill_file(&workspace, "test-skill", "../bad.py", false).is_err());
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn skill_process_cleans_descendants_that_inherit_output_pipes() {
+        let Some(python) = find_test_python() else {
+            return;
+        };
+        let workspace =
+            std::env::temp_dir().join(format!("drpa-skill-descendant-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace).unwrap();
+        let script = concat!(
+            "import json, subprocess, sys\n",
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n",
+            "print(json.dumps({'ok': True}))\n",
+        );
+        let args = vec!["-c".to_owned(), script.to_owned()];
+        let started = Instant::now();
+        let output = run_json_process(
+            Command::new(python),
+            &args,
+            &workspace,
+            &json!({}),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(output["ok"], true);
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "inherited output pipe kept the request alive"
+        );
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn skill_process_stops_when_combined_output_exceeds_limit() {
+        let Some(python) = find_test_python() else {
+            return;
+        };
+        let workspace =
+            std::env::temp_dir().join(format!("drpa-skill-output-cap-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace).unwrap();
+        let script = format!(
+            "import sys\nsys.stdout.write('x' * {})\nsys.stdout.flush()\n",
+            MAX_SKILL_OUTPUT_BYTES + 8192
+        );
+        let args = vec!["-c".to_owned(), script];
+        let started = Instant::now();
+        let error = run_json_process(
+            Command::new(python),
+            &args,
+            &workspace,
+            &json!({}),
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(error.contains("输出超过"), "unexpected error: {error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "output limit did not stop the request promptly"
+        );
         let _ = fs::remove_dir_all(workspace);
     }
 
