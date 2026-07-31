@@ -796,6 +796,8 @@ fn manifest_summary(manifest: &PackageManifest) -> PackageSummary {
             .iter()
             .map(|parameter| ParameterSummary {
                 id: parameter.id.clone(),
+                label: parameter.label.clone(),
+                description: parameter.description.clone(),
                 kind: match parameter.kind {
                     ParameterKind::String => "string",
                     ParameterKind::Number => "number",

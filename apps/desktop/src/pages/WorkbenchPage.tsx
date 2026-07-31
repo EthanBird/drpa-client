@@ -100,7 +100,7 @@ export function WorkbenchPage() {
   const validate = () => {
     const missing = selectedPackage.parameters.filter((parameter) => parameter.required && (values[parameter.id] === undefined || values[parameter.id] === ""));
     if (missing.length) {
-      setNotice(`请填写必填参数：${missing.map((item) => item.id).join("、")}`);
+      setNotice(`请填写必填参数：${missing.map(parameterLabel).join("、")}`);
       return false;
     }
     return true;
@@ -260,13 +260,18 @@ function logLevelLabel(level: "trace" | "info" | "success" | "warning" | "error"
   return { trace: "TRC", info: "INF", success: "OK", warning: "WRN", error: "ERR" }[level];
 }
 
+function parameterLabel(parameter: ParameterSummary): string {
+  return parameter.label?.trim() || parameter.id.replaceAll("_", " ");
+}
+
 function ParameterField({ parameter, value, onChange }: { parameter: ParameterSummary; value: string | number | boolean | undefined; onChange: (value: string | number | boolean) => void }) {
-  const label = parameter.id.replaceAll("_", " ");
-  if (parameter.kind === "boolean") return <label className="field checkbox-field"><span className="field-label">{label}{parameter.required && <em>必填</em>}</span><button className={`switch ${value ? "on" : ""}`} type="button" onClick={() => onChange(!value)} aria-pressed={Boolean(value)}><span /></button></label>;
+  const label = parameterLabel(parameter);
+  const fieldLabel = <span className="field-label">{label}{parameter.required && <em>必填</em>}{parameter.description && <small>{parameter.description}</small>}</span>;
+  if (parameter.kind === "boolean") return <label className="field checkbox-field">{fieldLabel}<button className={`switch ${value ? "on" : ""}`} type="button" onClick={() => onChange(!value)} aria-pressed={Boolean(value)}><span /></button></label>;
   const selectPath = async () => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     const selected = await open({ directory: parameter.kind === "directory", multiple: false });
     if (selected) onChange(selected);
   };
-  return <label className="field"><span className="field-label">{label}{parameter.required && <em>必填</em>}</span><div className="input-with-action"><input type={parameter.kind === "secret" ? "password" : parameter.kind === "number" ? "number" : "text"} value={typeof value === "boolean" ? "" : value ?? ""} onChange={(event) => onChange(parameter.kind === "number" ? Number(event.target.value) : event.target.value)} placeholder={`请输入 ${label}`} />{(parameter.kind === "file" || parameter.kind === "directory") && <button type="button" onClick={selectPath}><FolderOpen size={14} /> 选择</button>}</div></label>;
+  return <label className="field">{fieldLabel}<div className="input-with-action"><input type={parameter.kind === "secret" ? "password" : parameter.kind === "number" ? "number" : "text"} value={typeof value === "boolean" ? "" : value ?? ""} onChange={(event) => onChange(parameter.kind === "number" ? Number(event.target.value) : event.target.value)} placeholder={`请输入 ${label}`} />{(parameter.kind === "file" || parameter.kind === "directory") && <button type="button" onClick={selectPath}><FolderOpen size={14} /> 选择</button>}</div></label>;
 }

@@ -68,8 +68,15 @@ const toolLabels: Record<string, string> = {
   document_read: "读取对话文档",
   document_create: "创建办公文档",
   document_convert: "转换办公文档",
+  data_list_connections: "列出数据连接",
+  data_get_schema: "读取数据库结构",
+  data_query: "执行只读查询",
+  data_create_connection: "创建连接配置",
   rpaz_list_files: "列出项目文件",
-  rpaz_read_file: "读取项目文件",
+  read_file: "按行读取文件",
+  find_files: "快速查找文件",
+  search_text: "检索项目文本",
+  edit_file: "精确编辑文件",
   rpaz_write_file: "写入项目文件",
   rpaz_validate: "校验 RPAZ",
   rpaz_build: "构建 RPAZ",
@@ -935,13 +942,22 @@ export function AgentPage({
   const lastUserIndex = latestUserIndex(messages);
   const latestUserMessageId = lastUserIndex >= 0 ? messages[lastUserIndex].id : undefined;
   const toolIsActive = (name: string) => {
+    if (!agentToolPolicy.enabled) return false;
     if (name === "rpaz_validate" || name === "rpaz_build") {
-      return selectedProject?.kind === "rpaz";
+      return agentToolPolicy.projectWrite && selectedProject?.kind === "rpaz";
     }
-    if (name.startsWith("rpaz_")) return Boolean(selectedProject);
-    return name.startsWith("agent_")
-      || name.startsWith("knowledge_")
-      || name.startsWith("document_");
+    if (name === "rpaz_python") return agentToolPolicy.python && Boolean(selectedProject);
+    if (name === "rpaz_write_file" || name === "edit_file") return agentToolPolicy.projectWrite && Boolean(selectedProject);
+    if (name === "read_file" || name === "find_files" || name === "search_text") return agentToolPolicy.arbitraryFileRead && Boolean(selectedProject);
+    if (name === "rpaz_list_files") return Boolean(selectedProject);
+    if (name === "data_create_connection") return agentToolPolicy.databaseConnections;
+    if (name.startsWith("data_")) return agentToolPolicy.databaseRead;
+    if (name.startsWith("knowledge_base_")) return agentToolPolicy.knowledgeBaseRead;
+    if (name === "knowledge_write_document" || name === "agent_write_skill" || name === "agent_write_memory") return agentToolPolicy.workspaceWrite;
+    if (name === "document_read") return agentToolPolicy.documentRead;
+    if (name === "document_create") return agentToolPolicy.documentWrite;
+    if (name === "document_convert") return agentToolPolicy.documentConvert;
+    return name.startsWith("agent_") || name.startsWith("knowledge_");
   };
   const activeToolCount = Object.keys(toolLabels).filter(toolIsActive).length;
   const selectedSkillIds = activeSession?.selectedSkillIds ?? [];

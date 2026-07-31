@@ -10,6 +10,7 @@ import type {
   AgentConversationProject,
   AgentConversationSession,
   AgentConversationSessionSummary,
+  AgentExtensionSummary,
   AgentTurnRequest,
   AgentTurnResult,
   AgentStreamEvent,
@@ -90,6 +91,7 @@ export interface DesktopGateway {
   listAutomationRuns(planId?: string, limit?: number): Promise<AutomationRun[]>;
   listStudioProjects(): Promise<StudioProject[]>;
   createStudioProject(name: string): Promise<StudioProject>;
+  renameStudioProject(projectId: string, name: string): Promise<StudioProject>;
   openInstalledPackage(packageId: string): Promise<StudioProject>;
   readProjectFile(projectId: string, relativePath: string): Promise<string>;
   writeProjectFile(projectId: string, relativePath: string, content: string): Promise<void>;
@@ -160,6 +162,11 @@ export interface DesktopGateway {
   renameAgentSession(sessionId: string, title: string): Promise<AgentConversationSession>;
   moveAgentSession(sessionId: string, projectId?: string): Promise<AgentConversationSession>;
   deleteAgentSession(sessionId: string): Promise<void>;
+  listAgentExtensions(): Promise<AgentExtensionSummary[]>;
+  selectAgentExtensionPackage(): Promise<string | null>;
+  installAgentExtension(packagePath: string): Promise<AgentExtensionSummary>;
+  setAgentExtensionEnabled(extensionId: string, enabled: boolean): Promise<AgentExtensionSummary>;
+  removeAgentExtension(extensionId: string): Promise<void>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
   getSystemMetrics(): Promise<SystemMetricsSnapshot>;
   getPlatformCapabilities(): Promise<PlatformCapabilities>;
@@ -261,6 +268,24 @@ let mockKnowledgeBaseSources: KnowledgeBaseSource[] = [{
 const mockAgentArtifacts = new Map<string, AgentDocumentArtifact[]>();
 let mockAgentProjects: AgentConversationProject[] = [];
 let mockAgentSessions: AgentConversationSession[] = [];
+let mockAgentExtensions: AgentExtensionSummary[] = [{
+  id: "drpa-quickjs-example",
+  name: "DRPA QuickJS Hostcall 示例",
+  version: "1.0.0",
+  description: "无 Node 依赖的 Pi 风格扩展，用于验证 registerTool 与受控 hostcall。",
+  enabled: true,
+  runtime: "QuickJS",
+  source: "bundled",
+  integrity: "browser-preview",
+  directory: "浏览器预览数据/agent/extensions/drpa-quickjs-example",
+  tools: [{
+    name: "project_file_overview",
+    exposedName: "ext__drpa_quickjs_example__project_file_overview",
+    label: "项目文件概览",
+    description: "通过 DRPA hostcall 快速统计当前项目匹配的文件。",
+    parameters: { type: "object" },
+  }],
+}];
 const mockStudioContents = new Map<string, Map<string, string>>();
 const mockKnowledgeDirectories = new Set(["RPAZ 开发指南"]);
 const mockKnowledgeContents = new Map<string, string>([
@@ -717,6 +742,15 @@ const mockGateway: DesktopGateway = {
   async createStudioProject(name) {
     return addMockProject({ id: `project-${Date.now().toString(16).padStart(24, "0").slice(-24)}`, name, files: ["main.py", "manifest.yaml", "notebook.ipynb"] });
   },
+  async renameStudioProject(projectId, name) {
+    const project = mockStudioProjects.find((item) => item.id === projectId);
+    if (!project) throw new Error("开发项目不存在");
+    project.name = name.trim();
+    const contents = mockStudioContents.get(projectId);
+    const manifest = contents?.get("manifest.yaml");
+    if (manifest) contents?.set("manifest.yaml", manifest.replace(/^name:.*$/m, `name: ${JSON.stringify(project.name)}`));
+    return structuredClone(project);
+  },
   async openInstalledPackage(packageId) {
     const item = mockSnapshot.packages.find((candidate) => candidate.id === packageId);
     return addMockProject({ id: `project-${Date.now().toString(16).padStart(24, "0").slice(-24)}`, name: item?.name ?? packageId, files: ["main.py", "manifest.yaml", "notebook.ipynb"] });
@@ -1142,6 +1176,40 @@ const mockGateway: DesktopGateway = {
   async deleteAgentSession(sessionId) {
     mockAgentSessions = mockAgentSessions.filter((session) => session.id !== sessionId);
   },
+  async listAgentExtensions() {
+    return structuredClone(mockAgentExtensions);
+  },
+  async selectAgentExtensionPackage() {
+    return null;
+  },
+  async installAgentExtension(packagePath) {
+    const fileName = packagePath.split(/[\\/]/).at(-1) ?? "local-extension.js";
+    const id = fileName.replace(/\.(?:m?js|tgz)$/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const extension: AgentExtensionSummary = {
+      id,
+      name: fileName,
+      version: "local",
+      description: "浏览器预览中的本地 QuickJS 扩展",
+      enabled: true,
+      runtime: "QuickJS",
+      source: fileName.endsWith(".tgz") ? "npm-tgz-offline" : "local-js",
+      integrity: "browser-preview",
+      directory: `浏览器预览数据/agent/extensions/${id}`,
+      tools: [],
+    };
+    mockAgentExtensions = [...mockAgentExtensions.filter((item) => item.id !== id), extension];
+    return structuredClone(extension);
+  },
+  async setAgentExtensionEnabled(extensionId, enabled) {
+    const extension = mockAgentExtensions.find((item) => item.id === extensionId);
+    if (!extension) throw new Error("扩展不存在");
+    extension.enabled = enabled;
+    return structuredClone(extension);
+  },
+  async removeAgentExtension(extensionId) {
+    if (extensionId === "drpa-quickjs-example") throw new Error("内置扩展不能卸载");
+    mockAgentExtensions = mockAgentExtensions.filter((item) => item.id !== extensionId);
+  },
   async getRuntimeStatus() {
     return { state: "ready", bundleVersion: "浏览器预览", pythonVersion: "3.11.9", runtimeRoot: "内存预览", environmentRoot: "内存预览", browserExecutable: "内存预览", message: "浏览器预览使用模拟运行环境" };
   },
@@ -1531,6 +1599,7 @@ const tauriGateway: DesktopGateway = {
   listAutomationRuns: (planId, limit) => invoke<AutomationRun[]>("list_automation_runs", { planId, limit }),
   listStudioProjects: () => invoke<StudioProject[]>("list_studio_projects"),
   createStudioProject: (name) => invoke<StudioProject>("create_studio_project", { name }),
+  renameStudioProject: (projectId, name) => invoke<StudioProject>("rename_studio_project", { projectId, name }),
   openInstalledPackage: (packageId) => invoke<StudioProject>("open_installed_package", { packageId }),
   readProjectFile: (projectId, relativePath) => invoke<string>("read_project_file", { projectId, relativePath }),
   writeProjectFile: (projectId, relativePath, content) => invoke<void>("write_project_file", { projectId, relativePath, content }),
@@ -1651,6 +1720,18 @@ const tauriGateway: DesktopGateway = {
     return { ...session, projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
   },
   deleteAgentSession: (sessionId) => invoke<void>("delete_agent_session", { sessionId }),
+  listAgentExtensions: () => invoke<AgentExtensionSummary[]>("list_agent_extensions"),
+  selectAgentExtensionPackage: async () => {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "离线 Agent 扩展", extensions: ["js", "mjs", "tgz"] }],
+    });
+    return typeof selected === "string" ? selected : null;
+  },
+  installAgentExtension: (packagePath) => invoke<AgentExtensionSummary>("install_agent_extension", { packagePath }),
+  setAgentExtensionEnabled: (extensionId, enabled) => invoke<AgentExtensionSummary>("set_agent_extension_enabled", { extensionId, enabled }),
+  removeAgentExtension: (extensionId) => invoke<void>("remove_agent_extension", { extensionId }),
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),
   getSystemMetrics: () => invoke<SystemMetricsSnapshot>("get_system_metrics"),
   getPlatformCapabilities: () => invoke<PlatformCapabilities>("get_platform_capabilities"),

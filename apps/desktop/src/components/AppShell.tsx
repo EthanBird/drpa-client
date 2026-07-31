@@ -23,6 +23,7 @@ import {
   Settings,
   Sparkles,
   Workflow,
+  Wrench,
   X,
   Zap,
 } from "lucide-react";
@@ -57,6 +58,7 @@ const infrastructureNavigation: Array<{
   { id: "localDify", label: "流程设计", icon: Workflow },
   { id: "agent", label: "AI Agent", icon: Bot },
   { id: "knowledgeBase", label: "知识库", icon: BookOpenCheck },
+  { id: "extensionTools", label: "扩展工具", icon: Wrench },
   { id: "plugins", label: "插件", icon: PlugZap },
   { id: "runtimes", label: "运行环境", icon: Boxes },
   { id: "secrets", label: "凭据保险箱", icon: KeyRound },

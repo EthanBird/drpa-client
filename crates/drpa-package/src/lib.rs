@@ -23,6 +23,8 @@ pub enum ManifestError {
     EmptyName,
     #[error("invalid or duplicate parameter id: {0}")]
     InvalidParameterId(String),
+    #[error("parameter label must not be empty: {0}")]
+    EmptyParameterLabel(String),
     #[error("archive contains too many files: {actual} exceeds {limit}")]
     TooManyFiles { actual: u64, limit: u64 },
     #[error("archive expands beyond the allowed size: {actual} exceeds {limit} bytes")]
@@ -92,6 +94,10 @@ pub struct FilesystemCapability {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Parameter {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(rename = "type")]
     pub kind: ParameterKind,
     #[serde(default)]
@@ -149,6 +155,13 @@ impl PackageManifest {
         for parameter in &self.parameters {
             if !is_identifier(&parameter.id) || !parameter_ids.insert(parameter.id.as_str()) {
                 return Err(ManifestError::InvalidParameterId(parameter.id.clone()));
+            }
+            if parameter
+                .label
+                .as_deref()
+                .is_some_and(|label| label.trim().is_empty())
+            {
+                return Err(ManifestError::EmptyParameterLabel(parameter.id.clone()));
             }
         }
         Ok(())
@@ -285,6 +298,8 @@ runtime:
   lock: requirements.lock
 parameters:
   - id: password
+    label: 登录密码
+    description: 用于登录目标系统
     type: secret
     required: true
 "#;
@@ -294,6 +309,7 @@ parameters:
         let manifest = PackageManifest::from_yaml(VALID).unwrap();
         assert_eq!(manifest.id, "com.example.invoice-downloader");
         assert_eq!(manifest.parameters[0].kind, ParameterKind::Secret);
+        assert_eq!(manifest.parameters[0].label.as_deref(), Some("登录密码"));
     }
 
     #[test]
@@ -312,12 +328,16 @@ parameters:
 
     #[test]
     fn rejects_duplicate_parameter_ids() {
-        let source = VALID.replace(
-            "  - id: password\n    type: secret\n    required: true",
-            "  - id: password\n    type: secret\n  - id: password\n    type: string",
-        );
+        let source = format!("{VALID}\n  - id: password\n    label: 备用密码\n    type: string\n");
         let error = PackageManifest::from_yaml(&source).unwrap_err();
         assert!(matches!(error, ManifestError::InvalidParameterId(_)));
+    }
+
+    #[test]
+    fn rejects_empty_parameter_labels() {
+        let source = VALID.replace("label: 登录密码", "label: '   '");
+        let error = PackageManifest::from_yaml(&source).unwrap_err();
+        assert!(matches!(error, ManifestError::EmptyParameterLabel(_)));
     }
 
     #[test]

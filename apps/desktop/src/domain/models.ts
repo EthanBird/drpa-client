@@ -11,6 +11,7 @@ export type NavigationId =
   | "plugins"
   | "docs"
   | "knowledgeBase"
+  | "extensionTools"
   | "runtimes"
   | "secrets"
   | "settings";
@@ -34,6 +35,8 @@ export interface PackageSummary {
 
 export interface ParameterSummary {
   id: string;
+  label?: string;
+  description?: string;
   kind: "string" | "number" | "boolean" | "secret" | "file" | "directory";
   required: boolean;
   defaultValue?: string | number | boolean;
@@ -408,6 +411,27 @@ export interface AgentToolPolicy {
   python: boolean;
   workspaceWrite: boolean;
   extensions: boolean;
+}
+
+export interface AgentExtensionToolSummary {
+  name: string;
+  exposedName: string;
+  label: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface AgentExtensionSummary {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  enabled: boolean;
+  runtime: string;
+  source: string;
+  integrity: string;
+  directory: string;
+  tools: AgentExtensionToolSummary[];
 }
 
 export interface AgentDocumentAttachment {

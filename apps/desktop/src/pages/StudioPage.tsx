@@ -272,6 +272,11 @@ type PendingDelete =
   | { kind: "project"; project: StudioProject }
   | { kind: "entry"; path: string };
 
+interface ProjectRenameDraft {
+  project: StudioProject;
+  value: string;
+}
+
 export function StudioPage() {
   const projectsCollapsed = useSidebarCollapsed("studio-projects");
   const filesCollapsed = useSidebarCollapsed("studio-files");
@@ -291,6 +296,7 @@ export function StudioPage() {
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenu | null>(null);
   const [inlineDraft, setInlineDraft] = useState<InlineDraft | null>(null);
+  const [projectRename, setProjectRename] = useState<ProjectRenameDraft | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [agentOpen, setAgentOpen] = useState(true);
 
@@ -522,6 +528,23 @@ export function StudioPage() {
     finally { setBusy(false); }
   };
 
+  const renameProject = async () => {
+    if (!projectRename || busy) return;
+    const name = projectRename.value.trim();
+    if (!name) return setNotice("项目名称不能为空");
+    setBusy(true);
+    try {
+      const renamed = await desktopGateway.renameStudioProject(projectRename.project.id, name);
+      await refresh(selectedFile, renamed.id);
+      setProjectRename(null);
+      setNotice(`项目已重命名为：${renamed.name}`);
+    } catch (error) {
+      setNotice(`项目重命名失败：${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const saveToPackageLibrary = async () => {
     if (!selectedId) return;
     setBusy(true);
@@ -571,7 +594,20 @@ export function StudioPage() {
           <SidebarToggle id="studio-projects" side="left" label="项目侧边栏" />
           <div className="studio-pane-title"><FolderTree size={15} /> 项目</div>
           {projects.length === 0 && <p className="empty-hint">尚无项目，请在上方新建。</p>}
-          {projects.map((project) => (
+          {projects.map((project) => projectRename?.project.id === project.id ? (
+            <div className="studio-inline-entry studio-project-rename" key={project.id}>
+              <Box size={14} />
+              <input
+                autoFocus
+                aria-label="项目新名称"
+                value={projectRename.value}
+                onChange={(event) => setProjectRename({ ...projectRename, value: event.target.value })}
+                onFocus={(event) => event.currentTarget.select()}
+                onBlur={() => { if (!busy) setProjectRename(null); }}
+                onKeyDown={(event) => { if (event.key === "Enter") void renameProject(); if (event.key === "Escape") setProjectRename(null); }}
+              />
+            </div>
+          ) : (
             <button
               type="button"
               key={project.id}
@@ -584,6 +620,7 @@ export function StudioPage() {
           ))}
           {projectMenu && (
             <div className="studio-context-menu" style={{ left: projectMenu.x, top: projectMenu.y }} onClick={(event) => event.stopPropagation()}>
+              <button type="button" onClick={() => { setProjectRename({ project: projectMenu.project, value: projectMenu.project.name }); setProjectMenu(null); }}><Pencil size={14} /> 重命名项目</button>
               <button type="button" className="danger" onClick={() => { setPendingDelete({ kind: "project", project: projectMenu.project }); setProjectMenu(null); }}><Trash2 size={14} /> 删除开发项目</button>
             </div>
           )}

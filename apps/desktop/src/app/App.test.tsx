@@ -108,6 +108,23 @@ describe("DRPA Next desktop shell", () => {
     await waitFor(() => expect(reportUiReady).toHaveBeenCalledOnce());
   });
 
+  it("renders localized RPAZ parameter labels while retaining stable ids", async () => {
+    const snapshot = await desktopGateway.getWorkspaceSnapshot();
+    snapshot.packages[0].parameters = [{
+      id: "customer_name",
+      label: "客户名称",
+      description: "用于报表标题",
+      kind: "string",
+      required: true,
+    }];
+    useAppStore.setState({ snapshot, selectedPackageId: snapshot.packages[0].id, selectedProfileId: snapshot.packages[0].profiles[0].id });
+    render(<WorkbenchPage />);
+
+    expect(screen.getByText("客户名称")).toBeVisible();
+    expect(screen.getByText("用于报表标题")).toBeVisible();
+    expect(screen.getByPlaceholderText("请输入 客户名称")).toBeVisible();
+  });
+
   it("creates and enters an isolated workspace from the title bar", async () => {
     const personal = { id: "personal", name: "个人工作区", path: "D:\\DRPA\\data", active: true, createdAt: 1 };
     const created = {
@@ -372,7 +389,7 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.queryByText("紧凑布局")).not.toBeInTheDocument();
   });
 
-  it("applies compact layout, hides page headers, and controls Agent tools from settings", async () => {
+  it("applies compact layout and controls Agent tools from the extensions page", async () => {
     render(<App />);
     await waitFor(() => expect(document.documentElement.dataset.uiDensity).toBe("compact"));
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
@@ -384,6 +401,8 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.click(screen.getByRole("switch", { name: "隐藏页面大标题" }));
     await waitFor(() => expect(document.documentElement.dataset.hidePageHeaders).toBe("true"));
 
+    fireEvent.click(screen.getByRole("button", { name: "扩展工具" }));
+    expect(await screen.findByRole("heading", { name: "扩展工具" })).toBeVisible();
     const masterToolSwitch = screen.getByRole("switch", { name: "启用 AI Agent 工具" });
     const databaseToolSwitch = screen.getByRole("switch", { name: "只读数据库" });
     expect(masterToolSwitch).toBeChecked();
@@ -902,6 +921,24 @@ describe("DRPA Next desktop shell", () => {
 
     await waitFor(() => expect(install).toHaveBeenCalledWith(project.id));
     expect(await screen.findByText(/已保存到 RPAZ 包库/)).toBeVisible();
+  });
+
+  it("renames a Studio project from its context menu", async () => {
+    const project = { id: "project-000000000000000000000003", name: "旧项目名", files: ["main.py", "manifest.yaml"] };
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
+    vi.spyOn(desktopGateway, "readProjectFile").mockResolvedValue("def main(ctx): pass\n");
+    const renameProject = vi.spyOn(desktopGateway, "renameStudioProject").mockResolvedValue({ ...project, name: "中文项目名" });
+    render(<StudioPage />);
+
+    const projectButton = await screen.findByRole("button", { name: /旧项目名/ });
+    fireEvent.contextMenu(projectButton);
+    fireEvent.click(screen.getByRole("button", { name: "重命名项目" }));
+    const input = screen.getByLabelText("项目新名称");
+    fireEvent.change(input, { target: { value: "中文项目名" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(renameProject).toHaveBeenCalledWith(project.id, "中文项目名"));
+    expect(await screen.findByText(/项目已重命名为：中文项目名/)).toBeVisible();
   });
 
   it("opens the Studio file context menu", async () => {

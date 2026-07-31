@@ -1,0 +1,224 @@
+.extensions-page {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.extension-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 7px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+
+.extension-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+
+.extension-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 29px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: calc(9px * var(--font-scale));
+  font-weight: 650;
+}
+
+.extension-tabs button.active {
+  background: var(--surface-1);
+  color: var(--accent-strong);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .1);
+}
+
+.extension-tabs button span {
+  min-width: 18px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+  text-align: center;
+}
+
+.extension-security {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  gap: 6px;
+  color: var(--success);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.extension-notice {
+  margin: 10px 24px 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--success) 25%, var(--border));
+  border-radius: 7px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: calc(9px * var(--font-scale));
+}
+
+.extension-notice.error {
+  border-color: color-mix(in srgb, var(--danger) 25%, var(--border));
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.extension-content {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 24px 24px;
+}
+
+.extension-master {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: linear-gradient(115deg, var(--surface-1), color-mix(in srgb, var(--accent-soft) 50%, var(--surface-1)));
+}
+
+.extension-master-icon,
+.extension-card-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.extension-master > div:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.extension-master strong { font-size: calc(11px * var(--font-scale)); }
+.extension-master span { color: var(--text-3); font-size: calc(8px * var(--font-scale)); }
+
+.extension-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.extension-policy-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+
+.extension-policy-card.disabled { opacity: .5; }
+.extension-policy-copy { display: grid; min-width: 0; flex: 1; gap: 5px; }
+.extension-policy-copy strong { font-size: calc(10px * var(--font-scale)); }
+.extension-policy-copy p { margin: 0; color: var(--text-3); font-size: calc(8px * var(--font-scale)); line-height: 1.45; }
+.extension-policy-copy > div { display: flex; flex-wrap: wrap; gap: 4px; }
+.extension-policy-copy code,
+.extension-tool-list code,
+.extension-compatibility-note code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--accent-strong);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+}
+
+.extension-list {
+  display: grid;
+  gap: 11px;
+  max-width: 1160px;
+  margin: 0 auto;
+}
+
+.extension-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.extension-card.enabled { border-color: color-mix(in srgb, var(--accent) 28%, var(--border)); }
+.extension-card > header { display: flex; align-items: center; gap: 11px; padding: 13px 14px; }
+.extension-card > header > div:nth-child(2) { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.extension-card h2 { margin: 0; font-size: calc(11px * var(--font-scale)); }
+.extension-card p { margin: 0; color: var(--text-3); font-size: calc(8px * var(--font-scale)); line-height: 1.4; }
+.extension-card-actions { display: flex; align-items: center; gap: 8px; }
+.extension-remove { color: var(--danger); }
+
+.extension-meta {
+  display: grid;
+  grid-template-columns: auto auto auto minmax(160px, 1fr);
+  align-items: center;
+  gap: 7px 16px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.extension-meta code {
+  overflow: hidden;
+  color: var(--text-3);
+  font: calc(7px * var(--font-scale)) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extension-tool-list { display: grid; }
+.extension-tool-list > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+.extension-tool-list > div:first-child { border-top: 0; }
+.extension-tool-list > div > span { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.extension-tool-list strong { font-size: calc(9px * var(--font-scale)); }
+.extension-tool-list small { color: var(--text-3); font-size: calc(7px * var(--font-scale)); }
+.extension-tool-list > div > code { max-width: 44%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.extension-no-tools { padding: 12px 14px; color: var(--text-3); font-size: calc(8px * var(--font-scale)); }
+
+.extension-compatibility-note {
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.extension-compatibility-note strong { font-size: calc(9px * var(--font-scale)); }
+.extension-compatibility-note p { margin: 5px 0 0; color: var(--text-3); font-size: calc(8px * var(--font-scale)); line-height: 1.55; }
+
+@media (max-width: 900px) {
+  .extension-policy-grid { grid-template-columns: 1fr; }
+  .extension-security span { display: none; }
+  .extension-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

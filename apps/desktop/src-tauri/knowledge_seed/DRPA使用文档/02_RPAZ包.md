@@ -51,6 +51,19 @@
 - **verified/local/untrusted**：表示来源和校验级别，不代表业务代码绝对安全。
 - **参数/Profiles**：参数由 manifest 声明，任务配置在运行工作台创建。
 
+参数 `id` 仍使用稳定的英文标识供代码读取；若界面需要中文标题，请增加 `label`，并可用 `description` 写字段说明：
+
+```yaml
+parameters:
+  - id: customer_name
+    label: 客户名称
+    description: 用于报表标题
+    type: string
+    required: true
+```
+
+运行代码继续从 `ctx.params["customer_name"]` 取值，中文只负责显示，因此改文案不会破坏脚本接口。
+
 ## 与其他页面协作
 
 - [开发工作室](03_开发工作室.md)：创建、调试、导出或直接保存包。

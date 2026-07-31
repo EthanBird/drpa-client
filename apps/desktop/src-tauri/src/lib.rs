@@ -23,6 +23,7 @@ use zip::{ZipArchive, write::SimpleFileOptions};
 mod agent;
 mod agent_config;
 mod agent_documents;
+mod agent_extensions;
 mod agent_sessions;
 mod automations;
 mod database;
@@ -651,6 +652,69 @@ fn create_studio_project(
 }
 
 #[tauri::command]
+fn rename_studio_project(
+    project_id: String,
+    name: String,
+    paths: State<'_, AppPaths>,
+) -> Result<StudioProject, String> {
+    validate_project_id(&project_id)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("项目名称不能为空".to_owned());
+    }
+    if name.chars().count() > 120 {
+        return Err("项目名称不能超过 120 个字符".to_owned());
+    }
+    let root = paths.workspace_root.join("projects").join(&project_id);
+    if !root.is_dir() {
+        return Err("开发项目不存在".to_owned());
+    }
+    let manifest_path = root.join("manifest.yaml");
+    let source = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("读取 manifest.yaml 失败：{error}"))?;
+    PackageManifest::from_yaml(&source).map_err(|error| error.to_string())?;
+    let quoted_name = serde_json::to_string(name).map_err(|error| error.to_string())?;
+    let newline = if source.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let trailing_newline = source.ends_with('\n');
+    let mut replaced = false;
+    let mut lines = Vec::new();
+    for line in source.lines() {
+        if !replaced
+            && !line.chars().next().is_some_and(char::is_whitespace)
+            && line
+                .split_once(':')
+                .is_some_and(|(key, _)| key.trim() == "name")
+        {
+            lines.push(format!("name: {quoted_name}"));
+            replaced = true;
+        } else {
+            lines.push(line.to_owned());
+        }
+    }
+    if !replaced {
+        return Err("manifest.yaml 缺少顶层 name 字段".to_owned());
+    }
+    let mut updated = lines.join(newline);
+    if trailing_newline {
+        updated.push_str(newline);
+    }
+    let manifest = PackageManifest::from_yaml(&updated).map_err(|error| error.to_string())?;
+    fs::write(&manifest_path, updated).map_err(|error| format!("保存项目名称失败：{error}"))?;
+    let mut files = Vec::new();
+    collect_project_entries(&root, &root, &mut files).map_err(|error| error.to_string())?;
+    files.sort();
+    Ok(StudioProject {
+        id: project_id,
+        name: manifest.name,
+        files,
+    })
+}
+
+#[tauri::command]
 fn read_project_file(
     project_id: String,
     relative_path: String,
@@ -1229,6 +1293,35 @@ async fn run_agent_turn(
     })
     .await
     .map_err(|error| format!("Agent 后台任务失败：{error}"))?
+}
+
+#[tauri::command]
+fn list_agent_extensions(
+    paths: State<'_, AppPaths>,
+) -> Result<Vec<agent_extensions::AgentExtensionSummary>, String> {
+    agent_extensions::list_extensions(&paths.workspace_root)
+}
+
+#[tauri::command]
+fn install_agent_extension(
+    package_path: String,
+    paths: State<'_, AppPaths>,
+) -> Result<agent_extensions::AgentExtensionSummary, String> {
+    agent_extensions::install_extension(&paths.workspace_root, &package_path)
+}
+
+#[tauri::command]
+fn set_agent_extension_enabled(
+    extension_id: String,
+    enabled: bool,
+    paths: State<'_, AppPaths>,
+) -> Result<agent_extensions::AgentExtensionSummary, String> {
+    agent_extensions::set_extension_enabled(&paths.workspace_root, &extension_id, enabled)
+}
+
+#[tauri::command]
+fn remove_agent_extension(extension_id: String, paths: State<'_, AppPaths>) -> Result<(), String> {
+    agent_extensions::remove_extension(&paths.workspace_root, &extension_id)
 }
 
 #[tauri::command]
@@ -2965,6 +3058,7 @@ pub fn run() {
             open_run_output_directory,
             list_studio_projects,
             create_studio_project,
+            rename_studio_project,
             open_installed_package,
             read_project_file,
             write_project_file,
@@ -3036,6 +3130,10 @@ pub fn run() {
             local_dify::start_local_dify_service,
             local_dify::stop_local_dify_service,
             run_agent_turn,
+            list_agent_extensions,
+            install_agent_extension,
+            set_agent_extension_enabled,
+            remove_agent_extension,
             agent_config::get_agent_workspace_config,
             agent_config::write_agent_workspace_document,
             agent_config::read_agent_skill,

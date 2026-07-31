@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::AppPaths;
 
 const KNOWLEDGE_DIRECTORY: &str = "knowledge";
-const SEED_MARKER: &str = ".drpa-default-knowledge-v6";
+const SEED_MARKER: &str = ".drpa-default-knowledge-v7";
 const MANUAL_LAYOUT_MIGRATION_MARKER: &str = ".drpa-manual-layout-v6";
 const LEGACY_MANUAL_DIRECTORY: &str = "DRPA使用说明";
 const MANUAL_DIRECTORY: &str = "DRPA使用文档";
@@ -238,6 +238,10 @@ const DEFAULT_DOCUMENTS: &[(&str, &str)] = &[
     (
         "DRPA使用文档/15_知识文档.md",
         include_str!("../knowledge_seed/DRPA使用文档/15_知识文档.md"),
+    ),
+    (
+        "DRPA使用文档/16_扩展工具.md",
+        include_str!("../knowledge_seed/DRPA使用文档/16_扩展工具.md"),
     ),
 ];
 
@@ -1085,6 +1089,7 @@ mod tests {
             "13_凭据保险箱.md",
             "14_设置.md",
             "15_知识文档.md",
+            "16_扩展工具.md",
         ] {
             assert!(manual_root.join(file_name).is_file(), "missing {file_name}");
         }
@@ -1094,7 +1099,7 @@ mod tests {
                 .file_type()
                 .unwrap()
                 .is_file()),
-            "the v6 manual must use a flat directory"
+            "the v7 manual must use a flat directory"
         );
         fs::write(&guide, "用户修改").unwrap();
         let manual = manual_root.join("01_总览.md");

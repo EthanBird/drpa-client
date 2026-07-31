@@ -64,8 +64,9 @@
 .field-grid { display: grid; gap: 12px; }
 .field-grid.two-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .field { display: grid; gap: 6px; min-width: 0; }
-.field-label { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: calc(9px * var(--font-scale)); font-weight: 610; }
+.field-label { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--text-2); font-size: calc(9px * var(--font-scale)); font-weight: 610; }
 .field-label em { padding: 2px 4px; border-radius: 3px; background: var(--accent-soft); color: var(--accent-strong); font-size: calc(6px * var(--font-scale)); font-style: normal; letter-spacing: .06em; text-transform: uppercase; }
+.field-label small { flex-basis: 100%; color: var(--text-3); font-size: calc(8px * var(--font-scale)); font-weight: 450; line-height: 1.5; }
 .field > small { color: var(--text-3); font-size: calc(7px * var(--font-scale)); }
 .select-control, .input-with-action { display: flex; align-items: center; gap: 7px; min-width: 0; height: 34px; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text-2); font-size: calc(9px * var(--font-scale)); cursor: pointer; }
 .select-control:hover, .input-with-action:hover { border-color: color-mix(in srgb, var(--border) 60%, var(--text-3)); }

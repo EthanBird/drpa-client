@@ -77,6 +77,10 @@ pub struct PackageSummary {
 #[serde(rename_all = "camelCase")]
 pub struct ParameterSummary {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub kind: String,
     pub required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

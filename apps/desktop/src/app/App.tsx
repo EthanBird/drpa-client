@@ -6,6 +6,7 @@ import { CommandPalette } from "../components/CommandPalette";
 import { AutomationsPage } from "../pages/AutomationsPage";
 import { AgentPage } from "../pages/AgentPage";
 import { DocsPage } from "../pages/DocsPage";
+import { ExtensionToolsPage } from "../pages/ExtensionToolsPage";
 import { LibraryPage } from "../pages/LibraryPage";
 import { OverviewPage } from "../pages/OverviewPage";
 import { PluginsPage } from "../pages/PluginsPage";
@@ -193,6 +194,7 @@ export function App() {
         {activeNavigation === "automations" && <AutomationsPage />}
         {activeNavigation === "localDify" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载流程设计工作台…</h2></div></div>}><LocalDifyPage /></Suspense>}
         {activeNavigation === "agent" && <AgentPage />}
+        {activeNavigation === "extensionTools" && <ExtensionToolsPage />}
         {activeNavigation === "plugins" && <PluginsPage />}
         {activeNavigation === "docs" && <DocsPage />}
         {activeNavigation === "knowledgeBase" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载向量知识库…</h2></div></div>}><KnowledgeBasePage /></Suspense>}

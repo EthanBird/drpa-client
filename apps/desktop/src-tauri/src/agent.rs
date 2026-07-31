@@ -12,13 +12,18 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use drpa_package::{Entrypoint, PackageManifest, safe_relative_path, validate_package_id};
+use globset::Glob;
+use ignore::WalkBuilder;
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 #[cfg(test)]
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
-use crate::{agent_config, agent_documents, database, knowledge, knowledge_base, plugins};
+use crate::{
+    agent_config, agent_documents, agent_extensions, database, knowledge, knowledge_base, plugins,
+};
 
 const DEFAULT_MAX_AGENT_ROUNDS: usize = 64;
 const MAX_CONFIGURABLE_AGENT_ROUNDS: usize = 256;
@@ -28,6 +33,9 @@ const MAX_TOOL_OUTPUT_BYTES: usize = 20_000;
 const MAX_PYTHON_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const PYTHON_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_FILE_READ_LINES: usize = 2_000;
+const MAX_FILE_SCAN_ENTRIES: usize = 100_000;
+const MAX_FILE_TOOL_RESULTS: usize = 500;
 const DEFAULT_PYTHON_TIMEOUT_SECONDS: u64 = 300;
 const MAX_PYTHON_TIMEOUT_SECONDS: u64 = 86_400;
 
@@ -152,6 +160,7 @@ pub(crate) struct AgentTurnResult {
     pub duration_ms: u64,
 }
 
+#[derive(Clone)]
 struct AgentContext {
     workspace_root: PathBuf,
     project_root: Option<PathBuf>,
@@ -839,7 +848,8 @@ fn system_prompt(has_project: bool, injected_context: &str) -> String {
          data_create_connection 只保存连接元数据，不保存密码。知识文档是可编辑 Markdown，不向量化；\
          知识库是独立的只读混合向量索引，可用 knowledge_base_search 查询。\
          对话附件使用不透明 attachmentId，文档产物严格写入当前工作区的 Agent 产物目录。\
-         你也可以按设置使用 knowledge、document 与扩展工具。\
+         项目探索优先使用 find_files/search_text，再用 read_file 分段读取所需行；\
+         小范围修改优先使用只在项目内生效的 edit_file。你也可以按策略使用 knowledge、document 与扩展工具。\
          不假装使用未提供的终端、浏览器或网络工具。\n\
          只有规范化 RPAZ 项目才调用 rpaz_validate；需要交付 RPAZ 归档时调用 rpaz_build。\n\
          回答使用简体中文，先给结论，再列出实际完成的文件与验证结果。\
@@ -980,11 +990,23 @@ fn agent_tool_definitions(
         ));
     }
     if has_project && policy.arbitrary_file_read {
-        tools.push(tool_definition(
-            "rpaz_read_file",
-            "读取 UTF-8 文本文件。相对路径从当前项目解析；绝对路径可读取计算机上的任意现有文件。最多 2 MiB，只读且不会修改文件。",
-            json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
-        ));
+        tools.extend([
+            tool_definition(
+                "read_file",
+                "按行读取 UTF-8 文本文件。相对路径从当前项目解析，绝对路径可读取本机现有文件；可指定起始行，一次严格不超过 2000 行。",
+                json!({"type":"object","properties":{"path":{"type":"string"},"startLine":{"type":"integer","minimum":1},"lineCount":{"type":"integer","minimum":1,"maximum":MAX_FILE_READ_LINES}},"required":["path"],"additionalProperties":false}),
+            ),
+            tool_definition(
+                "find_files",
+                "在当前项目中按 glob 快速查找文件，遵循 .gitignore；最多返回 500 项。",
+                json!({"type":"object","properties":{"pattern":{"type":"string","description":"例如 **/*.rs 或 manifest.*"},"path":{"type":"string","description":"项目内起始目录，默认 ."},"limit":{"type":"integer","minimum":1,"maximum":MAX_FILE_TOOL_RESULTS}},"required":["pattern"],"additionalProperties":false}),
+            ),
+            tool_definition(
+                "search_text",
+                "在当前项目文本文件中进行正则或字面量检索，遵循 .gitignore；返回文件、行号和匹配行。",
+                json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string","description":"项目内起始目录，默认 ."},"glob":{"type":"string","description":"可选文件 glob，例如 **/*.rs"},"literal":{"type":"boolean"},"ignoreCase":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":MAX_FILE_TOOL_RESULTS}},"required":["pattern"],"additionalProperties":false}),
+            ),
+        ]);
     }
     if has_project {
         tools.push(tool_definition(
@@ -994,11 +1016,18 @@ fn agent_tool_definitions(
         ));
     }
     if has_project && policy.project_write {
-        tools.push(tool_definition(
-            "rpaz_write_file",
-            "创建或覆盖当前项目中的 UTF-8 文本文件。Host 严格禁止写入项目目录之外。",
-            json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}),
-        ));
+        tools.extend([
+            tool_definition(
+                "edit_file",
+                "在当前项目内精确编辑 UTF-8 文件。oldText 必须且只能匹配一次；Host 禁止项目外写入。",
+                json!({"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}),
+            ),
+            tool_definition(
+                "rpaz_write_file",
+                "创建或覆盖当前项目中的 UTF-8 文本文件。Host 严格禁止写入项目目录之外。",
+                json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}),
+            ),
+        ]);
         if is_rpaz_project {
             tools.extend([
                 tool_definition(
@@ -1029,6 +1058,7 @@ fn agent_tool_definitions(
             selected_skill_ids,
         )?);
         tools.extend(plugins::plugin_tool_definitions(workspace_root)?);
+        tools.extend(agent_extensions::tool_definitions(workspace_root)?);
     }
     Ok(tools)
 }
@@ -1064,8 +1094,8 @@ fn ensure_tool_allowed(policy: &AgentToolPolicy, name: &str) -> Result<(), Strin
         "document_read" => policy.document_read,
         "document_create" => policy.document_write,
         "document_convert" => policy.document_convert,
-        "rpaz_read_file" => policy.arbitrary_file_read,
-        "rpaz_write_file" | "rpaz_validate" | "rpaz_build" => policy.project_write,
+        "read_file" | "find_files" | "search_text" => policy.arbitrary_file_read,
+        "edit_file" | "rpaz_write_file" | "rpaz_validate" | "rpaz_build" => policy.project_write,
         "rpaz_python" => policy.python,
         _ => policy.extensions,
     };
@@ -1081,6 +1111,34 @@ fn execute_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<ToolResult, String> {
+    if name.starts_with("ext__") {
+        let host_context = context.clone();
+        let hostcall = Arc::new(move |host_name: &str, host_arguments: &Value| {
+            if host_name.starts_with("ext__") {
+                return Err("扩展 hostcall 不能递归调用另一个 QuickJS 扩展".to_owned());
+            }
+            ensure_tool_allowed(&host_context.tool_policy, host_name)?;
+            execute_tool(&host_context, host_name, host_arguments).map(|result| result.output)
+        });
+        let context_payload = json!({
+            "workspace": context.workspace_root,
+            "project": context.project_root,
+            "sessionId": context.session_id,
+        });
+        let executed = agent_extensions::execute_tool(
+            &context.workspace_root,
+            name,
+            "drpa-extension-call",
+            arguments,
+            context_payload,
+            hostcall,
+        )
+        .ok_or_else(|| format!("未知扩展工具：{name}"))??;
+        return Ok(ToolResult {
+            output: executed.output,
+            summary: executed.summary,
+        });
+    }
     if let Some((skill_name, _)) = name
         .strip_prefix("skill_")
         .and_then(|value| value.split_once("__"))
@@ -1398,7 +1456,7 @@ fn execute_tool(
                 summary: format!("已列出 {count} 个项目文件"),
             })
         }
-        "rpaz_read_file" => {
+        "read_file" => {
             let requested = argument_string(arguments, "path")?;
             let path = resolve_agent_read_file(project_root, requested)?;
             let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
@@ -1410,11 +1468,46 @@ fn execute_tool(
             }
             let content = fs::read_to_string(&path)
                 .map_err(|error| format!("读取 {requested} 失败：{error}"))?;
+            let start_line = bounded_positive_argument(arguments, "startLine", 1, usize::MAX)?;
+            let line_count = bounded_positive_argument(
+                arguments,
+                "lineCount",
+                MAX_FILE_READ_LINES,
+                MAX_FILE_READ_LINES,
+            )?;
+            let all_lines = content.lines().collect::<Vec<_>>();
+            let start_index = start_line.saturating_sub(1).min(all_lines.len());
+            let end_index = start_index.saturating_add(line_count).min(all_lines.len());
+            let selected = all_lines[start_index..end_index]
+                .iter()
+                .enumerate()
+                .map(|(index, line)| format!("{:>6}\t{line}", start_index + index + 1))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let next_start_line = (end_index < all_lines.len()).then_some(end_index + 1);
             Ok(ToolResult {
-                output: json!({"ok": true, "path": path, "content": content, "readOnly": true}),
-                summary: format!("已只读读取 {requested}（{} 字符）", content.chars().count()),
+                output: json!({
+                    "ok": true,
+                    "path": path,
+                    "content": selected,
+                    "startLine": start_index.saturating_add(1),
+                    "endLine": end_index,
+                    "totalLines": all_lines.len(),
+                    "nextStartLine": next_start_line,
+                    "truncated": next_start_line.is_some(),
+                    "readOnly": true
+                }),
+                summary: format!(
+                    "已只读读取 {requested} 第 {}–{} 行（共 {} 行）",
+                    start_index.saturating_add(1),
+                    end_index,
+                    all_lines.len()
+                ),
             })
         }
+        "find_files" => find_project_files(project_root, arguments),
+        "search_text" => search_project_text(project_root, arguments),
+        "edit_file" => edit_project_file(project_root, arguments),
         "rpaz_write_file" => {
             let relative = argument_string(arguments, "path")?;
             let content = argument_string(arguments, "content")?;
@@ -1451,6 +1544,252 @@ fn argument_string<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, Stri
 
 fn argument_optional_string<'a>(arguments: &'a Value, name: &str) -> &'a str {
     arguments.get(name).and_then(Value::as_str).unwrap_or("")
+}
+
+fn bounded_positive_argument(
+    arguments: &Value,
+    name: &str,
+    default: usize,
+    maximum: usize,
+) -> Result<usize, String> {
+    let Some(value) = arguments.get(name) else {
+        return Ok(default);
+    };
+    let value = value
+        .as_u64()
+        .ok_or_else(|| format!("工具参数 {name} 必须是正整数"))?;
+    let value = usize::try_from(value).map_err(|_| format!("工具参数 {name} 过大"))?;
+    if value == 0 || value > maximum {
+        return Err(format!("工具参数 {name} 必须在 1–{maximum} 之间"));
+    }
+    Ok(value)
+}
+
+fn resolve_project_search_path(project_root: &Path, value: &str) -> Result<PathBuf, String> {
+    let canonical_root = fs::canonicalize(project_root).map_err(|error| error.to_string())?;
+    let target = if value.trim().is_empty() || value.trim() == "." {
+        canonical_root.clone()
+    } else {
+        let relative = safe_relative_path(value).map_err(|error| error.to_string())?;
+        fs::canonicalize(project_root.join(relative))
+            .map_err(|error| format!("定位项目检索路径 {value} 失败：{error}"))?
+    };
+    if !target.starts_with(&canonical_root) {
+        return Err("检索路径超出当前项目".to_owned());
+    }
+    if !target.is_dir() && !target.is_file() {
+        return Err(format!("项目检索路径不存在：{value}"));
+    }
+    Ok(target)
+}
+
+fn find_project_files(project_root: &Path, arguments: &Value) -> Result<ToolResult, String> {
+    let pattern = argument_string(arguments, "pattern")?.trim();
+    if pattern.is_empty() {
+        return Err("文件查找 pattern 不能为空".to_owned());
+    }
+    let search_root =
+        resolve_project_search_path(project_root, argument_optional_string(arguments, "path"))?;
+    let matcher = Glob::new(pattern)
+        .map_err(|error| format!("文件 glob 无效：{error}"))?
+        .compile_matcher();
+    let limit = bounded_positive_argument(arguments, "limit", 200, MAX_FILE_TOOL_RESULTS)?;
+    let canonical_project = fs::canonicalize(project_root).map_err(|error| error.to_string())?;
+    let mut scanned = 0usize;
+    let mut matches = Vec::new();
+    let mut scan_truncated = false;
+    let mut builder = WalkBuilder::new(search_root);
+    builder.follow_links(false).standard_filters(true);
+    for entry in builder.build().flatten() {
+        scanned = scanned.saturating_add(1);
+        if scanned > MAX_FILE_SCAN_ENTRIES {
+            scan_truncated = true;
+            break;
+        }
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(&canonical_project)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        if matcher.is_match(&relative) || matcher.is_match(Path::new(entry.file_name())) {
+            matches.push(relative);
+        }
+    }
+    matches.sort();
+    let result_truncated = matches.len() > limit;
+    matches.truncate(limit);
+    let count = matches.len();
+    Ok(ToolResult {
+        output: json!({
+            "ok": true,
+            "files": matches,
+            "count": count,
+            "scanned": scanned.min(MAX_FILE_SCAN_ENTRIES),
+            "truncated": scan_truncated || result_truncated
+        }),
+        summary: format!("文件查找完成，返回 {count} 项"),
+    })
+}
+
+fn build_search_regex(pattern: &str, literal: bool, ignore_case: bool) -> Result<Regex, String> {
+    if pattern.is_empty() {
+        return Err("文本检索 pattern 不能为空".to_owned());
+    }
+    let pattern = if literal {
+        regex::escape(pattern)
+    } else {
+        pattern.to_owned()
+    };
+    RegexBuilder::new(&pattern)
+        .case_insensitive(ignore_case)
+        .build()
+        .map_err(|error| format!("检索正则无效：{error}"))
+}
+
+fn search_project_text(project_root: &Path, arguments: &Value) -> Result<ToolResult, String> {
+    let pattern = argument_string(arguments, "pattern")?;
+    let regex = build_search_regex(
+        pattern,
+        arguments
+            .get("literal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        arguments
+            .get("ignoreCase")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    )?;
+    let file_matcher = arguments
+        .get("glob")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(|pattern| {
+            Glob::new(pattern)
+                .map(|glob| glob.compile_matcher())
+                .map_err(|error| format!("文件 glob 无效：{error}"))
+        })
+        .transpose()?;
+    let search_root =
+        resolve_project_search_path(project_root, argument_optional_string(arguments, "path"))?;
+    let limit = bounded_positive_argument(arguments, "limit", 100, MAX_FILE_TOOL_RESULTS)?;
+    let canonical_project = fs::canonicalize(project_root).map_err(|error| error.to_string())?;
+    let mut scanned = 0usize;
+    let mut matches = Vec::new();
+    let mut truncated = false;
+    let mut builder = WalkBuilder::new(search_root);
+    builder.follow_links(false).standard_filters(true);
+    'entries: for entry in builder.build().flatten() {
+        scanned = scanned.saturating_add(1);
+        if scanned > MAX_FILE_SCAN_ENTRIES {
+            truncated = true;
+            break;
+        }
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(&canonical_project)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        if file_matcher.as_ref().is_some_and(|matcher| {
+            !matcher.is_match(&relative) && !matcher.is_match(Path::new(entry.file_name()))
+        }) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.len() > MAX_FILE_BYTES {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for (index, line) in content.lines().enumerate() {
+            if !regex.is_match(line) {
+                continue;
+            }
+            let preview = line.chars().take(500).collect::<String>();
+            matches.push(json!({"path": relative, "line": index + 1, "text": preview}));
+            if matches.len() >= limit {
+                truncated = true;
+                break 'entries;
+            }
+        }
+    }
+    let count = matches.len();
+    Ok(ToolResult {
+        output: json!({
+            "ok": true,
+            "matches": matches,
+            "count": count,
+            "scanned": scanned.min(MAX_FILE_SCAN_ENTRIES),
+            "truncated": truncated
+        }),
+        summary: format!("文本检索完成，返回 {count} 条匹配"),
+    })
+}
+
+fn edit_project_file(project_root: &Path, arguments: &Value) -> Result<ToolResult, String> {
+    let relative = argument_string(arguments, "path")?;
+    let old_text = argument_string(arguments, "oldText")?;
+    let new_text = argument_string(arguments, "newText")?;
+    if old_text.is_empty() {
+        return Err("edit_file 的 oldText 不能为空".to_owned());
+    }
+    if old_text == new_text {
+        return Err("edit_file 的 oldText 与 newText 完全相同".to_owned());
+    }
+    let path = resolve_project_file(project_root, relative, true)?;
+    let file_type = fs::symlink_metadata(&path)
+        .map_err(|error| format!("检查 {relative} 失败：{error}"))?
+        .file_type();
+    if file_type.is_symlink() || !file_type.is_file() {
+        return Err("edit_file 只允许编辑项目内普通文件，不能编辑符号链接".to_owned());
+    }
+    let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+    if metadata.len() > MAX_FILE_BYTES {
+        return Err(format!(
+            "文件超过 {} MiB 编辑限制",
+            MAX_FILE_BYTES / 1024 / 1024
+        ));
+    }
+    let content =
+        fs::read_to_string(&path).map_err(|error| format!("读取 {relative} 失败：{error}"))?;
+    let occurrences = content.match_indices(old_text).count();
+    if occurrences == 0 {
+        return Err("oldText 在目标文件中没有匹配".to_owned());
+    }
+    if occurrences > 1 {
+        return Err(format!(
+            "oldText 在目标文件中匹配 {occurrences} 次；请提供更具体的上下文"
+        ));
+    }
+    let updated = content.replacen(old_text, new_text, 1);
+    if updated.len() as u64 > MAX_FILE_BYTES {
+        return Err(format!(
+            "编辑后文件超过 {} MiB 限制",
+            MAX_FILE_BYTES / 1024 / 1024
+        ));
+    }
+    fs::write(&path, updated.as_bytes())
+        .map_err(|error| format!("写入 {relative} 失败：{error}"))?;
+    Ok(ToolResult {
+        output: json!({
+            "ok": true,
+            "path": relative,
+            "oldBytes": content.len(),
+            "newBytes": updated.len(),
+            "replacements": 1
+        }),
+        summary: format!("已精确编辑 {relative}（1 处替换）"),
+    })
 }
 
 fn resolve_agent_read_file(project_root: &Path, value: &str) -> Result<PathBuf, String> {
@@ -2254,7 +2593,7 @@ mod tests {
         let source = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"# 标题\\n\"}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"rpaz_read\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"_file\",\"arguments\":\"\\\"main.py\\\"}\"}}]}}],\"usage\":{\"prompt_tokens\":25,\"completion_tokens\":9}}\n\n",
             "data: [DONE]\n\n",
         );
@@ -2276,7 +2615,7 @@ mod tests {
             response
                 .pointer("/choices/0/message/tool_calls/0/function/name")
                 .and_then(Value::as_str),
-            Some("rpaz_read_file")
+            Some("read_file")
         );
         assert_eq!(
             response
@@ -2402,21 +2741,48 @@ mod tests {
         };
 
         assert!(execute_tool(&context, "rpaz_validate", &json!({})).is_ok());
-        assert!(
-            execute_tool(
-                &context,
-                "rpaz_read_file",
-                &json!({"path": "../outside.txt"})
-            )
-            .is_err()
-        );
+        assert!(execute_tool(&context, "read_file", &json!({"path": "../outside.txt"})).is_err());
         let read = execute_tool(
             &context,
-            "rpaz_read_file",
+            "read_file",
             &json!({"path": outside.to_string_lossy()}),
         )
         .unwrap();
-        assert_eq!(read.output["content"], "outside read");
+        assert!(
+            read.output["content"]
+                .as_str()
+                .unwrap()
+                .contains("outside read")
+        );
+        assert_eq!(read.output["totalLines"], 1);
+        assert!(
+            execute_tool(
+                &context,
+                "read_file",
+                &json!({"path": "main.py", "lineCount": MAX_FILE_READ_LINES + 1})
+            )
+            .is_err()
+        );
+        let found = execute_tool(&context, "find_files", &json!({"pattern": "**/*.py"})).unwrap();
+        assert_eq!(found.output["files"][0], "main.py");
+        let searched = execute_tool(
+            &context,
+            "search_text",
+            &json!({"pattern": "def main", "literal": true}),
+        )
+        .unwrap();
+        assert_eq!(searched.output["matches"][0]["line"], 1);
+        execute_tool(
+            &context,
+            "edit_file",
+            &json!({"path": "main.py", "oldText": "pass", "newText": "return None"}),
+        )
+        .unwrap();
+        assert!(
+            fs::read_to_string(project.join("main.py"))
+                .unwrap()
+                .contains("return None")
+        );
         assert!(
             execute_tool(
                 &context,
@@ -2455,7 +2821,7 @@ mod tests {
             .filter_map(|value| value.pointer("/function/name").and_then(Value::as_str))
             .collect::<Vec<_>>();
         assert!(!names.contains(&"data_query"));
-        assert!(!names.contains(&"rpaz_read_file"));
+        assert!(!names.contains(&"read_file"));
         assert!(!names.contains(&"rpaz_write_file"));
         assert!(ensure_tool_allowed(&policy, "data_query").is_err());
         assert!(ensure_tool_allowed(&policy, "rpaz_write_file").is_err());

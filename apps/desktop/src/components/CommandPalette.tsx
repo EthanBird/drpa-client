@@ -1,4 +1,4 @@
-import { ArrowRight, Blocks, BookOpen, BookOpenCheck, Bot, Code2, Command, Database, Library, ListTodo, Play, PlugZap, Search, Settings, Workflow, Zap } from "lucide-react";
+import { ArrowRight, Blocks, BookOpen, BookOpenCheck, Bot, Code2, Command, Database, Library, ListTodo, Play, PlugZap, Search, Settings, Workflow, Wrench, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { NavigationId } from "../domain/models";
@@ -18,6 +18,7 @@ const commands: Array<{
   { id: "data", label: "打开数据工作台", detail: "SQLite 与 SQL 查询", icon: Database, navigation: "data" },
   { id: "local-dify", label: "打开流程设计", detail: "本地流程开发与测试", icon: Workflow, navigation: "localDify" },
   { id: "agent", label: "打开 AI Agent", detail: "RPAZ 开发助手", icon: Bot, navigation: "agent" },
+  { id: "extension-tools", label: "打开扩展工具", detail: "内置工具权限与离线 QuickJS 扩展", icon: Wrench, navigation: "extensionTools" },
   { id: "plugins", label: "打开插件", detail: "服务、Provider 与工具扩展", icon: PlugZap, navigation: "plugins" },
   { id: "docs", label: "打开知识文档", detail: "本地 Markdown 知识库", icon: BookOpen, navigation: "docs" },
   { id: "knowledge-base", label: "打开知识库", detail: "面向 AI 的多源向量检索", icon: BookOpenCheck, navigation: "knowledgeBase" },
