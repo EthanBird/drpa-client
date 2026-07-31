@@ -3,6 +3,7 @@
   const percent = document.getElementById("startup-percent");
   const progress = document.getElementById("startup-progress");
   const file = document.getElementById("startup-file");
+  const heartbeat = document.getElementById("startup-heartbeat");
   let previousSignature = "";
   let displayedProgress = 2;
 
@@ -22,6 +23,7 @@
     percent.textContent = `${Math.round(next)}%`;
     progress.style.width = `${Math.max(2, next)}%`;
     file.textContent = status.currentFile || "desktop://bootstrap";
+    document.body.dataset.phase = status.phase || (next >= 100 ? "ready" : "loading");
   };
 
   const tick = () => {
@@ -37,6 +39,15 @@
       const fallback = fallbackSteps.filter((step) => elapsed >= step.after).at(-1);
       if (fallback) render(fallback);
     }
+    const elapsedSeconds = Math.floor((performance.now() - startedAt) / 1000);
+    const minutes = String(Math.floor(elapsedSeconds / 60)).padStart(2, "0");
+    const seconds = String(elapsedSeconds % 60).padStart(2, "0");
+    const phase = document.body.dataset.phase;
+    heartbeat.textContent = phase === "error"
+      ? "启动遇到问题 · 请记录上方信息"
+      : phase === "ready"
+        ? "界面已经就绪"
+        : `应用仍在响应 · 已用时 ${minutes}:${seconds}`;
     window.setTimeout(tick, 80);
   };
 

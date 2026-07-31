@@ -27,7 +27,19 @@ function waitForTwoPaints(): Promise<void> {
     if (typeof window.requestAnimationFrame === "function") return window.requestAnimationFrame(callback);
     return window.setTimeout(() => callback(performance.now()), 0);
   };
-  return new Promise((resolve) => schedule(() => schedule(() => resolve())));
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(fallback);
+      resolve();
+    };
+    // WebView2 can suppress requestAnimationFrame while its native window is hidden.
+    // Keep the paint path for visible/dev previews, but never let startup deadlock on it.
+    const fallback = window.setTimeout(finish, document.visibilityState === "hidden" ? 80 : 400);
+    schedule(() => schedule(finish));
+  });
 }
 
 export function App() {

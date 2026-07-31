@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +38,7 @@ const BUILTIN_DIFY2API_NOTICES: &str =
     include_str!("../../../../plugins/builtin/dify2api/THIRD_PARTY_NOTICES.txt");
 const BUILTIN_DIFY2API_PROVENANCE: &str =
     include_str!("../../../../plugins/builtin/dify2api/BUILD-PROVENANCE.md");
+const BUILTIN_DIFY2API_MARKER: &str = "dify2api@1.0.0;bundle=2026-07-31.1";
 #[cfg(target_os = "windows")]
 const BUILTIN_DIFY2API_SERVICE: &[u8] =
     include_bytes!("../../../../plugins/builtin/dify2api/service/dify2api-server.exe");
@@ -52,6 +53,7 @@ const BUILTIN_DIFY2API_SERVICE_NAME: &str = "service/dify2api-server";
 const BUILTIN_DIFY2API_SERVICE: &[u8] = &[];
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 const BUILTIN_DIFY2API_SERVICE_NAME: &str = "";
+static INITIALIZED_PLUGIN_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 const PLUGIN_PYTHON_RUNNER: &str = r#"
 import importlib.util
 import inspect
@@ -668,11 +670,15 @@ const fn default_tool_timeout() -> u64 {
 }
 
 #[tauri::command]
-pub(crate) fn list_plugins(
+pub(crate) async fn list_plugins(
     paths: State<'_, AppPaths>,
     manager: State<'_, PluginManager>,
 ) -> Result<Vec<PluginSummary>, String> {
-    list_plugins_inner(&paths.workspace_root, &manager)
+    let workspace_root = paths.workspace_root.clone();
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || list_plugins_inner(&workspace_root, &manager))
+        .await
+        .map_err(|error| format!("插件扫描后台任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -850,10 +856,13 @@ pub(crate) async fn run_plugin_debugger(
 }
 
 #[tauri::command]
-pub(crate) fn list_plugin_projects(
+pub(crate) async fn list_plugin_projects(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<PluginProjectSummary>, String> {
-    list_plugin_projects_inner(&paths.workspace_root)
+    let workspace_root = paths.workspace_root.clone();
+    tauri::async_runtime::spawn_blocking(move || list_plugin_projects_inner(&workspace_root))
+        .await
+        .map_err(|error| format!("插件项目扫描后台任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -2644,6 +2653,19 @@ fn validate_loopback_http_endpoint(value: &str) -> Result<(), String> {
 }
 
 fn ensure_plugins_root(workspace_root: &Path) -> Result<(), String> {
+    let cache = INITIALIZED_PLUGIN_ROOTS.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut initialized = cache
+        .lock()
+        .map_err(|_| "插件根目录初始化缓存已损坏".to_owned())?;
+    if initialized.contains(workspace_root) && plugins_root(workspace_root).is_dir() {
+        return Ok(());
+    }
+    ensure_plugins_root_uncached(workspace_root)?;
+    initialized.insert(workspace_root.to_path_buf());
+    Ok(())
+}
+
+fn ensure_plugins_root_uncached(workspace_root: &Path) -> Result<(), String> {
     let root = plugins_root(workspace_root);
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     if BUILTIN_DIFY2API_SERVICE_NAME.is_empty() {
@@ -2661,6 +2683,19 @@ fn ensure_plugins_root(workspace_root: &Path) -> Result<(), String> {
     }
     if builtin.join(".builtin").is_file() {
         let marker = fs::read_to_string(builtin.join(".builtin")).unwrap_or_default();
+        let service_path = builtin.join(BUILTIN_DIFY2API_SERVICE_NAME);
+        let bundle_is_current = marker.trim() == BUILTIN_DIFY2API_MARKER
+            && builtin.join("plugin.yaml").is_file()
+            && builtin.join("config.schema.json").is_file()
+            && builtin.join("README.md").is_file()
+            && builtin.join("THIRD_PARTY_NOTICES.txt").is_file()
+            && builtin.join("BUILD-PROVENANCE.md").is_file()
+            && fs::metadata(&service_path).is_ok_and(|metadata| {
+                metadata.is_file() && metadata.len() == BUILTIN_DIFY2API_SERVICE.len() as u64
+            });
+        if bundle_is_current {
+            return Ok(());
+        }
         write_if_different(&builtin.join("plugin.yaml"), BUILTIN_DIFY2API_MANIFEST)?;
         write_if_different(
             &builtin.join("config.schema.json"),
@@ -2675,11 +2710,13 @@ fn ensure_plugins_root(workspace_root: &Path) -> Result<(), String> {
             &builtin.join("BUILD-PROVENANCE.md"),
             BUILTIN_DIFY2API_PROVENANCE,
         )?;
-        let service_path = builtin.join(BUILTIN_DIFY2API_SERVICE_NAME);
         write_bytes_if_different(&service_path, BUILTIN_DIFY2API_SERVICE)?;
-        if marker.trim() != "dify2api@1.0.0" {
-            fs::write(builtin.join(".builtin"), b"dify2api@1.0.0\n")
-                .map_err(|error| error.to_string())?;
+        if marker.trim() != BUILTIN_DIFY2API_MARKER {
+            fs::write(
+                builtin.join(".builtin"),
+                format!("{BUILTIN_DIFY2API_MARKER}\n"),
+            )
+            .map_err(|error| error.to_string())?;
         }
         ensure_executable(&service_path)?;
         migrate_builtin_dify_state(&root, &builtin)?;

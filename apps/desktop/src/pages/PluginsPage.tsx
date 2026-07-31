@@ -387,18 +387,30 @@ export function PluginsPage() {
 
   useEffect(() => {
     if (!selected) return;
+    let disposed = false;
+    let inFlight = false;
     const timer = window.setInterval(() => {
+      if (disposed || inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
       void pluginGateway.listPlugins()
         .then((next) => {
+          if (disposed) return;
           setPlugins(next);
           const current = next.find((plugin) => plugin.id === selected.id);
           if (current?.status === "running" && hasCapability(capabilities, "service")) {
-            void pluginGateway.getPluginLogs(current.id).then(setLogs).catch(() => undefined);
+            return pluginGateway.getPluginLogs(current.id)
+              .then((nextLogs) => {
+                if (!disposed) setLogs(nextLogs);
+              });
           }
         })
-        .catch(() => undefined);
-    }, 1800);
-    return () => window.clearInterval(timer);
+        .catch(() => undefined)
+        .finally(() => { inFlight = false; });
+    }, 5000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
   }, [capabilities, selected?.id]);
 
   const showNotice = (message: string, tone: "neutral" | "success" | "error" = "neutral") => {

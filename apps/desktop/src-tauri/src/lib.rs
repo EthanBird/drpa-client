@@ -31,6 +31,8 @@ mod knowledge;
 mod knowledge_base;
 mod local_dify;
 mod local_dify_workflow;
+#[cfg(windows)]
+mod native_splash;
 mod plugins;
 mod system_metrics;
 mod workspaces;
@@ -57,9 +59,45 @@ struct RunProcessManager {
     process_groups: Arc<Mutex<HashMap<String, LinuxRunProcessGroup>>>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupProgress {
+    progress: u8,
+    label: String,
+    current_file: String,
+    phase: String,
+    revision: u64,
+}
+
 struct StartupState {
     started_at: std::time::Instant,
     reveal_requested: Arc<AtomicBool>,
+    progress: Mutex<StartupProgress>,
+}
+
+impl StartupState {
+    fn update(&self, progress: u8, label: &str, current_file: &str, phase: &str) {
+        if let Ok(mut status) = self.progress.lock() {
+            status.progress = progress.min(100);
+            status.label = label.to_owned();
+            status.current_file = current_file.to_owned();
+            status.phase = phase.to_owned();
+            status.revision = status.revision.saturating_add(1);
+        }
+    }
+
+    fn snapshot(&self) -> StartupProgress {
+        self.progress
+            .lock()
+            .map(|status| status.clone())
+            .unwrap_or_else(|_| StartupProgress {
+                progress: 0,
+                label: "正在恢复启动状态".to_owned(),
+                current_file: "desktop://startup-state".to_owned(),
+                phase: "loading".to_owned(),
+                revision: 0,
+            })
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -309,7 +347,6 @@ fn write_ui_test_marker(
     environment_variable: &str,
     payload: serde_json::Value,
 ) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
     if let Some(marker) = std::env::var_os(environment_variable) {
         let target = PathBuf::from(marker);
         if !target.is_absolute() {
@@ -325,8 +362,6 @@ fn write_ui_test_marker(
         fs::rename(&temporary, &target)
             .map_err(|error| format!("提交 UI 就绪标记失败：{error}"))?;
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = (environment_variable, payload);
     Ok(())
 }
 
@@ -344,11 +379,40 @@ fn report_ui_ready() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_startup_status(startup: State<'_, StartupState>) -> StartupProgress {
+    startup.snapshot()
+}
+
+#[tauri::command]
+fn report_startup_frontend_error(message: String, app: tauri::AppHandle) {
+    let message = message.chars().take(700).collect::<String>();
+    set_startup_error_handle(&app, "界面加载失败", &message);
+}
+
+#[tauri::command]
 fn complete_startup(app: tauri::AppHandle, startup: State<'_, StartupState>) -> Result<(), String> {
     if startup.reveal_requested.swap(true, AtomicOrdering::AcqRel) {
         return Ok(());
     }
     let remaining = std::time::Duration::from_secs(2).saturating_sub(startup.started_at.elapsed());
+    schedule_main_window_reveal(app, remaining);
+    Ok(())
+}
+
+fn complete_startup_from_handle(app: &tauri::AppHandle) {
+    let Some(startup) = app.try_state::<StartupState>() else {
+        return;
+    };
+    if startup.snapshot().phase == "error"
+        || startup.reveal_requested.swap(true, AtomicOrdering::AcqRel)
+    {
+        return;
+    }
+    let remaining = std::time::Duration::from_secs(2).saturating_sub(startup.started_at.elapsed());
+    schedule_main_window_reveal(app.clone(), remaining);
+}
+
+fn schedule_main_window_reveal(app: tauri::AppHandle, remaining: std::time::Duration) {
     std::thread::spawn(move || {
         if !remaining.is_zero() {
             std::thread::sleep(remaining);
@@ -357,13 +421,16 @@ fn complete_startup(app: tauri::AppHandle, startup: State<'_, StartupState>) -> 
         std::thread::sleep(std::time::Duration::from_millis(120));
         reveal_main_window(&app);
     });
-    Ok(())
 }
 
 fn reveal_main_window(app: &tauri::AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
         let _ = main.set_focus();
+    }
+    #[cfg(windows)]
+    if let Some(splash) = app.try_state::<native_splash::NativeSplash>() {
+        splash.close();
     }
     if let Some(splash) = app.get_webview_window("splashscreen") {
         let _ = splash.close();
@@ -376,15 +443,63 @@ fn set_startup_progress_handle(
     label: &str,
     current_file: &str,
 ) {
+    let progress = app
+        .try_state::<StartupState>()
+        .map(|startup| {
+            let progress = progress.max(startup.snapshot().progress).min(100);
+            startup.update(
+                progress,
+                label,
+                current_file,
+                if progress >= 100 { "ready" } else { "loading" },
+            );
+            progress
+        })
+        .unwrap_or_else(|| progress.min(100));
+    #[cfg(windows)]
+    if let Some(splash) = app.try_state::<native_splash::NativeSplash>() {
+        if progress >= 100 {
+            splash.ready(label, current_file);
+        } else {
+            splash.update(progress, label, current_file);
+        }
+    }
     let status = serde_json::json!({
         "progress": progress.min(100),
         "label": label,
         "currentFile": current_file,
+        "phase": if progress >= 100 { "ready" } else { "loading" },
     });
     let Ok(status) = serde_json::to_string(&status) else {
         return;
     };
     if let Some(splash) = app.get_webview_window("splashscreen") {
+        let _ = splash.eval(format!("window.__DRPA_STARTUP_STATUS__ = {status};"));
+    }
+}
+
+fn set_startup_error_handle(app: &tauri::AppHandle, label: &str, detail: &str) {
+    let progress = app
+        .try_state::<StartupState>()
+        .map(|startup| {
+            let progress = startup.snapshot().progress;
+            startup.update(progress, label, detail, "error");
+            progress
+        })
+        .unwrap_or(0);
+    #[cfg(windows)]
+    if let Some(splash) = app.try_state::<native_splash::NativeSplash>() {
+        splash.fail(label, detail);
+    }
+    let status = serde_json::json!({
+        "progress": progress,
+        "label": label,
+        "currentFile": detail,
+        "phase": "error",
+    });
+    if let Ok(status) = serde_json::to_string(&status)
+        && let Some(splash) = app.get_webview_window("splashscreen")
+    {
         let _ = splash.eval(format!("window.__DRPA_STARTUP_STATUS__ = {status};"));
     }
 }
@@ -1342,11 +1457,16 @@ async fn start_plugin(
 }
 
 #[tauri::command]
-fn list_plugin_tools(
+async fn list_plugin_tools(
     plugin_id: String,
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<plugins::PluginToolDescriptor>, String> {
-    plugins::list_plugin_tools_for_workbench(&paths.workspace_root, &plugin_id)
+    let workspace_root = paths.workspace_root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        plugins::list_plugin_tools_for_workbench(&workspace_root, &plugin_id)
+    })
+    .await
+    .map_err(|error| format!("插件工具扫描后台任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -2888,6 +3008,197 @@ fn signal_linux_process_group(process_group: u32, signal: libc::c_int) -> Result
     }
 }
 
+fn initialize_desktop(
+    app: tauri::AppHandle,
+    #[cfg(windows)] main_window_config: tauri::utils::config::WindowConfig,
+    reveal_requested: Arc<AtomicBool>,
+) -> Result<(), String> {
+    set_startup_progress_handle(&app, 8, "正在读取应用配置", "desktop://tauri.conf.json");
+    let data_root = if let Some(path) = std::env::var_os("DRPA_DATA_DIR") {
+        PathBuf::from(path)
+    } else {
+        #[cfg(windows)]
+        {
+            std::env::current_exe()
+                .map_err(|error| format!("无法定位当前程序：{error}"))?
+                .parent()
+                .ok_or_else(|| "无法定位应用安装目录".to_owned())?
+                .join("data")
+        }
+        #[cfg(not(windows))]
+        {
+            app.path()
+                .app_local_data_dir()
+                .map_err(|error| format!("无法定位应用数据目录：{error}"))?
+                .join("workspace")
+        }
+    };
+    fs::create_dir_all(&data_root).map_err(|error| format!("创建数据目录失败：{error}"))?;
+    set_startup_progress_handle(&app, 18, "正在准备本地数据目录", "workspace://data");
+
+    let workspace_root = workspaces::resolve_active_workspace(&data_root)
+        .map_err(|error| format!("载入活动工作区失败：{error}"))?;
+    set_startup_progress_handle(&app, 30, "正在切换隔离工作区", "workspace://active");
+
+    knowledge::seed_default_knowledge(&workspace_root)
+        .map_err(|error| format!("准备知识文档失败：{error}"))?;
+    set_startup_progress_handle(&app, 42, "正在加载知识文档", "knowledge://documents");
+
+    let app_paths = AppPaths {
+        data_root: data_root.clone(),
+        workspace_root: workspace_root.clone(),
+        resource_dir: app.path().resource_dir().ok(),
+    };
+    let plugin_manager = plugins::PluginManager::default();
+    set_startup_progress_handle(&app, 52, "正在定位运行环境", "runtime://python");
+    if let Ok(runtime) = locate_runtime(&app_paths) {
+        let autostart_workspace = workspace_root.clone();
+        let autostart_manager = plugin_manager.clone();
+        let autostart_gate = Arc::clone(&reveal_requested);
+        std::thread::spawn(move || {
+            // Avoid competing with first-run WebView2 and knowledge initialization on slow disks.
+            // Plugins become available shortly after the real workbench is visible.
+            for _ in 0..600 {
+                if autostart_gate.load(AtomicOrdering::Acquire) {
+                    std::thread::sleep(std::time::Duration::from_millis(750));
+                    let _ = plugins::start_autostart_plugins(
+                        &autostart_workspace,
+                        &runtime.python,
+                        &autostart_manager,
+                    );
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        });
+    }
+
+    set_startup_progress_handle(&app, 64, "正在建立运行索引", "host://workspace.sqlite3");
+    let host_state = HostState::try_new(workspace_root.clone())
+        .map_err(|error| format!("建立运行索引失败：{error}"))?;
+    app.manage(host_state);
+    app.manage(app_paths);
+    app.manage(StudioKernelManager {
+        sessions: Arc::new(Mutex::new(HashMap::new())),
+    });
+    app.manage(RunProcessManager::default());
+    app.manage(system_metrics::SystemMetricsMonitor::default());
+    app.manage(plugin_manager);
+    app.manage(local_dify::LocalDifyServiceManager::default());
+
+    set_startup_progress_handle(&app, 76, "正在装载本地服务", "services://agent-tools");
+    let scheduler = automations::SchedulerManager::default();
+    let scheduler_runner = scheduler.clone();
+    app.manage(scheduler);
+    scheduler_runner.start(app.clone());
+    acknowledge_windows_update_startup(&data_root)
+        .map_err(|error| format!("确认更新状态失败：{error}"))?;
+
+    #[cfg(windows)]
+    {
+        set_startup_progress_handle(&app, 86, "正在启动界面引擎", "webview://user-data");
+        let webview_data = data_root.join("webview2-user-data");
+        fs::create_dir_all(&webview_data)
+            .map_err(|error| format!("创建 WebView2 数据目录失败：{error}"))?;
+        let page_load_app = app.clone();
+        tauri::WebviewWindowBuilder::from_config(&app, &main_window_config)
+            .map_err(|error| format!("读取主窗口配置失败：{error}"))?
+            .data_directory(webview_data)
+            .initialization_script(
+                r#"
+                (() => {
+                  const report = (message) => {
+                    const invoke = window.__TAURI_INTERNALS__?.invoke;
+                    if (invoke) {
+                      invoke("report_startup_frontend_error", {
+                        message: String(message).slice(0, 700),
+                      }).catch(() => {});
+                    }
+                  };
+                  window.addEventListener("error", (event) => {
+                    report(`JavaScript: ${event.message || "unknown error"} · ${event.filename || "unknown"}:${event.lineno || 0}`);
+                  });
+                  window.addEventListener("unhandledrejection", (event) => {
+                    const reason = event.reason instanceof Error
+                      ? `${event.reason.name}: ${event.reason.message}`
+                      : String(event.reason);
+                    report(`Promise: ${reason}`);
+                  });
+                  window.setTimeout(() => {
+                    const root = document.getElementById("root");
+                    if (!root || root.childElementCount === 0) {
+                      const scripts = Array.from(document.scripts)
+                        .map((script) => script.src || "inline")
+                        .join(", ");
+                      report(`React 未挂载 · readyState=${document.readyState} · scripts=${scripts || "none"}`);
+                    }
+                  }, 5000);
+                })();
+                "#,
+            )
+            .on_page_load(move |_window, payload| match payload.event() {
+                tauri::webview::PageLoadEvent::Started => set_startup_progress_handle(
+                    &page_load_app,
+                    91,
+                    "正在读取界面资源",
+                    "ui://index.html",
+                ),
+                tauri::webview::PageLoadEvent::Finished => {
+                    set_startup_progress_handle(
+                        &page_load_app,
+                        96,
+                        "正在挂载工作台",
+                        "ui://react",
+                    );
+                    let reveal_app = page_load_app.clone();
+                    std::thread::spawn(move || {
+                        // Hidden WebView2 windows can suspend animation frames and timers. Once
+                        // all page resources have loaded, give React a short commit window and
+                        // then reveal unless the startup error hook reported a real failure.
+                        std::thread::sleep(std::time::Duration::from_millis(650));
+                        complete_startup_from_handle(&reveal_app);
+                    });
+                }
+            })
+            .build()
+            .map_err(|error| format!("创建主界面失败：{error}"))?;
+    }
+
+    set_startup_progress_handle(&app, 94, "正在渲染工作台", "ui://index.html");
+    start_startup_watchdog(app, reveal_requested);
+    Ok(())
+}
+
+fn start_startup_watchdog(app: tauri::AppHandle, reveal_requested: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        // React normally invokes complete_startup itself. The watchdog only repairs a lost IPC
+        // call after the root has real content; it never reveals an empty or white WebView.
+        for iteration in 0..90 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if reveal_requested.load(AtomicOrdering::Acquire) {
+                return;
+            }
+            if iteration % 3 == 2
+                && let Some(main) = app.get_webview_window("main")
+            {
+                let _ = main.eval(
+                    "(() => { const root = document.getElementById('root'); \
+                     if (root && root.childElementCount > 0 && window.__TAURI_INTERNALS__) { \
+                       window.__TAURI_INTERNALS__.invoke('complete_startup').catch(() => {}); \
+                     } })();",
+                );
+            }
+        }
+        if !reveal_requested.load(AtomicOrdering::Acquire) {
+            set_startup_error_handle(
+                &app,
+                "工作台响应超时",
+                "ui://react-timeout · 启动图仍在运行",
+            );
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let startup_started = std::time::Instant::now();
@@ -2905,150 +3216,60 @@ pub fn run() {
         .expect("Windows main window configuration is missing");
     #[cfg(windows)]
     let main_window_config = context.config_mut().app.windows.remove(main_window_index);
+    #[cfg(windows)]
+    context
+        .config_mut()
+        .app
+        .windows
+        .retain(|window| window.label != "splashscreen");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
-            // Register the completion state before constructing the main WebView.
-            // On fast machines React can invoke `complete_startup` while setup is
-            // still finishing; late registration made that IPC call fail and left
-            // the splash waiting at the final 94% checkpoint.
             let reveal_requested = Arc::new(AtomicBool::new(false));
             app.manage(StartupState {
                 started_at: startup_started,
                 reveal_requested: Arc::clone(&reveal_requested),
+                progress: Mutex::new(StartupProgress {
+                    progress: 2,
+                    label: "正在启动 DRPA".to_owned(),
+                    current_file: "desktop://bootstrap".to_owned(),
+                    phase: "loading".to_owned(),
+                    revision: 1,
+                }),
             });
+            #[cfg(windows)]
+            app.manage(native_splash::NativeSplash::start().map_err(std::io::Error::other)?);
             if let Some(splash) = app.get_webview_window("splashscreen") {
                 let _ = splash.set_always_on_top(false);
             }
-            set_startup_progress_handle(
-                app.handle(),
-                6,
-                "正在读取应用配置",
-                "desktop://tauri.conf.json",
-            );
-            let data_root = if let Some(path) = std::env::var_os("DRPA_DATA_DIR") {
-                PathBuf::from(path)
-            } else {
-                #[cfg(windows)]
-                {
-                    std::env::current_exe()?
-                        .parent()
-                        .ok_or_else(|| std::io::Error::other("无法定位应用安装目录"))?
-                        .join("data")
-                }
-                #[cfg(not(windows))]
-                {
-                    app.path().app_local_data_dir()?.join("workspace")
-                }
-            };
-            fs::create_dir_all(&data_root)?;
-            set_startup_progress_handle(
-                app.handle(),
-                18,
-                "正在准备本地数据目录",
-                "workspace://data",
-            );
-            let workspace_root =
-                workspaces::resolve_active_workspace(&data_root).map_err(std::io::Error::other)?;
-            set_startup_progress_handle(
-                app.handle(),
-                31,
-                "正在切换隔离工作区",
-                "workspace://active",
-            );
-            knowledge::seed_default_knowledge(&workspace_root)?;
-            set_startup_progress_handle(
-                app.handle(),
-                43,
-                "正在加载知识文档",
-                "knowledge://documents",
-            );
-            let resource_dir = app.path().resource_dir().ok();
-            let app_paths = AppPaths {
-                data_root: data_root.clone(),
-                workspace_root: workspace_root.clone(),
-                resource_dir,
-            };
-            let plugin_manager = plugins::PluginManager::default();
-            set_startup_progress_handle(app.handle(), 55, "正在定位运行环境", "runtime://python");
-            if let Ok(runtime) = locate_runtime(&app_paths) {
-                let autostart_workspace = workspace_root.clone();
-                let autostart_manager = plugin_manager.clone();
-                std::thread::spawn(move || {
-                    let _ = plugins::start_autostart_plugins(
-                        &autostart_workspace,
-                        &runtime.python,
-                        &autostart_manager,
-                    );
-                });
-            }
-
             #[cfg(windows)]
             {
-                set_startup_progress_handle(
-                    app.handle(),
-                    66,
-                    "正在启动界面引擎",
-                    "webview://user-data",
-                );
-                let webview_data = data_root.join("webview2-user-data");
-                fs::create_dir_all(&webview_data)?;
-                tauri::WebviewWindowBuilder::from_config(app, &main_window_config)?
-                    .data_directory(webview_data)
-                    .build()?;
+                let initialize_app = app.handle().clone();
+                std::thread::Builder::new()
+                    .name("drpa-startup-initializer".to_owned())
+                    .spawn(move || {
+                        if let Err(error) = initialize_desktop(
+                            initialize_app.clone(),
+                            main_window_config,
+                            reveal_requested,
+                        ) {
+                            set_startup_error_handle(&initialize_app, "初始化失败", &error);
+                        }
+                    })
+                    .map_err(std::io::Error::other)?;
             }
-
-            set_startup_progress_handle(
-                app.handle(),
-                76,
-                "正在建立运行索引",
-                "host://workspace.sqlite3",
-            );
-            app.manage(
-                HostState::try_new(workspace_root.clone())
-                    .map_err(|error| std::io::Error::other(error.to_string()))?,
-            );
-            app.manage(app_paths);
-            app.manage(StudioKernelManager {
-                sessions: Arc::new(Mutex::new(HashMap::new())),
-            });
-            app.manage(RunProcessManager::default());
-            app.manage(system_metrics::SystemMetricsMonitor::default());
-            app.manage(plugin_manager);
-            app.manage(local_dify::LocalDifyServiceManager::default());
-            let scheduler = automations::SchedulerManager::default();
-            let scheduler_runner = scheduler.clone();
-            app.manage(scheduler);
-            scheduler_runner.start(app.handle().clone());
-            set_startup_progress_handle(
-                app.handle(),
-                88,
-                "正在装载本地服务",
-                "services://agent-tools",
-            );
-            acknowledge_windows_update_startup(&data_root)?;
-            set_startup_progress_handle(app.handle(), 94, "正在渲染工作台", "ui://index.html");
-            let fallback_app = app.handle().clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(6));
-                if !reveal_requested.swap(true, AtomicOrdering::AcqRel) {
-                    set_startup_progress_handle(
-                        &fallback_app,
-                        100,
-                        "界面已加载",
-                        "ui://fallback-ready",
-                    );
-                    std::thread::sleep(std::time::Duration::from_millis(120));
-                    reveal_main_window(&fallback_app);
-                }
-            });
+            #[cfg(not(windows))]
+            initialize_desktop(app.handle().clone(), reveal_requested)
+                .map_err(std::io::Error::other)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_workspace_snapshot,
             report_ui_ready,
             report_ui_input_ready,
+            get_startup_status,
+            report_startup_frontend_error,
             complete_startup,
             install_package,
             uninstall_package,

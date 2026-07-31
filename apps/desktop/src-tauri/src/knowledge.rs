@@ -280,13 +280,34 @@ pub(crate) fn seed_default_knowledge(workspace_root: &Path) -> std::io::Result<(
             fs::create_dir_all(parent)?;
         }
         if !target.exists() {
-            atomic_write(&target, content.as_bytes())?;
+            write_seed_file(&target, content.as_bytes())?;
         }
     }
     atomic_write(
         &marker,
         b"DRPA default knowledge v6. User documents are never overwritten.\n",
     )
+}
+
+fn write_seed_file(target: &Path, content: &[u8]) -> std::io::Result<()> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| std::io::Error::other("seed target has no parent"))?;
+    let temporary = parent.join(format!(".drpa-seed-{}.tmp", Uuid::new_v4()));
+    let result = (|| {
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        output.write_all(content)?;
+        output.flush()?;
+        drop(output);
+        fs::rename(&temporary, target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn regular_file_exists(path: &Path) -> std::io::Result<bool> {

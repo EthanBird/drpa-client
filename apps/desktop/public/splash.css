@@ -176,6 +176,24 @@ h1 {
   white-space: nowrap;
 }
 
+.startup-heartbeat {
+  margin-top: 8px;
+  color: #9aa3b7;
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+}
+
+body[data-phase="error"] .status-row strong,
+body[data-phase="error"] .current-file {
+  color: #d34343;
+}
+
+body[data-phase="error"] .progress-track i,
+body[data-phase="error"] .pulse {
+  background: #d34343;
+}
+
 .pulse {
   flex: 0 0 auto;
   width: 5px;
