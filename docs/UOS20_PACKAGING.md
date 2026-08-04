@@ -494,4 +494,4 @@ UOS 专用包从 `uos20.2` 起有意永久使用软件渲染，这是对已证�
 
 不要把 `ubuntu-latest` 作为 UOS 正式运行层来源；当前构建器故意要求 Ubuntu 22.04 的 glibc 2.35。未来若迁移构建基线，应先分析新 glibc 的最低内核/系统调用要求、C++ ABI、WebKit helper 和所有私有库来源，再引入新的包修订号与兼容矩阵。
 
-Linux 当前没有 Windows `.drpa-update` 文件级更新链。UOS 版本升级通过 `apt install ./新版-uos20.deb` 完成，包管理文件可替换，XDG 用户数据保持独立。若未来实现 Linux updater，必须处理正在运行的 ELF、deb 数据库一致性、签名、回滚和权限边界，不能直接复用 Windows Worker。
+项目已统一停止发布 `.drpa-update`。UOS 版本升级通过 `apt install ./新版-uos20.deb` 完成，包管理文件可替换，XDG 用户数据保持独立。

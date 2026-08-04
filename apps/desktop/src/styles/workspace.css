@@ -514,23 +514,6 @@
 .skill-monaco-pane { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--log-canvas); }.skill-monaco-pane > header { display: flex; align-items: center; gap: 8px; min-height: 45px; padding: 7px 10px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-1); }.skill-monaco-pane > header > div { display: grid; min-width: 0; flex: 1; gap: 2px; }.skill-monaco-pane > header strong { overflow: hidden; font: calc(8px * var(--font-scale)) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }.skill-monaco-pane > header span { overflow: hidden; color: var(--text-3); font-size: calc(7px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }.skill-monaco-pane > header em { color: var(--warning); font: normal calc(7px * var(--font-scale)) var(--font-mono); }
 .skill-editor-empty { display: grid; place-content: center; place-items: center; gap: 7px; color: var(--text-3); text-align: center; }.skill-editor-empty strong { color: var(--text-2); font-size: calc(10px * var(--font-scale)); }.skill-editor-empty span { max-width: 320px; font-size: calc(8px * var(--font-scale)); line-height: 1.5; }
 .danger-text { color: var(--danger) !important; }
-.update-progress-overlay { position: fixed; z-index: 120; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(15,23,42,.48); backdrop-filter: blur(7px); }
-.update-progress-window { width: min(560px, 100%); padding: 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-1); box-shadow: var(--shadow-float); }
-.update-progress-window > header { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; }
-.update-progress-window > header > div:nth-child(2) { display: grid; gap: 3px; }
-.update-progress-window > header span { color: var(--text-3); font-size: calc(8px * var(--font-scale)); letter-spacing: .08em; text-transform: uppercase; }
-.update-progress-window > header h2 { margin: 0; font-size: calc(16px * var(--font-scale)); }
-.update-progress-window > header > strong { color: var(--accent-strong); font: calc(16px * var(--font-scale)) var(--font-mono); }
-.update-progress-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-strong); }
-.update-progress-track { height: 8px; margin-top: 22px; overflow: hidden; border-radius: 99px; background: var(--surface-3); }
-.update-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), #7c6ee6); transition: width 260ms ease; }
-.update-progress-window.failed .update-progress-track span { background: var(--danger); }
-.update-progress-meta { display: flex; justify-content: space-between; margin-top: 8px; color: var(--text-3); font: calc(8px * var(--font-scale)) var(--font-mono); }
-.update-progress-message { margin: 18px 0 7px; color: var(--text-2); font-size: calc(10px * var(--font-scale)); }
-.update-current-file { display: block; overflow: hidden; padding: 8px 9px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-2); color: var(--text-2); font: calc(8px * var(--font-scale)) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.update-restart-note { padding: 9px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-strong) !important; line-height: 1.6; }
-.update-progress-window footer { display: flex; justify-content: flex-end; margin-top: 16px; }
-
 .studio-page { display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; }
 .studio-header { min-height: 90px; }
 .studio-create-bar { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--surface-1); }

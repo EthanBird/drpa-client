@@ -1,6 +1,6 @@
 # DRPA Next architecture
 
-> 本文记录长期目标架构。当前可交付基线是 Windows x64、单一 sealed Python 3.11 baseline 和本地 `.drpa-update`；尚未实现的 content-addressed 多环境、包签名、跨平台安装器和远程 worker 均属于路线目标。当前实现与接手说明以 [`../DEVELOPMENT.md`](../DEVELOPMENT.md) 为准，Linux 适配状态见 [`../LINUX_DEVELOPMENT.md`](../LINUX_DEVELOPMENT.md)。
+> 本文记录长期目标架构。当前可交付基线是 Windows x64 全量离线 Setup 和单一 sealed Python 3.11 baseline；尚未实现的 content-addressed 多环境、包签名、跨平台安装器和远程 worker 均属于路线目标。当前实现与接手说明以 [`../DEVELOPMENT.md`](../DEVELOPMENT.md) 为准，Linux 适配状态见 [`../LINUX_DEVELOPMENT.md`](../LINUX_DEVELOPMENT.md)。
 
 ## 1. Product definition
 

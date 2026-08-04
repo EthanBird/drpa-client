@@ -2,7 +2,7 @@
 
 DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包运行管理器。用户无需配置系统 Python，即可安装、开发、运行和观察 `.rpaz` 自动化脚本包。
 
-当前版本为 `2.0.1`。Windows x64 以 `2.0.0` 全量 Setup 为安装基线，`2.0.1` 通过轻量 `.drpa-update` 交付；Linux x86_64 继续使用 `1.0.0` AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
+当前版本为 `2.0.1`。Windows x64 只交付完整离线 Setup，升级时直接运行新版安装包并选择原安装目录；Linux x86_64 继续使用 `1.0.0` AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
 ## 当前能力
 
@@ -19,22 +19,22 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - Skills 2.0 使用 `skill.yaml + instructions.md` 能力包，可携带工作流、资源、可执行 Python/Command 工具和可调用代码库；设置页提供目录树、Monaco 编辑及文件/目录创建、重命名、删除，旧版 `SKILL.md` 自动迁移。
 - 内置能力驱动的离线插件系统：支持 `.drpa-plugin` 安装、配置、启停、多服务、Provider、工具、调试端点、结构化事件和自定义面板；插件开发工作台可生成 Tool/Service/Bundle 模板并验证、构建、安装。内置 Dify2API 可把 Dify App API 转换为本地 OpenAI 兼容接口、适配 `tool_calls`，并提供服务与上游调试器。
 - 内置本地 Markdown 知识库：支持目录树、阅读/编辑/分栏渲染、相对文档跳转、内联新建/重命名/删除、拖拽导入、原生导入导出与自动保存，并首次初始化多篇详细 RPAZ 开发指南。
-- 协议化 `.drpa-update` 差量更新，包含可视化进度、结构/大小检查、精确基线匹配、独立 Worker、失败回滚和新 Host 启动确认；日常更新不重复携带 WebView2/Chrome，并始终保护安装目录下的 `data/`。
+- Windows 版本统一使用全量离线 Setup；安装器覆盖应用与封装运行时，始终保留安装目录下的 `data/` 用户数据。
 - Windows 上 `ctx.browser()` 使用工作区级持久 Chrome/Profile；任务成功、失败或调用 `page.quit()` 都只释放当前脚本句柄，不退出浏览器，后续 Studio 与多个 RPAZ 任务可直接复用登录态和调试页面。
 
-Windows 2.0.0 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.0.0>
+Windows 2.0.1 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.0.1>
 
-> `2.0.0` 是当前推荐的 Windows 全量安装基线。既有安装先运行该 Setup，再在设置中选择 `2.0.1` 轻量更新包；更新不会再次打包 WebView2、未变化的 Chrome/runtime 或用户数据。
+> `2.0.1` 是当前推荐的 Windows 全量离线安装包。升级时退出旧版并把 Setup 安装到原目录；安装器不会覆盖 `data/`。
 
 ## 平台状态
 
 | 平台 | 源码开发 | CI | 正式发行 |
 | --- | --- | --- | --- |
-| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `2.0.0` 全量安装包 + `2.0.1` 轻量更新 |
+| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `2.0.1` 全量离线安装包 |
 | Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 构建；Debian 10 与 Deepin 20.8/glibc 2.28 实装、React/IPC 和非白屏截图门禁 | `1.0.0` AppImage、现代 deb 与 UOS 20 专用 deb |
 | macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
 
-Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage 与 deb，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录。现代 deb `1.0.0-2` 把 WebKitGTK 4.1、JavaScriptCoreGTK、GTK、GStreamer 和 helper process 私有安装到 `/opt/drpa-next`，适用于 glibc 2.35+。UOS 包修订 `1.0.0-2+uos20.3` 面向 UOS Desktop 20 Professional（eagle）/glibc 2.28：固定安装到 `/opt/drpa-next-uos20`，内置 glibc/C++/NSS、WebKitGTK、GBM/libdrm，以及隔离的 GLVND、Mesa EGL 和 swrast/llvmpipe 软件渲染闭包，不再依赖目标机的 `libwebkit2gtk-4.1-0`、EGL/GL 或 DRI 包；GTK 固定走 XIM 输入法桥，避免聚焦输入框后页面冻结。CI 会在 Debian 10 和 Deepin 20.8 用户态真实安装，要求离线 Python/Jupyter、Chrome、React 挂载、真实 X11 输入框点击/键入/后续按钮点击、Tauri IPC、存活的 WebKitWebProcess 和非白屏截图全部通过；Debian 10 额外执行可见文字像素门禁，Deepin 固定镜像无系统字体时以布局与真实交互标记验收。内核、X11 server、系统字体和 XIM 输入法服务仍由目标机提供；真实 UOS 20/DDE/kernel 4.19/Fantasy II-M 实体机仍需人工复核。Linux 暂不支持 `.drpa-update`。接手 Linux 端请先阅读 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md)；复现或维护 UOS 包请阅读 [UOS 20 构建与打包手册](docs/UOS20_PACKAGING.md)。
+Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage 与 deb，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录。现代 deb `1.0.0-2` 把 WebKitGTK 4.1、JavaScriptCoreGTK、GTK、GStreamer 和 helper process 私有安装到 `/opt/drpa-next`，适用于 glibc 2.35+。UOS 包修订 `1.0.0-2+uos20.3` 面向 UOS Desktop 20 Professional（eagle）/glibc 2.28：固定安装到 `/opt/drpa-next-uos20`，内置 glibc/C++/NSS、WebKitGTK、GBM/libdrm，以及隔离的 GLVND、Mesa EGL 和 swrast/llvmpipe 软件渲染闭包，不再依赖目标机的 `libwebkit2gtk-4.1-0`、EGL/GL 或 DRI 包；GTK 固定走 XIM 输入法桥，避免聚焦输入框后页面冻结。CI 会在 Debian 10 和 Deepin 20.8 用户态真实安装，要求离线 Python/Jupyter、Chrome、React 挂载、真实 X11 输入框点击/键入/后续按钮点击、Tauri IPC、存活的 WebKitWebProcess 和非白屏截图全部通过；Debian 10 额外执行可见文字像素门禁，Deepin 固定镜像无系统字体时以布局与真实交互标记验收。内核、X11 server、系统字体和 XIM 输入法服务仍由目标机提供；真实 UOS 20/DDE/kernel 4.19/Fantasy II-M 实体机仍需人工复核。各平台升级均替换完整安装包并保留用户数据。接手 Linux 端请先阅读 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md)；复现或维护 UOS 包请阅读 [UOS 20 构建与打包手册](docs/UOS20_PACKAGING.md)。
 
 ## 架构边界
 
@@ -55,7 +55,7 @@ Sealed Python 3.11 ── RPAZ worker / IPython kernel / Chrome
 - `runtime/python/`：RPAZ Python adapter、Runtime Context 和 Jupyter bridge。
 - `offline/`：离线运行时规范、精确依赖锁和引导脚本。
 - `installer/windows/`：无注册表 NSIS 安装器。
-- `tools/windows/`：Windows 文件级更新包生成器。
+- `tools/windows/`：Windows 安装库存生成与安装器策略测试。
 
 UI 不是安全边界。所有文件路径、包清单、更新清单和运行请求都必须由 Rust Host 再次验证。
 
@@ -113,7 +113,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 ## 当前限制
 
 - Windows 当前稳定 Release 为 `desktop-v2.0.0` x64 Setup；Linux 发行资产继续保持在 `desktop-v1.0.0`，包含 runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。UOS 包固定 X11 软件渲染以换取老显卡兼容性，仍需要系统内核和 X11 server；真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
-- 当前更新入口使用本地 `.drpa-update`，已支持逐文件差量；尚未实现在线更新源、签名信任链和大文件块级差分。
+- Windows 升级统一使用新版全量 Setup，不再发布或在界面中接受 `.drpa-update`。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
 - AI Agent 当前采用单 Orchestrator，已支持流式 Markdown、ProviderAdapter、动态 ToolRegistry、Skills 2.0、插件 Provider/Tool 与本地会话；diff/checkpoint、会话导出、长期服务双向 JSON-RPC 和 Skill evaluation 仍在后续阶段。
 - Local Dify 已执行 Chat、Completion、Workflow 与 Chatflow；基础节点可本地运行，导入的扩展 Dify 节点会保留并标记兼容状态，Iteration/Loop、知识检索、Agent 与并行汇聚继续按节点逐步接入。

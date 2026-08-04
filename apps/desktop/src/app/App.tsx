@@ -3,24 +3,28 @@ import { lazy, Suspense, useEffect, useRef } from "react";
 import { desktopGateway } from "../infra/gateway";
 import { AppShell } from "../components/AppShell";
 import { CommandPalette } from "../components/CommandPalette";
-import { AutomationsPage } from "../pages/AutomationsPage";
-import { AgentPage } from "../pages/AgentPage";
-import { DocsPage } from "../pages/DocsPage";
-import { ExtensionToolsPage } from "../pages/ExtensionToolsPage";
-import { LibraryPage } from "../pages/LibraryPage";
 import { OverviewPage } from "../pages/OverviewPage";
-import { PluginsPage } from "../pages/PluginsPage";
-import { PlaceholderPage } from "../pages/PlaceholderPage";
-import { RunsPage } from "../pages/RunsPage";
-import { RuntimePage } from "../pages/RuntimePage";
-import { SettingsPage } from "../pages/SettingsPage";
-import { WorkbenchPage } from "../pages/WorkbenchPage";
 import { useAppStore } from "./store";
 
+const AgentPage = lazy(() => import("../pages/AgentPage").then((module) => ({ default: module.AgentPage })));
+const AutomationsPage = lazy(() => import("../pages/AutomationsPage").then((module) => ({ default: module.AutomationsPage })));
+const DocsPage = lazy(() => import("../pages/DocsPage").then((module) => ({ default: module.DocsPage })));
+const ExtensionToolsPage = lazy(() => import("../pages/ExtensionToolsPage").then((module) => ({ default: module.ExtensionToolsPage })));
+const LibraryPage = lazy(() => import("../pages/LibraryPage").then((module) => ({ default: module.LibraryPage })));
+const PluginsPage = lazy(() => import("../pages/PluginsPage").then((module) => ({ default: module.PluginsPage })));
+const PlaceholderPage = lazy(() => import("../pages/PlaceholderPage").then((module) => ({ default: module.PlaceholderPage })));
+const RunsPage = lazy(() => import("../pages/RunsPage").then((module) => ({ default: module.RunsPage })));
+const RuntimePage = lazy(() => import("../pages/RuntimePage").then((module) => ({ default: module.RuntimePage })));
+const SettingsPage = lazy(() => import("../pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const StudioPage = lazy(() => import("../pages/StudioPage").then((module) => ({ default: module.StudioPage })));
 const DataPage = lazy(() => import("../pages/DataPage").then((module) => ({ default: module.DataPage })));
 const LocalDifyPage = lazy(() => import("../pages/LocalDifyPage").then((module) => ({ default: module.LocalDifyPage })));
 const KnowledgeBasePage = lazy(() => import("../pages/KnowledgeBasePage").then((module) => ({ default: module.KnowledgeBasePage })));
+const WorkbenchPage = lazy(() => import("../pages/WorkbenchPage").then((module) => ({ default: module.WorkbenchPage })));
+
+function PageFallback() {
+  return <div className="page"><div className="empty-state"><h2>正在加载工作台…</h2></div></div>;
+}
 
 function waitForTwoPaints(): Promise<void> {
   const schedule = (callback: FrameRequestCallback) => {
@@ -204,27 +208,27 @@ export function App() {
     <div className="app">
       <AppShell>
         {activeNavigation === "overview" && <OverviewPage />}
-        {activeNavigation === "library" && <LibraryPage />}
-        {activeNavigation === "studio" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载开发工作室…</h2></div></div>}><StudioPage /></Suspense>}
-        {activeNavigation === "data" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载数据工作台…</h2></div></div>}><DataPage /></Suspense>}
-        {activeNavigation === "workbench" && <WorkbenchPage />}
-        {activeNavigation === "runs" && <RunsPage />}
-        {activeNavigation === "automations" && <AutomationsPage />}
-        {activeNavigation === "localDify" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载流程设计工作台…</h2></div></div>}><LocalDifyPage /></Suspense>}
-        {activeNavigation === "agent" && <AgentPage />}
-        {activeNavigation === "extensionTools" && <ExtensionToolsPage />}
-        {activeNavigation === "plugins" && <PluginsPage />}
-        {activeNavigation === "docs" && <DocsPage />}
-        {activeNavigation === "knowledgeBase" && <Suspense fallback={<div className="page"><div className="empty-state"><h2>正在加载向量知识库…</h2></div></div>}><KnowledgeBasePage /></Suspense>}
-        {activeNavigation === "runtimes" && <RuntimePage />}
+        {activeNavigation === "library" && <Suspense fallback={<PageFallback />}><LibraryPage /></Suspense>}
+        {activeNavigation === "studio" && <Suspense fallback={<PageFallback />}><StudioPage /></Suspense>}
+        {activeNavigation === "data" && <Suspense fallback={<PageFallback />}><DataPage /></Suspense>}
+        {activeNavigation === "workbench" && <Suspense fallback={<PageFallback />}><WorkbenchPage /></Suspense>}
+        {activeNavigation === "runs" && <Suspense fallback={<PageFallback />}><RunsPage /></Suspense>}
+        {activeNavigation === "automations" && <Suspense fallback={<PageFallback />}><AutomationsPage /></Suspense>}
+        {activeNavigation === "localDify" && <Suspense fallback={<PageFallback />}><LocalDifyPage /></Suspense>}
+        {activeNavigation === "agent" && <Suspense fallback={<PageFallback />}><AgentPage /></Suspense>}
+        {activeNavigation === "extensionTools" && <Suspense fallback={<PageFallback />}><ExtensionToolsPage /></Suspense>}
+        {activeNavigation === "plugins" && <Suspense fallback={<PageFallback />}><PluginsPage /></Suspense>}
+        {activeNavigation === "docs" && <Suspense fallback={<PageFallback />}><DocsPage /></Suspense>}
+        {activeNavigation === "knowledgeBase" && <Suspense fallback={<PageFallback />}><KnowledgeBasePage /></Suspense>}
+        {activeNavigation === "runtimes" && <Suspense fallback={<PageFallback />}><RuntimePage /></Suspense>}
         {activeNavigation === "secrets" && (
-          <PlaceholderPage
+          <Suspense fallback={<PageFallback />}><PlaceholderPage
             eyebrow="敏感数据保护"
             title="凭据保险箱"
             description="任务只绑定凭据引用；真实值不会进入 RPAZ 包、运行历史、日志或命令行。"
-          />
+          /></Suspense>
         )}
-        {activeNavigation === "settings" && <SettingsPage />}
+        {activeNavigation === "settings" && <Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>}
       </AppShell>
       {dragActive && <div className="drop-overlay"><div><strong>{activeNavigation === "docs" ? "释放以导入 Markdown" : activeNavigation === "knowledgeBase" ? "释放以索引到向量知识库" : activeNavigation === "agent" ? "释放以附加到当前对话" : activeNavigation === "studio" ? "释放以添加项目文件" : activeNavigation === "data" ? "释放以创建文件数据源" : "释放以安装 RPAZ"}</strong><span>{activeNavigation === "docs" ? "支持同时导入多个 `.md` / `.markdown` 文档" : activeNavigation === "knowledgeBase" ? "支持 PDF、Word、Excel、PowerPoint 与文本资料" : activeNavigation === "agent" ? "支持 PDF、DOCX、XLSX 与 PPTX" : activeNavigation === "studio" ? "文件将添加到当前项目目录" : activeNavigation === "data" ? "支持 SQLite、XLS、XLSX、XLSB 与 ODS" : "支持同时拖入多个 `.rpaz` RPAZ 包"}</span></div></div>}
       {operationNotice && <button className="global-notice" type="button" onClick={() => setOperationNotice("")}>{operationNotice}<span>×</span></button>}

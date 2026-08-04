@@ -73,15 +73,15 @@ SIGNATURE
 - 缺依赖时更新 lock、重新生成完整 Windows bundle、上传 GitHub Release；不能只把单个 wheel 手工拷到用户机器。
 - 未来维护内网/离线补丁目录时，目录本身也需要签名索引、回滚版本和过期策略。
 
-### 2.4 热更新演进
+### 2.4 全量升级策略
 
-当前 `.drpa-update` 已采用安装库存清单和逐文件差量：Release 保留完整 `install-manifest.json`，构建时比较上一版本，只传输变化文件并声明删除项；WebView2 与 Chrome 不再在日常更新中重复。后续扩展：
+Windows 已停止发布 `.drpa-update`，统一使用包含 runtime、Chrome、WebView2 和 JCode 的完整 Setup。后续发行工程只继续完善：
 
-1. 更新通道清单：`stable`、`preview`、`offline-media`，支持手工导入和可选 HTTPS feed。
-2. Ed25519 签名：Host 内置可信公钥，签名覆盖版本、目标、文件散列和最低 Host 版本。
-3. 内容寻址块：在“逐文件差量”基础上复用大文件内部未变化块；仍保留完整安装包作为恢复介质。
+1. Setup 签名与可信发布者信息。
+2. 安装前磁盘空间检查和覆盖安装提示。
+3. `data/` 自动备份、迁移检查和跨版本恢复演练。
 
-更新必须支持断电恢复、磁盘空间预检、失败回滚和“永不修改 `data/`”。
+任何安装升级都必须保持“永不覆盖 `data/`”。
 
 ## 3. 自动化任务
 

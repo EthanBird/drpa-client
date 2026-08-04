@@ -26,6 +26,7 @@
         "closable": false,
         "decorations": false,
         "transparent": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu --disable-background-networking --disable-component-update --disable-default-apps --disable-domain-reliability --disable-extensions --disable-sync --no-first-run",
         "alwaysOnTop": false,
         "skipTaskbar": true,
         "center": true
@@ -44,6 +45,7 @@
         "closable": true,
         "decorations": false,
         "transparent": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu --disable-background-networking --disable-component-update --disable-default-apps --disable-domain-reliability --disable-extensions --disable-sync --no-first-run",
         "center": true
       }
     ]

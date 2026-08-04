@@ -1,6 +1,6 @@
 # DRPA Next 开发与交接手册
 
-本文档描述 `codex/drpa-next-platform` 分支和 `1.0.0` 基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
+本文档描述 `codex/drpa-next-platform` 分支和 Windows `2.0.1` 基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
 
 ## 1. 产品状态
 
@@ -13,7 +13,7 @@
 - Notebook：真实 IPython Kernel、Jupyter Client 与 ZMQ。
 - 浏览器：Chrome for Testing；Windows UI WebView 使用 Fixed Version WebView2，Linux 发行包携带私有 WebKitGTK 4.1 闭包。
 - 安装：无管理员权限、无应用注册表写入的 NSIS 引导安装器。
-- 更新：本地 `.drpa-update` 文件级更新。
+- 升级：重新运行新版 Windows 全量离线 Setup；用户 `data/` 保持不变。
 
 Linux x86_64 已完成第一轮发行适配：Rust core/Tauri Host、XDG 数据目录、`xdg-open`、平台能力协议、sealed runtime、AppImage/deb 内嵌资源定位和 Linux 进程组取消均有实现；`.github/workflows/linux-desktop.yml` 在 Ubuntu 22.04 构建 runtime-complete AppImage，再由已验证 AppDir 生成 `/opt/drpa-next` 现代 deb 和 `/opt/drpa-next-uos20` UOS 兼容 deb。现代包门禁会卸载 Runner 的系统 WebKitGTK；UOS 包还会内置固定 glibc/C++ 运行层并在 Debian 10/glibc 2.28 容器中验证 Python/Jupyter 原生扩展、Chrome 和 X11。普通 push 只上传 Actions artifact；显式发布会把三种包、SHA-256、两个 deb manifest 和 wheelhouse lock 写入 `desktop-v1.0.0`。Ubuntu 24.04、真实 UOS 20、Wayland 与人工 GUI 验收仍是持续回归项。Windows Release workflow 保持独立。
 
@@ -23,7 +23,7 @@ Linux x86_64 已完成第一轮发行适配：Rust core/Tauri Host、XDG 数据�
 apps/desktop/
   src/                       React 页面、组件、状态和 typed gateway
   src-tauri/src/lib.rs       Tauri commands、运行时定位、Studio/Jupyter 生命周期
-  src-tauri/src/bin/         独立 Windows 更新器；Linux 不复用其发布协议
+  src-tauri/src/bin/         历史 Windows 更新器实现；当前发行不打包、不暴露入口
 crates/
   drpa-protocol/             DTO、运行事件和协议版本
   drpa-package/              schema v2、归档与路径安全
@@ -36,7 +36,7 @@ offline/
   bootstrap/                 离线环境初始化
 tools/offline/               sealed runtime 构建和依赖政策检查
 tools/linux/                 现代/UOS deb 构建、私有 ELF 运行层、Linux 布局与发布验证
-tools/windows/               .drpa-update 构建
+tools/windows/               Windows 安装库存生成和安装器策略测试
 installer/windows/           NSIS 安装脚本
 examples/                    示例项目与已构建 RPAZ
 .github/workflows/           CI、sealed runtime 与 Windows Release
@@ -64,7 +64,7 @@ Rust Host 负责：
 - 定位且验证 sealed runtime 清单。
 - 生成运行配置并监督 worker 生命周期。
 - 保存包、运行、日志和产物元数据。
-- 校验与应用更新包。
+- 保护安装旁 `data/`，并提供工作区导入导出。
 - 限制所有来自 WebView 的路径和参数。
 
 Python adapter 负责执行用户代码和生成结构化事件。不能把安全策略只写在 Python 或 React 中。
@@ -76,7 +76,6 @@ Windows 正式安装采用应用旁数据模型：
 ```text
 <install>/
 ├── DRPA Next.exe
-├── drpa-updater.exe
 ├── runtime/                         只读 sealed runtime 源
 ├── webview2/                        Fixed Version WebView2
 ├── examples/
@@ -89,14 +88,14 @@ Windows 正式安装采用应用旁数据模型：
     ├── databases/workspace.sqlite3 RPAZ `ctx.sql` 与数据工作台
     ├── runtime-environment/
     │   └── environment/             最终位置创建的 Python 环境
-    └── updates/                     更新暂存、备份和状态
+    └── updates/                     旧版更新会话兼容数据（新发行不再写入）
 ```
 
 关键约束：
 
 - 不把业务数据默认放到 `%APPDATA%`、`%LOCALAPPDATA%` 或用户系统盘。
 - 不把预先创建的 venv 打入安装包。它包含不可移植的绝对路径，必须在最终安装位置用 `bootstrap_runtime.py` 离线创建。生成环境的 marker 分别记录 Python/requirements 与轻量 adapter wheel；仅 adapter 变化时原位重装 adapter，不重建完整依赖环境。
-- `data/` 永远不进入更新清单；修复运行时只重建 `data/runtime-environment/`。
+- `data/` 永远不进入安装文件库存；修复运行时只重建 `data/runtime-environment/`。
 - 已安装包不可原地编辑。“在工作室打开”会复制到 `data/projects/`。
 - 用户移动整个安装目录后，应从新位置启动并执行运行环境验证；不要只移动 `runtime/`。
 
@@ -169,27 +168,13 @@ Studio Python 补全复用同一个项目 Kernel：Monaco 调用 `complete_studi
 
 用户数据使用独立的 `data/databases/workspace.sqlite3`。RPAZ 通过 `ctx.sql` 访问，数据工作台通过 `apps/desktop/src-tauri/src/database.rs` 访问；React 始终经过 `DesktopGateway`。实现和扩展约定见 [`DATA_WORKBENCH.md`](DATA_WORKBENCH.md)。
 
-## 7. Windows 更新
+## 7. Windows 全量升级
 
-`tools/windows/build_update_package.py` 从最终 stage 生成完整 `install-manifest.json` 和 `.drpa-update`。
+Windows 不再发布或接受 `.drpa-update`。每个正式版本重新构建 sealed runtime、JCode、Fixed Version WebView2、Host 和 NSIS Setup；用户退出旧版后把新版安装到原目录。NSIS 跳过 `data/`，所以包、项目、运行历史、知识文档和生成环境不会被安装器覆盖。
 
-安装库存记录每个受管文件的路径、大小、构建指纹与组件；构建指纹只用于 CI 比较版本差异，不在客户端更新时重复计算或校验。传入 `--base-manifest` 时只打包新增/变化文件，并生成旧文件删除列表。
+`tools/windows/build_update_package.py --catalog-only` 目前只用于生成 `install-manifest.json` 安装审计库存。完整 stage 禁止符号链接、Windows Junction 和其他 reparse point；库存生成前会逐目录检查并失败，保证 `runtime/`、`webview2/` 和应用文件全部来自当前安装 stage。
 
-`0.3.0` 起使用更新 schema 2 / Host protocol 2 / Worker protocol 2。delta 包必须声明 `packageKind=delta`、`minimumHostVersion` 和精确 `baseVersion`；任一兼容条件不满足时 Host 保持运行并提示使用全量 Setup，不创建退出请求。
-
-默认策略：
-
-1. `data/` 和 Fixed Version WebView2 始终受保护；更新器从会话副本运行，因此安装目录中的更新器属于可更新受管文件。
-2. 没有基线清单时，sealed runtime 与 Chrome 不进入日常更新包；有基线时也只有摘要变化的文件才会进入差量包。
-3. 更新包内嵌当前版本的独立 Worker，因此 Worker 自身可以随包升级，而不覆盖正在使用的安装副本。
-4. Host 在应用保持打开时检查 schema、Host/Worker protocol、最低 Host 版本、平台、精确基线、安全路径、文件数量和写入大小，停止 Studio Kernel，并在 `data/updates/sessions/<id>/` 创建可审计会话。
-5. 包内 Worker 优先脱离父进程 Job，先复核暂存文件并写入 `worker-ready`；Host 只有同时读到 `waitingForRestart` 和就绪标记才创建 `restart-requested` 并退出。
-6. Worker 确认主程序文件锁已释放后才替换所有受管文件，从安装目录启动新主程序，并通过 `DRPA_UPDATE_SESSION_ID` 要求新 Host 在主窗口构建成功后写入 `startup-ack`。
-7. 只有收到启动确认才删除备份；新进程早退、30 秒未确认或任一替换失败时，Worker 会结束新进程、按逆序恢复全部文件、持久化失败状态并从安装目录重新启动旧版本。
-
-CI 默认执行 `update` 发布：stage 主程序、更新器、`bootstrap_runtime.py` 和当前 `drpa-runtime-python` wheel，使用 `--partial` 合并上一 Release 的完整库存，不删除 stage 未包含的 CPython、Chrome、WebView2 或文档。adapter 更新在下次运行时定位时增量安装，通常不超过数秒。手工 `workflow_dispatch(release_kind=full)` 或提交信息以 `release(windows):` 开头时，才构建完整 sealed runtime、WebView2、NSIS Setup 和示例资产；Windows 稳定发布提交会跳过独立 Linux 打包与重复 sealed-runtime 预发布。
-
-完整安装 stage 禁止符号链接、Windows Junction 和其他 reparse point。`build_update_package.py` 在生成库存前会逐目录检查并直接失败，保证 `runtime/`、`webview2/` 和应用文件全部来自当前安装 stage，而不是外部目录。
+普通开发提交不发布 Windows 资产。只有手工运行 `.github/workflows/desktop-release.yml`，或提交信息以 `release(windows):` 开头时，才构建并发布 Setup、库存与示例 RPAZ 三个文件。
 
 ## 8. AI Agent
 
@@ -199,7 +184,7 @@ Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker �
 
 “知识文档”使用安装数据目录 `knowledge/` 作为 Markdown 工作区。Rust Host 提供列表、UTF-8 读写、内联创建、重命名、递归删除、导入和导出命令，并对相对路径、扩展名、符号链接和 8 MiB 单文档上限做校验；写入使用同目录临时文件和替换。`apps/desktop/src-tauri/knowledge_seed/` 通过 `include_str!` 编译进 Host，首次初始化为 `RPAZ 开发指南/`，marker 存在后不覆盖用户修改。前端 `DocsPage.tsx` 提供树、搜索、自动保存、预览/编辑/分栏、GFM 渲染、相对文档跳转和拖拽导入。
 
-当前仍从本地介质导入更新；在线 feed 与清单签名属于后续路线，见 [`ROADMAP.md`](ROADMAP.md)。
+当前 Windows 升级统一使用从 Release 下载的全量 Setup。
 
 ## 9. 开发与验证
 
@@ -251,13 +236,13 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 - 在最终安装布局创建环境并导入所有关键依赖。
 - 真实 Jupyter/ZMQ 两单元执行。
 - NSIS 编译与注册表指令守卫。
-- `.drpa-update` 构建、内容保护和发布资产数量。
+- 全量 Setup、安装库存和示例 RPAZ 的三资产门禁。
 
 ## 10. CI 与发布
 
 - `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查；Ubuntu 目前只做到 Host 编译，没有 GUI/runtime 最终包验收。
 - `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
-- `.github/workflows/desktop-release.yml`：普通 push 默认发布两个轻量 update 资产；手工选择 `full` 或使用 `release(windows):` 提交前缀时组合 runtime、WebView2、Host、更新器、示例和安装器。
+- `.github/workflows/desktop-release.yml`：仅在手工运行或 `release(windows):` 提交时组合 runtime、WebView2、Host、JCode、示例和 NSIS 全量安装器。
 - `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `1.0.0-2` 与 UOS deb `1.0.0-2+uos20.3`，验证 sealed runtime、私有 WebKitGTK/Mesa llvmpipe 闭包、XIM 输入桥，以及 Debian 10 与 Deepin 20.8/glibc 2.28 的真实输入点击/键入/后续交互、React/IPC、非白屏 UI、卸载和发布资产；可见文字组件由有系统字体的 Debian 10 门禁负责。
 
 发布前检查：
@@ -265,9 +250,9 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 1. 更新 `CHANGELOG.md`。
 2. 修改版本时同步 root/npm/Tauri/NSIS/runtime package/runtime spec/示例包/desktop workflow/offline workflow 中的版本来源，避免只改文件名。
 3. 确认 `offline/requirements/runtime.txt` 已通过精确依赖政策检查。
-4. 日常发布观察轻量 update 构建、基线库存合并与两个资产集合检查通过；完整发布还需观察 runtime bootstrap、Jupyter smoke、NSIS guard。
-5. update Release 只包含 `.drpa-update` 与 `install-manifest.json`；full 基线 Release 只包含 Setup、`install-manifest.json` 与示例 RPAZ，不附带无法跨协议使用的轻量包。
-6. 在独立 Windows 测试机安装到非系统盘，执行环境验证、Bing 示例、Notebook 两单元和一次更新回滚演练。
+4. 观察 runtime bootstrap、Jupyter/Agent import smoke、WebView2 展开和 NSIS guard。
+5. Windows Release 只包含 Setup、`install-manifest.json` 与示例 RPAZ，禁止出现 `.drpa-update`。
+6. 在独立 Windows 测试机安装到非系统盘，执行环境验证、Bing 示例和 Notebook 两单元。
 7. 资产未签名时必须在发行说明中显式说明，不得因版本号进入稳定版就省略供应链状态。
 
 ## 11. 新功能设计规则

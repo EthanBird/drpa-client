@@ -2371,7 +2371,7 @@ fn get_platform_capabilities() -> PlatformCapabilities {
             os: "windows",
             display_name: "Windows x64",
             runtime_target: "windows-x86_64",
-            supports_windows_updates: true,
+            supports_windows_updates: false,
             file_manager_name: "资源管理器",
             data_directory_policy: "安装目录 data",
         }

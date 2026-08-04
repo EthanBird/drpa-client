@@ -869,7 +869,7 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "自动化计划" }));
 
     expect(await screen.findByRole("heading", { name: "自动化计划" })).toBeVisible();
-    expect(screen.getByText("月度发票归档")).toBeVisible();
+    expect(await screen.findByText("月度发票归档")).toBeVisible();
     expect(screen.getByText("每月 1 日 · 08:30")).toBeVisible();
     expect(screen.getByText("P2 Scheduler")).toBeVisible();
   });

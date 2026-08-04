@@ -1237,7 +1237,7 @@ const mockGateway: DesktopGateway = {
       os: "windows",
       displayName: "Windows x64",
       runtimeTarget: "windows-x86_64",
-      supportsWindowsUpdates: true,
+      supportsWindowsUpdates: false,
       fileManagerName: "资源管理器",
       dataDirectoryPolicy: "安装目录 data",
     };

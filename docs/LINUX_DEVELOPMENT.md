@@ -201,7 +201,7 @@ Linux Host 会在启动 Python worker 与 Studio Kernel 前调用 `CommandExt::p
 
 ### 5.5 更新能力
 
-当前 `apply_windows_update`、`drpa-updater`、更新清单 target 和重启确认协议均为 Windows 实现。Host 通过 `get_platform_capabilities` 返回 `supportsWindowsUpdates=false`，Linux 设置页不会渲染 Windows 更新入口。Linux 使用完整 AppImage 替换或通过包管理器安装新版 deb；不要复用 Windows `.drpa-update`。
+历史 `apply_windows_update` 与 `drpa-updater` 代码不再进入发行资产，所有平台的设置页均不显示增量更新入口。Linux 使用完整 AppImage 替换或通过包管理器安装新版 deb；Windows 使用完整 Setup。
 
 ## 6. 构建 Linux sealed runtime
 
@@ -370,7 +370,7 @@ cargo test -p drpa-desktop
 ./.venv/bin/python tools/release/check_version_consistency.py --expected 2.0.1
 ```
 
-`tools/windows/tests` 在 Linux CI 运行的是更新包的纯 Python 格式与策略测试，不代表 Windows Worker 已在 Linux 上变成可用能力。
+`tools/windows/tests` 在 Linux CI 主要运行安装库存、路径与 Windows WebView 配置的纯 Python策略测试，不代表 Linux 使用 Windows 安装器。
 
 ## 9. 推荐实施顺序
 
@@ -402,7 +402,7 @@ cargo test -p drpa-desktop
 - 验证中文、空格和非 ASCII 路径。
 - 验证任务取消后 Python/Jupyter/Chrome 进程树全部退出。
 - 验证断网首次初始化、Bing 本地流程、Notebook、知识库导入导出和 Agent 本地工具。
-- Linux Release 使用独立平台资产名和平台清单，不复用 Windows `.drpa-update`。
+- Linux Release 使用独立平台资产名和平台清单；Windows 与 Linux 均不发布 `.drpa-update`。
 
 ## 10. Linux 发布与回归验收标准
 

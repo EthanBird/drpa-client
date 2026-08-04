@@ -1,16 +1,7 @@
-name: Publish Windows offline desktop releases
+name: Publish Windows full offline desktop release
 
 on:
   workflow_dispatch:
-    inputs:
-      release_kind:
-        description: Release payload
-        type: choice
-        required: true
-        default: update
-        options:
-          - update
-          - full
   push:
     branches:
       - codex/drpa-next-platform
@@ -35,26 +26,20 @@ permissions:
   contents: write
 
 concurrency:
-  group: desktop-offline-release-${{ github.ref }}
+  group: desktop-full-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release(linux):')
-    name: Build ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows-x86_64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            bundle: host
-    runs-on: ${{ matrix.runner }}
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'release(windows):')
+    name: Build Windows x64 full installer
+    runs-on: windows-latest
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       DRPA_VERSION: 2.0.1
-      RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release(windows):') && 'full') || 'update' }}
+      WEBVIEW2_VERSION: 150.0.4078.65
+      WEBVIEW2_URL: https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c00b9782-0422-4114-be27-8eec079b394d/Microsoft.WebView2.FixedVersionRuntime.150.0.4078.65.x64.cab
+      WEBVIEW2_SHA256: ca01385bc232dea83242c35ed78e98403866a36b1a0952e97fa7fd870fc39ab4
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -66,80 +51,33 @@ jobs:
       - name: Install pinned offline bundle tooling
         run: python -m pip install "uv==0.11.28"
       - name: Build and air-gap test sealed runtime
-        if: env.RELEASE_KIND == 'full'
-        run: python tools/offline/build_runtime_bundle.py --platform "${{ matrix.platform }}" --work-dir "${{ runner.temp }}/drpa-offline"
+        run: python tools/offline/build_runtime_bundle.py --platform windows-x86_64 --work-dir "${{ runner.temp }}/drpa-offline"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-release-${{ matrix.target }}
+          key: desktop-full-release-x86_64-pc-windows-msvc
       - run: npm ci
       - name: Generate native icon formats
         run: npm exec --workspace @drpa/desktop -- tauri icon src-tauri/icons/icon.png
       - name: Build Windows GUI host
-        if: runner.os == 'Windows'
-        run: npm run tauri:build --workspace @drpa/desktop -- --ci --target "${{ matrix.target }}" --no-bundle
-      - name: Build headless Windows file updater
-        if: runner.os == 'Windows'
-        run: cargo build -p drpa-desktop --bin drpa-updater --release --target "${{ matrix.target }}"
-
-      - name: Assemble lightweight Windows update
-        if: runner.os == 'Windows' && env.RELEASE_KIND == 'update'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
+        working-directory: apps/desktop
         run: |
-          $assets = Join-Path $env:RUNNER_TEMP "desktop-assets"
-          $overlay = Join-Path $env:RUNNER_TEMP "DRPA-Next-update-overlay"
-          $previous = Join-Path $env:RUNNER_TEMP "previous-release"
-          New-Item -ItemType Directory -Force -Path $assets, $overlay, $previous | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/drpa-desktop.exe" "$overlay/DRPA Next.exe"
-          Copy-Item "target/${{ matrix.target }}/release/drpa-updater.exe" "$overlay/drpa-updater.exe"
-          python tools/windows/fetch_jcode.py --output-dir "$overlay/jcode"
-          if ($LASTEXITCODE -ne 0) { throw "Failed to stage the pinned JCode developer agent" }
-          python tools/offline/sync_runtime_adapter.py --runtime-root "$overlay/runtime"
-          if ($LASTEXITCODE -ne 0) { throw "Failed to assemble the lightweight runtime adapter" }
-
-          $latestTag = gh release list --repo $env:GITHUB_REPOSITORY --limit 100 --json tagName --jq '[.[] | select(.tagName | startswith("desktop-v"))][0].tagName'
-          if ($LASTEXITCODE -ne 0 -or -not $latestTag) { throw "A full desktop release catalog is required before publishing an update" }
-          $catalogAsset = gh release view $latestTag --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name | select(endswith("install-manifest.json"))' | Select-Object -First 1
-          if ($LASTEXITCODE -ne 0 -or -not $catalogAsset) { throw "Latest desktop release does not contain an install catalog: $latestTag" }
-          gh release download $latestTag --repo $env:GITHUB_REPOSITORY --pattern $catalogAsset --dir $previous
-          if ($LASTEXITCODE -ne 0) { throw "Failed to download the base install catalog" }
-          $baseManifest = Get-ChildItem $previous -File -Filter "*-install-manifest.json" | Select-Object -First 1
-          if (-not $baseManifest) { throw "Downloaded base install catalog is missing" }
-          $baseCatalog = Get-Content $baseManifest.FullName -Raw | ConvertFrom-Json
-          if ($baseCatalog.schema -ne 2 -or $baseCatalog.updateProtocol -ne 2) {
-            throw "Latest release is not a 0.3 update-protocol baseline; publish a full release first"
-          }
-
-          $update = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64.drpa-update"
-          python tools/windows/build_update_package.py --stage $overlay --output $update --version "$env:DRPA_VERSION-preview-$env:GITHUB_RUN_NUMBER" --base-manifest $baseManifest.FullName --worker "$overlay/drpa-updater.exe" --partial
-          if ($LASTEXITCODE -ne 0) { throw "Failed to build lightweight Windows update" }
-          $catalog = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-install-manifest.json"
-          Copy-Item "$overlay/install-manifest.json" $catalog
-
+          & ../../node_modules/.bin/tauri.cmd build --ci --target x86_64-pc-windows-msvc --no-bundle
       - name: Assemble registry-free Windows installer
-        if: runner.os == 'Windows' && env.RELEASE_KIND == 'full'
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WEBVIEW2_VERSION: 150.0.4078.65
-          WEBVIEW2_URL: https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c00b9782-0422-4114-be27-8eec079b394d/Microsoft.WebView2.FixedVersionRuntime.150.0.4078.65.x64.cab
-          WEBVIEW2_SHA256: ca01385bc232dea83242c35ed78e98403866a36b1a0952e97fa7fd870fc39ab4
         run: |
           $assets = Join-Path $env:RUNNER_TEMP "desktop-assets"
           $portable = Join-Path $env:RUNNER_TEMP "DRPA-Next-$env:DRPA_VERSION-windows-x86_64"
           $runtimeStage = Get-ChildItem "$env:RUNNER_TEMP/drpa-offline" -Directory -Filter "drpa-runtime-*-windows-x86_64" | Select-Object -First 1
           if (-not $runtimeStage) { throw "Sealed Windows runtime stage is missing" }
           New-Item -ItemType Directory -Force -Path $assets, "$portable/runtime", "$portable/webview2", "$portable/examples", "$portable/jcode" | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/drpa-desktop.exe" "$portable/DRPA Next.exe"
-          Copy-Item "target/${{ matrix.target }}/release/drpa-updater.exe" "$portable/drpa-updater.exe"
+          Copy-Item "target/x86_64-pc-windows-msvc/release/drpa-desktop.exe" "$portable/DRPA Next.exe"
           Get-ChildItem $runtimeStage.FullName -Force | Copy-Item -Destination "$portable/runtime" -Recurse -Force
           Copy-Item "examples/bing_daily_image.rpaz" "$portable/examples/"
           Copy-Item "docs/PORTABLE_RELEASE.md" "$portable/README.md"
@@ -161,18 +99,17 @@ jobs:
           Get-ChildItem $browser.Directory.FullName -Force | Copy-Item -Destination "$portable/webview2" -Recurse -Force
 
           $runtimeManifest = Get-Content "$portable/runtime/manifest.json" -Raw | ConvertFrom-Json
-          $runtimePython = Join-Path "$portable/runtime" ($runtimeManifest.pythonExecutable -replace '/', '\\')
+          $runtimePython = Join-Path "$portable/runtime" ($runtimeManifest.pythonExecutable.Replace('/', [IO.Path]::DirectorySeparatorChar))
           $smokeEnvironment = Join-Path $portable "data/runtime-environment/environment"
           & $runtimePython "$portable/runtime/bootstrap_runtime.py" --environment $smokeEnvironment
           if ($LASTEXITCODE -ne 0) { throw "Installed-layout runtime bootstrap failed" }
-          & "$smokeEnvironment/Scripts/python.exe" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat, docx, openpyxl, pptx, pypdf, reportlab; from drpa_runner import document_worker; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert document_worker.PROTOCOL_VERSION == 1; print('DRPA_WINDOWS_RUNTIME_OK')"
-          if ($LASTEXITCODE -ne 0) { throw "Installed-layout Python/Jupyter import smoke failed" }
+          & "$smokeEnvironment/Scripts/python.exe" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat, docx, openpyxl, pptx, pypdf, reportlab; from drpa_runner import agent_mcp, document_worker; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert document_worker.PROTOCOL_VERSION == 1; assert len(agent_mcp.TOOL_DEFINITIONS) >= 11; print('DRPA_WINDOWS_RUNTIME_OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Installed-layout Python/Jupyter/Agent import smoke failed" }
           Remove-Item (Join-Path $portable "data") -Recurse -Force
 
           python tools/windows/build_update_package.py --stage $portable --version "$env:DRPA_VERSION" --catalog-only
           if ($LASTEXITCODE -ne 0) { throw "Failed to build the full install catalog" }
-          $catalog = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-install-manifest.json"
-          Copy-Item "$portable/install-manifest.json" $catalog
+          Copy-Item "$portable/install-manifest.json" (Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-install-manifest.json")
 
           choco install nsis --version=3.12.0 --no-progress --yes
           $makensis = "C:/Program Files (x86)/NSIS/makensis.exe"
@@ -182,22 +119,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Failed to compile registry-free Windows installer" }
           $registryCalls = Select-String -Path "installer/windows/drpa-next.nsi" -Pattern "WriteReg|DeleteReg|ReadReg|InstallDirRegKey" -CaseSensitive:$false
           if ($registryCalls) { throw "Installer contains a forbidden registry instruction" }
-
-      - name: Upload offline desktop package
+      - name: Upload full Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: drpa-desktop-${{ matrix.platform }}
+          name: drpa-next-${{ env.DRPA_VERSION }}-windows-x86_64-full
           path: ${{ runner.temp }}/desktop-assets/*
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
 
   publish:
-    name: Publish GitHub release
+    name: Publish Windows v2.0.1 full release
     needs: build
     runs-on: ubuntu-latest
     env:
-      RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release(windows):') && 'full') || 'update' }}
       DRPA_VERSION: 2.0.1
     steps:
       - uses: actions/checkout@v4
@@ -208,43 +143,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=2
-          if [[ "$RELEASE_KIND" == "full" ]]; then
-            mkdir -p artifacts/example
-            cp examples/bing_daily_image.rpaz "artifacts/example/drpa-example-bing-daily-image-${DRPA_VERSION}.rpaz"
-            expected=3
-          fi
+          mkdir -p artifacts/example
+          cp examples/bing_daily_image.rpaz "artifacts/example/drpa-example-bing-daily-image-${DRPA_VERSION}.rpaz"
           mapfile -t assets < <(find artifacts -type f | sort)
-          test "${#assets[@]}" -eq "$expected"
-      - name: Publish immutable desktop assets
+          test "${#assets[@]}" -eq 3
+          test "$(find artifacts -type f -name '*.drpa-update' | wc -l)" -eq 0
+      - name: Publish full Windows release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           mapfile -t assets < <(find artifacts -type f | sort)
-          if [[ "$RELEASE_KIND" == "full" ]]; then
-            tag="desktop-v${DRPA_VERSION}"
-            title="DRPA Next ${DRPA_VERSION} Windows x64 全量离线安装包"
-            notes="$(printf 'DRPA Next %s Windows x64 稳定版全量离线安装包。\n\n本版本为 RPAZ Agent 与 JCode 内置持久化 Chrome Bridge、RPAZ 包运行和运行日志工具；设置新增 75%%–200%% 字号滑动调节与中英文切换；流程设计简化 Provider 并自动复用 AI Agent 连接。安装包包含免注册表 Setup、封装的 Python 3.11/Jupyter/Chrome 运行时、Fixed Version WebView2、schema-2 安装库存和 Bing 每日一图 RPAZ 示例。' "$DRPA_VERSION")"
-          else
-            tag="desktop-v${DRPA_VERSION}-preview-${GITHUB_RUN_NUMBER}"
-            title="DRPA Next ${DRPA_VERSION} 轻量更新 · ${GITHUB_RUN_NUMBER}"
-            notes="$(printf 'DRPA Next %s Windows x64 轻量更新包。\n\n本次更新为 RPAZ Agent 与 JCode 内置持久化 Chrome Bridge，并增加通过 DRPA Host 运行 RPAZ 包、查看运行记录和完整 debug 日志的工具；设置新增 75%%–200%% 字号滑动条和中英文切换；流程设计 Provider 简化为 URL、Model、Key，并自动复用 AI Agent 配置。更新包只包含变化的应用、JCode sidecar、运行时适配器和合并后的安装库存，复用 2.0.0 基线中的 Python、Chrome、Fixed Version WebView2 与用户数据。' "$DRPA_VERSION")"
-          fi
+          tag="desktop-v${DRPA_VERSION}"
+          title="DRPA Next ${DRPA_VERSION} Windows x64 full offline installer"
+          notes="$(printf 'DRPA Next %s Windows x64 full offline installer.\n\nIncludes the RPAZ Agent/JCode Chrome bridge, RPAZ execution and debug-log tools, a 75%%-200%% font scale, Chinese/English UI, and automatic reuse of the AI Agent provider in the workflow designer. WebView2 now uses a lower-memory policy and feature pages are loaded on demand.\n\nRelease assets contain the full Setup installer, install inventory, and Bing example RPAZ only. Incremental update packages are not produced.' "$DRPA_VERSION")"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-            if [[ "$RELEASE_KIND" == "full" ]]; then
-              # Same-version full rebuilds replace assets and advance the stable tag only after a successful build.
-              gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" -f sha="$GITHUB_SHA" -F force=true >/dev/null
-              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes "$notes" --latest
-            else
-              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes" --prerelease
-            fi
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes "$notes" --latest
           else
-            if [[ "$RELEASE_KIND" == "full" ]]; then
-              gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title "$title" --notes "$notes"
-            else
-              gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "$title" --notes "$notes"
-            fi
+            gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title "$title" --notes "$notes"
           fi
