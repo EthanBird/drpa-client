@@ -53,7 +53,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 2.0.0
+      DRPA_VERSION: 2.0.1
       RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release(windows):') && 'full') || 'update' }}
     steps:
       - uses: actions/checkout@v4
@@ -198,7 +198,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_KIND: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_kind) || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release(windows):') && 'full') || 'update' }}
-      DRPA_VERSION: 2.0.0
+      DRPA_VERSION: 2.0.1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -226,11 +226,11 @@ jobs:
           if [[ "$RELEASE_KIND" == "full" ]]; then
             tag="desktop-v${DRPA_VERSION}"
             title="DRPA Next ${DRPA_VERSION} Windows x64 全量离线安装包"
-            notes="$(printf 'DRPA Next %s Windows x64 稳定版全量离线安装包。\n\n本版本新增 Local Dify 与可视化 Workflow/Chatflow 设计器、Skills 2.0 可执行能力包、离线插件服务、数据工作台与 AI SQL、持久化运行详情，以及 Python/Notebook 补全与检查。安装包包含免注册表 Setup、封装的 Python 3.11/Jupyter/Chrome 运行时、Fixed Version WebView2、schema-2 安装库存和 Bing 每日一图 RPAZ 示例。此 Release 仅发布 Windows x64 资产；后续日常版本继续使用轻量更新包。' "$DRPA_VERSION")"
+            notes="$(printf 'DRPA Next %s Windows x64 稳定版全量离线安装包。\n\n本版本为 RPAZ Agent 与 JCode 内置持久化 Chrome Bridge、RPAZ 包运行和运行日志工具；设置新增 75%%–200%% 字号滑动调节与中英文切换；流程设计简化 Provider 并自动复用 AI Agent 连接。安装包包含免注册表 Setup、封装的 Python 3.11/Jupyter/Chrome 运行时、Fixed Version WebView2、schema-2 安装库存和 Bing 每日一图 RPAZ 示例。' "$DRPA_VERSION")"
           else
             tag="desktop-v${DRPA_VERSION}-preview-${GITHUB_RUN_NUMBER}"
             title="DRPA Next ${DRPA_VERSION} 轻量更新 · ${GITHUB_RUN_NUMBER}"
-            notes="$(printf 'DRPA Next %s Windows x64 轻量更新包。\n\n本次更新让 DrissionPage 浏览器在任务成功、失败或脚本调用 page.quit() 后继续保留，并由开发工作室和后续 RPAZ 任务复用；AI Agent 新增可切换的内置 RPAZ 模式与完整工具权限的 JCode 开发者模式。更新包仅包含变化的应用、JCode sidecar、运行时适配器和合并后的安装库存，保留现有 Python、Chrome、Fixed Version WebView2 与用户数据。' "$DRPA_VERSION")"
+            notes="$(printf 'DRPA Next %s Windows x64 轻量更新包。\n\n本次更新为 RPAZ Agent 与 JCode 内置持久化 Chrome Bridge，并增加通过 DRPA Host 运行 RPAZ 包、查看运行记录和完整 debug 日志的工具；设置新增 75%%–200%% 字号滑动条和中英文切换；流程设计 Provider 简化为 URL、Model、Key，并自动复用 AI Agent 配置。更新包只包含变化的应用、JCode sidecar、运行时适配器和合并后的安装库存，复用 2.0.0 基线中的 Python、Chrome、Fixed Version WebView2 与用户数据。' "$DRPA_VERSION")"
           fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber

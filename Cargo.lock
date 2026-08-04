@@ -925,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-desktop"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "calamine",
  "chrono",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-host"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "chrono",
  "drpa-package",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-package"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-protocol"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "serde",
  "serde_json",

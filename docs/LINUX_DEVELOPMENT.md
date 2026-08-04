@@ -367,7 +367,7 @@ cargo test -p drpa-desktop
 ./.venv/bin/python -m unittest discover -s tools/linux/tests -v
 ./.venv/bin/python -m compileall -q tools/offline tools/linux offline/bootstrap runtime/python/src
 ./.venv/bin/python tools/offline/validate_requirements.py offline/requirements/runtime.txt
-./.venv/bin/python tools/release/check_version_consistency.py --expected 2.0.0
+./.venv/bin/python tools/release/check_version_consistency.py --expected 2.0.1
 ```
 
 `tools/windows/tests` 在 Linux CI 运行的是更新包的纯 Python 格式与策略测试，不代表 Windows Worker 已在 Linux 上变成可用能力。

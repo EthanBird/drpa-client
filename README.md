@@ -2,7 +2,7 @@
 
 DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包运行管理器。用户无需配置系统 Python，即可安装、开发、运行和观察 `.rpaz` 自动化脚本包。
 
-当前版本为 `2.0.0`。本次正式发行仅提供 Windows x64 全量 Setup；Linux x86_64 继续使用 `1.0.0` AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
+当前版本为 `2.0.1`。Windows x64 以 `2.0.0` 全量 Setup 为安装基线，`2.0.1` 通过轻量 `.drpa-update` 交付；Linux x86_64 继续使用 `1.0.0` AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
 ## 当前能力
 
@@ -24,13 +24,13 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 
 Windows 2.0.0 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.0.0>
 
-> `2.0.0` 是当前推荐的 Windows 全量安装基线。既有安装可直接运行最新 Setup 完成大版本升级；完成一次全量安装后，后续版本使用轻量 `.drpa-update`，不会再次打包 WebView2、未变化的 Chrome/runtime 或用户数据。
+> `2.0.0` 是当前推荐的 Windows 全量安装基线。既有安装先运行该 Setup，再在设置中选择 `2.0.1` 轻量更新包；更新不会再次打包 WebView2、未变化的 Chrome/runtime 或用户数据。
 
 ## 平台状态
 
 | 平台 | 源码开发 | CI | 正式发行 |
 | --- | --- | --- | --- |
-| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `2.0.0` 全量安装包与后续轻量更新 |
+| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `2.0.0` 全量安装包 + `2.0.1` 轻量更新 |
 | Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 构建；Debian 10 与 Deepin 20.8/glibc 2.28 实装、React/IPC 和非白屏截图门禁 | `1.0.0` AppImage、现代 deb 与 UOS 20 专用 deb |
 | macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
 
