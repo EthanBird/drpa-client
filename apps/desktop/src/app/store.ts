@@ -3,7 +3,8 @@ import { persist } from "zustand/middleware";
 
 import type { AgentConversationMessage, AgentConversationSession, AgentMode, AgentProviderRef, AgentToolPolicy, NavigationId, WorkspaceSnapshot } from "../domain/models";
 
-export type FontScale = "small" | "standard" | "large" | "extraLarge";
+export type FontScale = number;
+export type UiLanguage = "zh-CN" | "en-US";
 export type UiDensity = "comfortable" | "compact";
 
 function createAgentSession(projectId = ""): AgentConversationSession {
@@ -36,6 +37,7 @@ interface AppStore {
   commandOpen: boolean;
   theme: "light" | "dark";
   fontScale: FontScale;
+  language: UiLanguage;
   uiDensity: UiDensity;
   hidePageHeaders: boolean;
   collapsedSidebars: Record<string, boolean>;
@@ -68,6 +70,7 @@ interface AppStore {
   setCommandOpen: (open: boolean) => void;
   setTheme: (theme: "light" | "dark") => void;
   setFontScale: (fontScale: FontScale) => void;
+  setLanguage: (language: UiLanguage) => void;
   setUiDensity: (density: UiDensity) => void;
   setHidePageHeaders: (hidden: boolean) => void;
   setSidebarCollapsed: (id: string, collapsed: boolean) => void;
@@ -109,7 +112,8 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   activeNavigation: "overview",
   commandOpen: false,
   theme: "light",
-  fontScale: "standard",
+  fontScale: 100,
+  language: "zh-CN",
   uiDensity: "compact",
   hidePageHeaders: false,
   collapsedSidebars: {},
@@ -154,7 +158,8 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setActiveNavigation: (activeNavigation) => set({ activeNavigation }),
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   setTheme: (theme) => set({ theme }),
-  setFontScale: (fontScale) => set({ fontScale }),
+  setFontScale: (fontScale) => set({ fontScale: Math.min(200, Math.max(75, Math.round(fontScale / 5) * 5)) }),
+  setLanguage: (language) => set({ language }),
   setUiDensity: (uiDensity) => set({ uiDensity }),
   setHidePageHeaders: (hidePageHeaders) => set({ hidePageHeaders }),
   setSidebarCollapsed: (id, collapsed) => set((state) => ({
@@ -297,7 +302,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   })),
 }), {
   name: "drpa-ui-preferences",
-  version: 6,
+  version: 7,
   migrate: (persistedState, version) => {
     const state = (persistedState ?? {}) as Partial<AppStore>;
     const migrated = { ...state };
@@ -360,11 +365,25 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     if (version < 6) {
       migrated.agentMode = state.agentMode === "developer" ? "developer" : "rpaz";
     }
+    if (version < 7) {
+      const legacyScale = (state as { fontScale?: unknown }).fontScale;
+      const legacyScales: Record<string, number> = {
+        small: 90,
+        standard: 100,
+        large: 110,
+        extraLarge: 120,
+      };
+      migrated.fontScale = typeof legacyScale === "number"
+        ? Math.min(200, Math.max(75, legacyScale))
+        : legacyScales[String(legacyScale ?? "standard")] ?? 100;
+      migrated.language = (state as { language?: unknown }).language === "en-US" ? "en-US" : "zh-CN";
+    }
     return migrated as never;
   },
   partialize: (state) => ({
     theme: state.theme,
     fontScale: state.fontScale,
+    language: state.language,
     uiDensity: state.uiDensity,
     hidePageHeaders: state.hidePageHeaders,
     collapsedSidebars: state.collapsedSidebars,

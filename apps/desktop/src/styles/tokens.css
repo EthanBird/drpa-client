@@ -35,14 +35,9 @@
   --radius-md: 10px;
   --radius-lg: 14px;
   --control-height: 36px;
-  --sidebar-width: 232px;
+  --sidebar-width: clamp(232px, calc(142px + 90px * var(--font-scale)), 330px);
   --titlebar-height: 42px;
 }
-
-:root[data-font-scale="small"] { --font-scale: .9; }
-:root[data-font-scale="standard"] { --font-scale: 1; }
-:root[data-font-scale="large"] { --font-scale: 1.1; }
-:root[data-font-scale="extraLarge"] { --font-scale: 1.2; }
 
 :root[data-theme="dark"] {
   color-scheme: dark;

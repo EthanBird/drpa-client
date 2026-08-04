@@ -770,8 +770,18 @@ pub(crate) fn save_local_dify_provider(
         supports_vision: input.supports_vision,
         timeout_seconds: input.timeout_seconds,
         custom_headers: input.custom_headers,
-        dify_provider: input.dify_provider.trim().to_owned(),
-        dify_model: input.dify_model.trim().to_owned(),
+        // Dify export mapping is an implementation detail. The desktop UI only
+        // asks for the direct OpenAI-compatible URL/model/key connection.
+        dify_provider: if input.dify_provider.trim().is_empty() {
+            "langgenius/openai/openai".to_owned()
+        } else {
+            input.dify_provider.trim().to_owned()
+        },
+        dify_model: if input.dify_model.trim().is_empty() {
+            input.model.trim().to_owned()
+        } else {
+            input.dify_model.trim().to_owned()
+        },
         has_api_key: secrets.provider_api_keys.contains_key(&id),
         updated_at: now_timestamp(),
     };

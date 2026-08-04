@@ -297,7 +297,7 @@ let mockAgentAgentsMarkdown = "# DRPA Agent 工作约定\n\n- 修改项目后运
 let mockAgentMemoryMarkdown = "# Agent Memory\n\n记录稳定事实与偏好。\n";
 let mockRemoteDatabaseProfiles: RemoteDatabaseProfile[] = [];
 let mockLocalDifyProviders: LocalDifyProvider[] = [{
-  id: "provider-browser-preview",
+  id: "provider-openai-compatible",
   name: "OpenAI 兼容 Provider",
   baseUrl: "http://127.0.0.1/v1",
   model: "deepseek-v4-flash",
@@ -321,7 +321,7 @@ let mockLocalDifyApps: LocalDifyApp[] = [{
   name: "本地 Dify 调试应用",
   description: "通过 OpenAI 兼容 Provider 调试提示词并导出 Dify DSL。",
   mode: "chat",
-  providerId: "provider-browser-preview",
+  providerId: "provider-openai-compatible",
   systemPrompt: "你是 DRPA Local Dify 中的开发助手。回答应准确、简洁，并说明关键步骤。",
   openingStatement: "你好，这是一个本地 Dify 调试应用。",
   inputKey: "query",

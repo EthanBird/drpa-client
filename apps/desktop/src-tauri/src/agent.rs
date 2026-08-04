@@ -22,8 +22,10 @@ use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
 use crate::{
-    agent_config, agent_documents, agent_extensions, database, knowledge, knowledge_base, plugins,
+    AppPaths, RunProcessManager, agent_config, agent_documents, agent_extensions, database,
+    dispatch_run_background, knowledge, knowledge_base, plugins,
 };
+use drpa_host::HostState;
 
 const DEFAULT_MAX_AGENT_ROUNDS: usize = 64;
 const MAX_CONFIGURABLE_AGENT_ROUNDS: usize = 256;
@@ -166,10 +168,115 @@ struct AgentContext {
     workspace_root: PathBuf,
     project_root: Option<PathBuf>,
     python: PathBuf,
+    browser: Option<PathBuf>,
+    host: Option<AgentHostContext>,
     session_id: String,
     python_timeout: Duration,
     selected_skill_ids: Vec<String>,
     tool_policy: AgentToolPolicy,
+}
+
+#[derive(Clone)]
+pub(crate) struct AgentHostContext {
+    state: HostState,
+    paths: AppPaths,
+    processes: RunProcessManager,
+}
+
+impl AgentHostContext {
+    pub(crate) fn new(state: HostState, paths: AppPaths, processes: RunProcessManager) -> Self {
+        Self {
+            state,
+            paths,
+            processes,
+        }
+    }
+
+    pub(crate) fn execute(&self, name: &str, arguments: &Value) -> Result<Value, String> {
+        match name {
+            "rpaz_list_packages" => {
+                let packages = self.state.snapshot().packages;
+                Ok(json!({"ok": true, "count": packages.len(), "packages": packages}))
+            }
+            "rpaz_run_package" => {
+                let package_id = argument_string(arguments, "packageId")?;
+                let snapshot = self.state.snapshot();
+                let package = snapshot
+                    .packages
+                    .iter()
+                    .find(|package| package.id == package_id)
+                    .ok_or_else(|| format!("RPAZ 包不存在：{package_id}"))?;
+                let requested_profile = argument_optional_string(arguments, "profileId").trim();
+                let profile_id = if requested_profile.is_empty() {
+                    package
+                        .profiles
+                        .first()
+                        .map(|profile| profile.id.as_str())
+                        .unwrap_or("default")
+                } else {
+                    requested_profile
+                };
+                let parameters = arguments
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                if !parameters.is_object() {
+                    return Err("parameters 必须是 JSON 对象".to_owned());
+                }
+                let run_id = dispatch_run_background(
+                    self.state.clone(),
+                    self.paths.clone(),
+                    self.processes.clone(),
+                    package_id,
+                    profile_id,
+                    parameters,
+                )?;
+                Ok(json!({
+                    "ok": true,
+                    "runId": run_id,
+                    "packageId": package_id,
+                    "profileId": profile_id,
+                    "message": "任务已通过 DRPA Host 启动，可用 run_get_detail 读取实时事件和调试日志"
+                }))
+            }
+            "run_list" => {
+                let limit = arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(50)
+                    .clamp(1, 500) as usize;
+                let package_id = argument_optional_string(arguments, "packageId").trim();
+                let status = argument_optional_string(arguments, "status").trim();
+                let runs = self
+                    .state
+                    .snapshot()
+                    .runs
+                    .into_iter()
+                    .filter(|run| package_id.is_empty() || run.package_id == package_id)
+                    .filter(|run| {
+                        status.is_empty()
+                            || serde_json::to_value(&run.status)
+                                .ok()
+                                .and_then(|value| value.as_str().map(str::to_owned))
+                                .is_some_and(|value| value == status)
+                    })
+                    .take(limit)
+                    .collect::<Vec<_>>();
+                Ok(json!({"ok": true, "count": runs.len(), "runs": runs}))
+            }
+            "run_get_detail" => {
+                let run_id = argument_string(arguments, "runId")?;
+                let detail = self
+                    .state
+                    .get_run_detail(run_id)
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(detail)
+                    .map(|detail| json!({"ok": true, "detail": detail}))
+                    .map_err(|error| format!("序列化运行详情失败：{error}"))
+            }
+            _ => Err(format!("未知 DRPA Host 工具：{name}")),
+        }
+    }
 }
 
 struct ToolResult {
@@ -249,6 +356,8 @@ pub(crate) fn run_agent_turn<F>(
     workspace_root: PathBuf,
     resource_dir: Option<PathBuf>,
     python: PathBuf,
+    browser: Option<PathBuf>,
+    host: AgentHostContext,
     mut emit: F,
 ) -> Result<AgentTurnResult, String>
 where
@@ -266,7 +375,15 @@ where
     }
     validate_request(&request)?;
     if request.mode == "developer" {
-        return crate::jcode::run_turn(&request, &workspace_root, resource_dir.as_deref(), emit);
+        return crate::jcode::run_turn(
+            &request,
+            &workspace_root,
+            resource_dir.as_deref(),
+            &python,
+            browser.as_deref(),
+            host,
+            emit,
+        );
     }
     let started = Instant::now();
     let provider = OpenAiCompatibleAdapter::new(&request.base_url, &request.api_key)?;
@@ -285,6 +402,8 @@ where
         workspace_root,
         project_root,
         python,
+        browser,
+        host: Some(host),
         session_id: request.session_id.clone(),
         python_timeout: Duration::from_secs(request.python_timeout_seconds),
         selected_skill_ids: request.selected_skill_ids.clone(),
@@ -855,7 +974,8 @@ fn system_prompt(has_project: bool, injected_context: &str) -> String {
          对话附件使用不透明 attachmentId，文档产物严格写入当前工作区的 Agent 产物目录。\
          项目探索优先使用 find_files/search_text，再用 read_file 分段读取所需行；\
          小范围修改优先使用只在项目内生效的 edit_file。你也可以按策略使用 knowledge、document 与扩展工具。\
-         不假装使用未提供的终端、浏览器或网络工具。\n\
+         浏览器任务使用 browser_* 工具，它连接 DRPA 内置 Chrome 并与 RPAZ ctx.browser() 复用同一持久会话；\
+         已安装 RPAZ 包必须用 rpaz_run_package 启动，并用 run_get_detail 查看实时事件与 debug 日志。\n\
          只有规范化 RPAZ 项目才调用 rpaz_validate；需要交付 RPAZ 归档时调用 rpaz_build。\n\
          回答使用简体中文，先给结论，再列出实际完成的文件与验证结果。\
          {injected_context}"
@@ -888,6 +1008,61 @@ fn agent_tool_definitions(
         return Ok(Vec::new());
     }
     let mut tools = vec![
+        tool_definition(
+            "browser_open",
+            "在 DRPA 内置 Chrome 中打开 URL。浏览器使用与 RPAZ ctx.browser() 相同的持久化端口和用户目录，任务结束后继续保留。",
+            json!({"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_snapshot",
+            "读取当前 Chrome 页面的标题、URL、可见文本和可交互元素引用。后续点击和输入使用返回的 ref。",
+            json!({"type":"object","properties":{"maxChars":{"type":"integer","minimum":1000,"maximum":100000}},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_click",
+            "点击 browser_snapshot 返回的元素引用。",
+            json!({"type":"object","properties":{"ref":{"type":"string"}},"required":["ref"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_type",
+            "向 browser_snapshot 返回的输入元素写入文本并触发 input/change 事件。",
+            json!({"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"submit":{"type":"boolean"}},"required":["ref","text"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_wait",
+            "等待页面加载或指定文本出现。",
+            json!({"type":"object","properties":{"seconds":{"type":"number","minimum":0,"maximum":120},"text":{"type":"string"}},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_screenshot",
+            "截取当前 Chrome 页面并保存到 Agent 会话产物目录。",
+            json!({"type":"object","properties":{"fullPage":{"type":"boolean"}},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_status",
+            "查看 DRPA Chrome Bridge 的调试端口、当前 URL 和标题。",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "rpaz_list_packages",
+            "列出已安装的 RPAZ 包、任务配置和参数定义。",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "rpaz_run_package",
+            "通过 DRPA Host 正式运行已安装的 RPAZ 包；运行会进入运行记录并产生实时事件。profileId 省略时使用包的第一个任务配置。",
+            json!({"type":"object","properties":{"packageId":{"type":"string"},"profileId":{"type":"string"},"parameters":{"type":"object"}},"required":["packageId"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "run_list",
+            "列出 DRPA 运行记录，可按 RPAZ 包或状态筛选。",
+            json!({"type":"object","properties":{"packageId":{"type":"string"},"status":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":500}},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "run_get_detail",
+            "读取一条运行记录的完整详情、进度、产物、结构化事件和 debug 日志。",
+            json!({"type":"object","properties":{"runId":{"type":"string"}},"required":["runId"],"additionalProperties":false}),
+        ),
         tool_definition(
             "agent_list_skills",
             "列出本地 Skills 库的名称和描述。Skill 正文按需读取，不要一次读取全部。",
@@ -1089,7 +1264,18 @@ fn ensure_tool_allowed(policy: &AgentToolPolicy, name: &str) -> Result<(), Strin
         | "agent_read_memory"
         | "knowledge_list_documents"
         | "knowledge_read_document"
-        | "rpaz_list_files" => true,
+        | "rpaz_list_files"
+        | "browser_open"
+        | "browser_snapshot"
+        | "browser_click"
+        | "browser_type"
+        | "browser_wait"
+        | "browser_screenshot"
+        | "browser_status"
+        | "rpaz_list_packages"
+        | "rpaz_run_package"
+        | "run_list"
+        | "run_get_detail" => true,
         "agent_write_skill" | "agent_write_memory" | "knowledge_write_document" => {
             policy.workspace_write
         }
@@ -1184,6 +1370,30 @@ fn execute_tool(
         });
     }
     match name {
+        "browser_open" | "browser_snapshot" | "browser_click" | "browser_type" | "browser_wait"
+        | "browser_screenshot" | "browser_status" => {
+            return execute_browser_tool(context, name, arguments);
+        }
+        "rpaz_list_packages" | "rpaz_run_package" | "run_list" | "run_get_detail" => {
+            let output = context
+                .host
+                .as_ref()
+                .ok_or_else(|| "DRPA Host 工具桥尚未初始化".to_owned())?
+                .execute(name, arguments)?;
+            let summary = match name {
+                "rpaz_list_packages" => "已读取已安装 RPAZ 包".to_owned(),
+                "rpaz_run_package" => format!(
+                    "已启动 RPAZ 任务 {}",
+                    output
+                        .get("runId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                ),
+                "run_list" => "已读取运行记录".to_owned(),
+                _ => "已读取完整运行详情和调试日志".to_owned(),
+            };
+            return Ok(ToolResult { output, summary });
+        }
         "agent_list_skills" => {
             let skills = agent_config::list_skills_for_agent(&context.workspace_root)?;
             let count = skills.len();
@@ -1538,6 +1748,68 @@ fn execute_tool(
         "rpaz_python" => run_python(context, project_root, argument_string(arguments, "code")?),
         _ => Err(format!("未知 RPAZ 工具：{name}")),
     }
+}
+
+fn execute_browser_tool(
+    context: &AgentContext,
+    name: &str,
+    arguments: &Value,
+) -> Result<ToolResult, String> {
+    if context.python.as_os_str().is_empty() {
+        return Err("DRPA Chrome Bridge 需要内置 Python 运行时".to_owned());
+    }
+    let mut command = Command::new(&context.python);
+    command
+        .args(["-m", "drpa_runner.agent_mcp", "--call", name])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
+        .env(
+            "DRPA_BROWSER_PROFILE_ROOT",
+            context.workspace_root.join("browser").join("drissionpage"),
+        )
+        .env("DRPA_BROWSER_PORT", "9222")
+        .env(
+            "DRPA_AGENT_ARTIFACT_ROOT",
+            context
+                .workspace_root
+                .join("agent")
+                .join("sessions")
+                .join(&context.session_id)
+                .join("browser"),
+        );
+    if let Some(browser) = &context.browser {
+        command.env("DRPA_BROWSER_PATH", browser);
+    }
+    configure_agent_python_process(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("启动 DRPA Chrome Bridge 失败：{error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        serde_json::to_writer(&mut stdin, arguments)
+            .map_err(|error| format!("写入 Chrome Bridge 参数失败：{error}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("等待 Chrome Bridge 失败：{error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Chrome Bridge 执行失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let value: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Chrome Bridge 返回无效 JSON：{error}"))?;
+    Ok(ToolResult {
+        summary: value
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or("Chrome Bridge 操作完成")
+            .to_owned(),
+        output: value,
+    })
 }
 
 fn argument_string<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -2582,6 +2854,8 @@ mod tests {
             workspace_root: PathBuf::from("unused"),
             project_root: None,
             python: PathBuf::from("python"),
+            browser: None,
+            host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: vec!["data-analysis".to_owned()],
@@ -2739,6 +3013,8 @@ mod tests {
             workspace_root: workspace.clone(),
             project_root: Some(project.clone()),
             python: PathBuf::from("python"),
+            browser: None,
+            host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: Vec::new(),
@@ -2828,6 +3104,9 @@ mod tests {
         assert!(!names.contains(&"data_query"));
         assert!(!names.contains(&"read_file"));
         assert!(!names.contains(&"rpaz_write_file"));
+        assert!(names.contains(&"browser_open"));
+        assert!(names.contains(&"rpaz_run_package"));
+        assert!(names.contains(&"run_get_detail"));
         assert!(ensure_tool_allowed(&policy, "data_query").is_err());
         assert!(ensure_tool_allowed(&policy, "rpaz_write_file").is_err());
         fs::remove_dir_all(workspace).unwrap();
@@ -2876,6 +3155,8 @@ mod tests {
             workspace_root: workspace.clone(),
             project_root: None,
             python: PathBuf::from("python"),
+            browser: None,
+            host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: Vec::new(),
@@ -2914,6 +3195,8 @@ mod tests {
             workspace_root: workspace.clone(),
             project_root: None,
             python: PathBuf::from("python"),
+            browser: None,
+            host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: Vec::new(),
@@ -2962,6 +3245,8 @@ mod tests {
             workspace_root: workspace.clone(),
             project_root: None,
             python: PathBuf::from("python"),
+            browser: None,
+            host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: Vec::new(),

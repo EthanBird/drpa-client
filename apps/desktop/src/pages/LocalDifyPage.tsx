@@ -44,6 +44,7 @@ import type {
 import { desktopGateway } from "../infra/gateway";
 import { LocalDifyWorkflowDesigner } from "../components/LocalDifyWorkflowDesigner";
 import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
+import { useAppStore } from "../app/store";
 
 type StudioTab = "workflow" | "debug" | "config" | "runs" | "api";
 
@@ -67,8 +68,8 @@ const emptyProvider: LocalDifyProviderInput = {
   supportsVision: false,
   timeoutSeconds: 120,
   customHeaders: {},
-  difyProvider: "langgenius/openai/openai",
-  difyModel: "deepseek-v4-flash",
+  difyProvider: "",
+  difyModel: "",
   apiKey: "",
 };
 
@@ -105,6 +106,13 @@ function formatTime(value: number): string {
 }
 
 export function LocalDifyPage() {
+  const agentBaseUrl = useAppStore((state) => state.agentBaseUrl);
+  const agentModel = useAppStore((state) => state.agentModel);
+  const agentApiKey = useAppStore((state) => state.agentApiKey);
+  const agentStreamEnabled = useAppStore((state) => state.agentStreamEnabled);
+  const agentContextWindow = useAppStore((state) => state.agentContextWindow);
+  const agentMaxOutputTokens = useAppStore((state) => state.agentMaxOutputTokens);
+  const agentTemperature = useAppStore((state) => state.agentTemperature);
   const catalogCollapsed = useSidebarCollapsed("ai-app-catalog");
   const debugInspectorCollapsed = useSidebarCollapsed("ai-app-debug-inspector");
   const [apps, setApps] = useState<LocalDifyApp[]>([]);
@@ -234,6 +242,37 @@ export function LocalDifyPage() {
     let streamed = "";
     let stop: (() => void) | undefined;
     try {
+      let runnableDraft = draft;
+      let runProvider = selectedProvider;
+      const hasAgentProvider = /^https?:\/\//i.test(agentBaseUrl.trim()) && Boolean(agentModel.trim());
+      const usesAgentSettings = !runProvider
+        || runProvider.id === "provider-openai-compatible"
+        || runProvider.id === "provider-agent-settings";
+      if (hasAgentProvider && usesAgentSettings) {
+        runProvider = await desktopGateway.saveLocalDifyProvider({
+          id: "provider-agent-settings",
+          name: "AI Agent 配置",
+          baseUrl: agentBaseUrl.trim(),
+          model: agentModel.trim(),
+          apiKey: agentApiKey,
+          contextWindow: agentContextWindow,
+          maxOutputTokens: agentMaxOutputTokens,
+          temperature: agentTemperature,
+          streaming: agentStreamEnabled,
+          supportsTools: true,
+          supportsJson: true,
+          supportsVision: false,
+          timeoutSeconds: 120,
+          customHeaders: {},
+          difyProvider: "",
+          difyModel: "",
+        });
+        if (draft.providerId !== runProvider.id) {
+          runnableDraft = await desktopGateway.saveLocalDifyApp({ ...draft, providerId: runProvider.id });
+          setDraft(runnableDraft);
+        }
+        setProviders(await desktopGateway.listLocalDifyProviders());
+      }
       stop = await desktopGateway.listenLocalDifyStream(requestId, (event) => {
         if (event.type === "delta") {
           streamed += event.content;
@@ -242,16 +281,16 @@ export function LocalDifyPage() {
       });
       const result = await desktopGateway.runLocalDifyApp({
         requestId,
-        appId: draft.id,
+        appId: runnableDraft.id,
         query: text,
-        inputs: { [draft.inputKey]: text },
+        inputs: { [runnableDraft.inputKey]: text },
         user: "local-developer",
-        stream: selectedProvider?.streaming ?? true,
+        stream: runProvider?.streaming ?? true,
         conversationId: "",
       });
       setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: result.answer } : message));
       setNotice(`运行完成 · ${result.durationMs}ms · ${result.usage.totalTokens} tokens`);
-      setRuns(await desktopGateway.listLocalDifyRuns(draft.id, 100));
+      setRuns(await desktopGateway.listLocalDifyRuns(runnableDraft.id, 100));
     } catch (error) {
       setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: `**运行失败**\n\n${String(error)}` } : message));
       setNotice(String(error));
@@ -503,8 +542,8 @@ export function LocalDifyPage() {
 
       {deleteOpen && draft && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-label="确认删除流程"><header><div><Trash2 size={18} /><h2>删除流程</h2></div></header><p>将删除“{draft.name}”的配置和本地 API Token；历史运行记录继续保留用于诊断。</p><footer><button className="button ghost" type="button" onClick={() => setDeleteOpen(false)}>取消</button><button className="button danger" type="button" onClick={() => void removeApp()} disabled={busy}>确认删除</button></footer></section></div>}
 
-      {providersOpen && <div className="modal-backdrop dify-provider-backdrop" role="presentation"><section className="dify-provider-dialog" role="dialog" aria-modal="true" aria-label="Local Dify Providers"><aside><header><Network size={15} /><strong>Providers</strong><button type="button" aria-label="新建 Provider" onClick={() => setProviderDraft({ ...emptyProvider })}><Plus size={14} /></button></header>{providers.map((provider) => <button key={provider.id} className={providerDraft.id === provider.id ? "active" : ""} type="button" onClick={() => setProviderDraft(providerInput(provider))}><span className="service-dot running" /><span><strong>{provider.name}</strong><small>{provider.model}</small></span><ChevronRight size={12} /></button>)}</aside><main><header><div><h2>{providerDraft.id ? "编辑 Provider" : "新建 Provider"}</h2><p>OpenAI Chat Completions 兼容连接与 Dify 云端映射。</p></div><button type="button" aria-label="关闭 Providers" onClick={() => setProvidersOpen(false)}><X size={16} /></button></header><div className="dify-provider-form">
-        <label><span>名称</span><input aria-label="Provider 名称" value={providerDraft.name} onChange={(event) => setProviderDraft({ ...providerDraft, name: event.target.value })} /></label><label><span>Model</span><input aria-label="Provider 模型" value={providerDraft.model} onChange={(event) => setProviderDraft({ ...providerDraft, model: event.target.value })} /></label><label className="wide"><span>OpenAI 兼容 URL</span><input aria-label="Provider URL" value={providerDraft.baseUrl} onChange={(event) => setProviderDraft({ ...providerDraft, baseUrl: event.target.value })} /></label><label className="wide"><span>API Key {providerDraft.id && providers.find((item) => item.id === providerDraft.id)?.hasApiKey ? "（已保存，留空则保持）" : "（可选）"}</span><input aria-label="Provider API Key" type="password" autoComplete="off" value={providerDraft.apiKey} onChange={(event) => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} /></label><label><span>上下文窗口</span><input type="number" value={providerDraft.contextWindow} onChange={(event) => setProviderDraft({ ...providerDraft, contextWindow: event.currentTarget.valueAsNumber })} /></label><label><span>最大输出</span><input type="number" value={providerDraft.maxOutputTokens} onChange={(event) => setProviderDraft({ ...providerDraft, maxOutputTokens: event.currentTarget.valueAsNumber })} /></label><label><span>超时（秒）</span><input type="number" value={providerDraft.timeoutSeconds} onChange={(event) => setProviderDraft({ ...providerDraft, timeoutSeconds: event.currentTarget.valueAsNumber })} /></label><label className="switch-field"><span>流式输出</span><button className={`switch ${providerDraft.streaming ? "on" : ""}`} type="button" role="switch" aria-checked={providerDraft.streaming} onClick={() => setProviderDraft({ ...providerDraft, streaming: !providerDraft.streaming })}><span /></button></label><label><span>Dify 云端 Provider</span><input value={providerDraft.difyProvider} onChange={(event) => setProviderDraft({ ...providerDraft, difyProvider: event.target.value })} /></label><label><span>Dify 云端 Model</span><input value={providerDraft.difyModel} onChange={(event) => setProviderDraft({ ...providerDraft, difyModel: event.target.value })} /></label>
+      {providersOpen && <div className="modal-backdrop dify-provider-backdrop" role="presentation"><section className="dify-provider-dialog" role="dialog" aria-modal="true" aria-label="Local Dify Providers"><aside><header><Network size={15} /><strong>Providers</strong><button type="button" aria-label="新建 Provider" onClick={() => setProviderDraft({ ...emptyProvider })}><Plus size={14} /></button></header>{providers.map((provider) => <button key={provider.id} className={providerDraft.id === provider.id ? "active" : ""} type="button" onClick={() => setProviderDraft(providerInput(provider))}><span className="service-dot running" /><span><strong>{provider.name}</strong><small>{provider.model}</small></span><ChevronRight size={12} /></button>)}</aside><main><header><div><h2>{providerDraft.id ? "编辑 Provider" : "新建 Provider"}</h2><p>直接配置 OpenAI Chat Completions 兼容 URL、Model 和 Key；默认流程会自动复用 AI Agent 配置。</p></div><button type="button" aria-label="关闭 Providers" onClick={() => setProvidersOpen(false)}><X size={16} /></button></header><div className="dify-provider-form">
+        <label><span>名称</span><input aria-label="Provider 名称" value={providerDraft.name} onChange={(event) => setProviderDraft({ ...providerDraft, name: event.target.value })} /></label><label><span>Model</span><input aria-label="Provider 模型" value={providerDraft.model} onChange={(event) => setProviderDraft({ ...providerDraft, model: event.target.value })} /></label><label className="wide"><span>OpenAI 兼容 URL</span><input aria-label="Provider URL" value={providerDraft.baseUrl} onChange={(event) => setProviderDraft({ ...providerDraft, baseUrl: event.target.value })} /></label><label className="wide"><span>API Key {providerDraft.id && providers.find((item) => item.id === providerDraft.id)?.hasApiKey ? "（已保存，留空则保持）" : "（可选）"}</span><input aria-label="Provider API Key" type="password" autoComplete="off" value={providerDraft.apiKey} onChange={(event) => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} /></label><label><span>上下文窗口</span><input type="number" value={providerDraft.contextWindow} onChange={(event) => setProviderDraft({ ...providerDraft, contextWindow: event.currentTarget.valueAsNumber })} /></label><label><span>最大输出</span><input type="number" value={providerDraft.maxOutputTokens} onChange={(event) => setProviderDraft({ ...providerDraft, maxOutputTokens: event.currentTarget.valueAsNumber })} /></label><label><span>超时（秒）</span><input type="number" value={providerDraft.timeoutSeconds} onChange={(event) => setProviderDraft({ ...providerDraft, timeoutSeconds: event.currentTarget.valueAsNumber })} /></label><label className="switch-field"><span>流式输出</span><button className={`switch ${providerDraft.streaming ? "on" : ""}`} type="button" role="switch" aria-checked={providerDraft.streaming} onClick={() => setProviderDraft({ ...providerDraft, streaming: !providerDraft.streaming })}><span /></button></label>
         </div><footer><span>{providerNotice}</span>{providerDraft.id && <button className="button danger-ghost" type="button" aria-label="删除 Provider" onClick={() => void removeProvider()}><Trash2 size={13} /></button>}<button className="button secondary" type="button" onClick={() => void testProvider()} disabled={!providerDraft.id || busy}><Play size={13} /> 测试</button><button className="button primary" type="button" onClick={() => void saveProvider()} disabled={busy}><Save size={13} /> 保存 Provider</button></footer></main></section></div>}
     </div>
   );

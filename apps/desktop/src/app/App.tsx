@@ -48,6 +48,7 @@ export function App() {
   const commandOpen = useAppStore((state) => state.commandOpen);
   const theme = useAppStore((state) => state.theme);
   const fontScale = useAppStore((state) => state.fontScale);
+  const language = useAppStore((state) => state.language);
   const uiDensity = useAppStore((state) => state.uiDensity);
   const hidePageHeaders = useAppStore((state) => state.hidePageHeaders);
   const dragActive = useAppStore((state) => state.dragActive);
@@ -86,8 +87,13 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    document.documentElement.dataset.fontScale = fontScale;
+    document.documentElement.dataset.fontScale = String(fontScale);
+    document.documentElement.style.setProperty("--font-scale", String(fontScale / 100));
   }, [fontScale]);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
 
   useEffect(() => {
     document.documentElement.dataset.uiDensity = uiDensity;

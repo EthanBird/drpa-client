@@ -1,19 +1,23 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent::{
-    AgentMessage, AgentStreamEvent, AgentToolEvent, AgentTurnRequest, AgentTurnResult, AgentUsage,
-    validate_project_id,
+    AgentHostContext, AgentMessage, AgentStreamEvent, AgentToolEvent, AgentTurnRequest,
+    AgentTurnResult, AgentUsage, validate_project_id,
 };
 
 const JCODE_PROFILE: &str = "drpa-openai-compatible";
@@ -44,10 +48,115 @@ struct StreamState {
     last_error: String,
 }
 
+struct HostBridgeServer {
+    endpoint: String,
+    token: String,
+    stop: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl HostBridgeServer {
+    fn start(host: AgentHostContext) -> Result<Self, String> {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .map_err(|error| format!("启动 Agent Host Bridge 失败：{error}"))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("配置 Agent Host Bridge 失败：{error}"))?;
+        let endpoint = listener
+            .local_addr()
+            .map_err(|error| format!("读取 Agent Host Bridge 地址失败：{error}"))?
+            .to_string();
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let expected_token = token.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::Builder::new()
+            .name("drpa-agent-host-bridge".to_owned())
+            .spawn(move || {
+                while !worker_stop.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            handle_host_bridge_connection(stream, &expected_token, &host)
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(20));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+            .map_err(|error| format!("启动 Agent Host Bridge 线程失败：{error}"))?;
+        Ok(Self {
+            endpoint,
+            token,
+            stop,
+            worker: Some(worker),
+        })
+    }
+
+    fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    fn token(&self) -> &str {
+        &self.token
+    }
+}
+
+impl Drop for HostBridgeServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(&self.endpoint);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn handle_host_bridge_connection(
+    mut stream: TcpStream,
+    expected_token: &str,
+    host: &AgentHostContext,
+) {
+    let response = (|| -> Result<Value, String> {
+        let mut source = String::new();
+        BufReader::new(
+            stream
+                .try_clone()
+                .map_err(|error| format!("读取 Bridge 请求失败：{error}"))?,
+        )
+        .read_line(&mut source)
+        .map_err(|error| format!("读取 Bridge 请求失败：{error}"))?;
+        let request: Value = serde_json::from_str(&source)
+            .map_err(|error| format!("Bridge 请求 JSON 无效：{error}"))?;
+        if request.get("token").and_then(Value::as_str) != Some(expected_token) {
+            return Err("Bridge token 无效".to_owned());
+        }
+        let name = request
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Bridge 请求缺少 name".to_owned())?;
+        let arguments = request.get("arguments").unwrap_or(&Value::Null);
+        host.execute(name, arguments)
+    })();
+    let payload = match response {
+        Ok(result) => serde_json::json!({"ok": true, "result": result}),
+        Err(error) => serde_json::json!({"ok": false, "error": error}),
+    };
+    if let Ok(mut bytes) = serde_json::to_vec(&payload) {
+        bytes.push(b'\n');
+        let _ = stream.write_all(&bytes);
+        let _ = stream.flush();
+    }
+}
+
 pub(crate) fn run_turn<F>(
     request: &AgentTurnRequest,
     workspace_root: &Path,
     resource_dir: Option<&Path>,
+    python: &Path,
+    browser: Option<&Path>,
+    host: AgentHostContext,
     mut emit: F,
 ) -> Result<AgentTurnResult, String>
 where
@@ -62,6 +171,15 @@ where
     let jcode_home = developer_root.join("home");
     fs::create_dir_all(&jcode_home).map_err(|error| format!("创建 JCode 工作目录失败：{error}"))?;
     write_provider_config(&jcode_home, request)?;
+    let host_bridge = HostBridgeServer::start(host)?;
+    write_mcp_config(
+        &jcode_home,
+        workspace_root,
+        python,
+        browser,
+        host_bridge.endpoint(),
+        host_bridge.token(),
+    )?;
 
     let working_dir = resolve_working_dir(workspace_root, &request.project_id)?;
     let index_path = developer_root.join("session-index.json");
@@ -100,7 +218,9 @@ where
         .arg("--tool-profile")
         .arg("full")
         .arg("--tools")
-        .arg("all");
+        .arg("all")
+        .arg("--disabled-tools")
+        .arg("browser");
     if let Some(session_id) = resume_session.as_deref() {
         command.arg("--resume").arg(session_id);
     }
@@ -447,6 +567,89 @@ fn write_provider_config(home: &Path, request: &AgentTurnRequest) -> Result<(), 
         .map_err(|error| format!("写入 JCode Provider 配置失败：{error}"))
 }
 
+fn write_mcp_config(
+    home: &Path,
+    workspace_root: &Path,
+    python: &Path,
+    browser: Option<&Path>,
+    bridge_endpoint: &str,
+    bridge_token: &str,
+) -> Result<(), String> {
+    if python.as_os_str().is_empty() {
+        return Err("JCode 的 DRPA 工具桥需要内置 Python 运行时".to_owned());
+    }
+    let mut environment = serde_json::Map::from_iter([
+        (
+            "PYTHONIOENCODING".to_owned(),
+            Value::String("utf-8".to_owned()),
+        ),
+        ("PYTHONUTF8".to_owned(), Value::String("1".to_owned())),
+        (
+            "DRPA_BROWSER_PROFILE_ROOT".to_owned(),
+            Value::String(
+                workspace_root
+                    .join("browser")
+                    .join("drissionpage")
+                    .display()
+                    .to_string(),
+            ),
+        ),
+        (
+            "DRPA_BROWSER_PORT".to_owned(),
+            Value::String("9222".to_owned()),
+        ),
+        (
+            "DRPA_AGENT_ARTIFACT_ROOT".to_owned(),
+            Value::String(
+                workspace_root
+                    .join("agent")
+                    .join("jcode")
+                    .join("browser")
+                    .display()
+                    .to_string(),
+            ),
+        ),
+        (
+            "DRPA_AGENT_BRIDGE_ENDPOINT".to_owned(),
+            Value::String(bridge_endpoint.to_owned()),
+        ),
+        (
+            "DRPA_AGENT_BRIDGE_TOKEN".to_owned(),
+            Value::String(bridge_token.to_owned()),
+        ),
+    ]);
+    if let Some(browser) = browser {
+        environment.insert(
+            "DRPA_BROWSER_PATH".to_owned(),
+            Value::String(browser.display().to_string()),
+        );
+    }
+    #[cfg(debug_assertions)]
+    {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/python/src");
+        if source.is_dir() {
+            environment.insert(
+                "PYTHONPATH".to_owned(),
+                Value::String(source.display().to_string()),
+            );
+        }
+    }
+    let config = serde_json::json!({
+        "mcpServers": {
+            "drpa": {
+                "command": python.display().to_string(),
+                "args": ["-m", "drpa_runner.agent_mcp"],
+                "env": environment,
+                "shared": true
+            }
+        }
+    });
+    let bytes = serde_json::to_vec_pretty(&config)
+        .map_err(|error| format!("生成 JCode MCP 配置失败：{error}"))?;
+    fs::write(home.join("mcp.json"), bytes)
+        .map_err(|error| format!("写入 JCode MCP 配置失败：{error}"))
+}
+
 fn json_string(value: &str) -> Result<String, String> {
     serde_json::to_string(value).map_err(|error| error.to_string())
 }
@@ -468,7 +671,7 @@ fn render_imported_conversation(messages: &[AgentMessage], context_window: u32) 
     }
     selected.reverse();
     let mut prompt = String::from(
-        "这是 DRPA 会话导入的上下文。你是 JCode 开发者 Agent，可直接使用完整工具集在当前工作目录完成最后一条用户请求。\n\n",
+        "这是 DRPA 会话导入的上下文。你是 JCode 开发者 Agent，可直接使用完整工具集在当前工作目录完成最后一条用户请求。浏览器操作使用 mcp__drpa__browser_*，不要调用 JCode 自带的 Firefox browser setup；运行 RPAZ 包使用 mcp__drpa__rpaz_run_package，并用 mcp__drpa__run_get_detail 查看实时事件和 debug 日志。\n\n",
     );
     for message in selected {
         let label = if message.role == "assistant" {
@@ -594,6 +797,43 @@ mod tests {
         assert!(config.contains("auth = \"none\""));
         assert!(config.contains("requires_api_key = false"));
         assert!(!config.contains("api_key_env"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mcp_config_uses_bundled_python_chrome_and_host_bridge() {
+        let root = env::temp_dir().join(format!("drpa-jcode-mcp-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        write_mcp_config(
+            &root,
+            Path::new("C:/DRPA/runtime/python.exe"),
+            Path::new("C:/DRPA/runtime/python.exe"),
+            Some(Path::new("C:/DRPA/runtime/chrome.exe")),
+            "127.0.0.1:43123",
+            "test-token",
+        )
+        .unwrap();
+        let config: Value =
+            serde_json::from_slice(&fs::read(root.join("mcp.json")).unwrap()).unwrap();
+
+        assert_eq!(
+            config
+                .pointer("/mcpServers/drpa/command")
+                .and_then(Value::as_str),
+            Some("C:/DRPA/runtime/python.exe")
+        );
+        assert_eq!(
+            config
+                .pointer("/mcpServers/drpa/env/DRPA_BROWSER_PATH")
+                .and_then(Value::as_str),
+            Some("C:/DRPA/runtime/chrome.exe")
+        );
+        assert_eq!(
+            config
+                .pointer("/mcpServers/drpa/env/DRPA_AGENT_BRIDGE_ENDPOINT")
+                .and_then(Value::as_str),
+            Some("127.0.0.1:43123")
+        );
         let _ = fs::remove_dir_all(root);
     }
 

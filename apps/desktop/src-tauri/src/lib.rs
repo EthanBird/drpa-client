@@ -555,7 +555,7 @@ async fn start_run(
     )
 }
 
-fn dispatch_run_background(
+pub(crate) fn dispatch_run_background(
     state: HostState,
     paths: AppPaths,
     processes: RunProcessManager,
@@ -1394,20 +1394,34 @@ async fn run_agent_turn(
     request: agent::AgentTurnRequest,
     app: tauri::AppHandle,
     paths: State<'_, AppPaths>,
+    state: State<'_, HostState>,
+    processes: State<'_, RunProcessManager>,
 ) -> Result<agent::AgentTurnResult, String> {
     let event_name = agent::agent_stream_event_name(&request.request_id)?;
     let paths = paths.inner().clone();
+    let host = agent::AgentHostContext::new(
+        state.inner().clone(),
+        paths.clone(),
+        processes.inner().clone(),
+    );
     tauri::async_runtime::spawn_blocking(move || {
-        let python = if matches!(request.mode.as_str(), "sql" | "developer") {
-            PathBuf::new()
+        let runtime = if request.mode == "sql" {
+            None
         } else {
-            locate_runtime(&paths)?.python
+            Some(locate_runtime(&paths)?)
         };
+        let python = runtime
+            .as_ref()
+            .map(|runtime| runtime.python.clone())
+            .unwrap_or_default();
+        let browser = runtime.and_then(|runtime| runtime.browser);
         agent::run_agent_turn(
             request,
             paths.workspace_root.clone(),
             paths.resource_dir.clone(),
             python,
+            browser,
+            host,
             |event| {
                 let _ = app.emit(&event_name, event);
             },
@@ -2801,7 +2815,7 @@ fn verify_runtime_imports(runtime: &RuntimeEnvironment) -> Result<(), String> {
         .args([
             "-I",
             "-c",
-            "import drpa_runner, DrissionPage, ipykernel, jupyter_client; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); print('DRPA_RUNTIME_OK')",
+            "import drpa_runner, DrissionPage, ipykernel, jupyter_client; from drpa_runner import agent_mcp; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert agent_mcp.TOOL_DEFINITIONS; print('DRPA_RUNTIME_OK')",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

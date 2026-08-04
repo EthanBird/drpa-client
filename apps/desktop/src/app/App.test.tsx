@@ -56,7 +56,8 @@ describe("DRPA Next desktop shell", () => {
       activeNavigation: "workbench",
       commandOpen: false,
       theme: "light",
-      fontScale: "standard",
+      fontScale: 100,
+      language: "zh-CN",
       uiDensity: "compact",
       hidePageHeaders: false,
       collapsedSidebars: {},
@@ -200,6 +201,8 @@ describe("DRPA Next desktop shell", () => {
 
   it("develops and streams a Local Dify app, then exposes its compatible API", async () => {
     const runApp = vi.spyOn(desktopGateway, "runLocalDifyApp");
+    const saveProvider = vi.spyOn(desktopGateway, "saveLocalDifyProvider");
+    const saveApp = vi.spyOn(desktopGateway, "saveLocalDifyApp");
     const startService = vi.spyOn(desktopGateway, "startLocalDifyService");
     useAppStore.setState({ activeNavigation: "localDify" });
     render(<App />);
@@ -215,6 +218,12 @@ describe("DRPA Next desktop shell", () => {
       query: "验证本地流式输出",
       stream: true,
     })));
+    expect(saveProvider).toHaveBeenCalledWith(expect.objectContaining({
+      id: "provider-agent-settings",
+      baseUrl: "http://127.0.0.1/v1",
+      model: "deepseek-v4-flash",
+    }));
+    expect(saveApp).toHaveBeenCalledWith(expect.objectContaining({ providerId: "provider-agent-settings" }));
     expect(await screen.findByRole("heading", { name: "Local Dify 调试结果" })).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "API 与导出" }));
@@ -383,23 +392,31 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.click(darkTheme);
 
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
-    fireEvent.click(screen.getByRole("radio", { name: /大110%/ }));
-    await waitFor(() => expect(document.documentElement.dataset.fontScale).toBe("large"));
+    fireEvent.change(screen.getByRole("slider", { name: "全局字号" }), { target: { value: "160" } });
+    await waitFor(() => expect(document.documentElement.dataset.fontScale).toBe("160"));
+    expect(document.documentElement.style.getPropertyValue("--font-scale")).toBe("1.6");
     fireEvent.click(screen.getByRole("button", { name: "在资源管理器中打开" }));
     await waitFor(() => expect(openWorkspace).toHaveBeenCalledOnce());
     expect(screen.queryByText("紧凑布局")).not.toBeInTheDocument();
   });
 
-  it("applies compact layout and controls Agent tools from the extensions page", async () => {
+  it("switches the shell and settings copy through the i18n catalog", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "显示语言" }), { target: { value: "en-US" } });
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "RPAZ Packages" })).toBeVisible();
+    expect(document.documentElement.lang).toBe("en-US");
+  });
+
+  it("keeps the compact default and controls Agent tools from the extensions page", async () => {
     render(<App />);
     await waitFor(() => expect(document.documentElement.dataset.uiDensity).toBe("compact"));
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
 
-    expect(await screen.findByRole("radio", { name: "紧凑" })).toBeChecked();
-    fireEvent.click(screen.getByRole("radio", { name: "舒适" }));
-    await waitFor(() => expect(document.documentElement.dataset.uiDensity).toBe("comfortable"));
-
-    fireEvent.click(screen.getByRole("switch", { name: "隐藏页面大标题" }));
+    expect(screen.queryByRole("radio", { name: "紧凑" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("switch", { name: "隐藏页面大标题" }));
     await waitFor(() => expect(document.documentElement.dataset.hidePageHeaders).toBe("true"));
 
     fireEvent.click(screen.getByRole("button", { name: "扩展工具" }));

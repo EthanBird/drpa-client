@@ -33,6 +33,7 @@ import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type Prop
 import type { NavigationId, WorkspaceInfo } from "../domain/models";
 import { useAppStore } from "../app/store";
 import { desktopGateway } from "../infra/gateway";
+import { useI18n, type TranslationKey } from "../i18n";
 import { SidebarToggle, useSidebarCollapsed } from "./SidebarToggle";
 
 const primaryNavigation: Array<{
@@ -64,7 +65,25 @@ const infrastructureNavigation: Array<{
   { id: "secrets", label: "凭据保险箱", icon: KeyRound },
 ];
 
+const navigationTranslationKeys: Partial<Record<NavigationId, TranslationKey>> = {
+  overview: "nav.overview",
+  library: "nav.library",
+  studio: "nav.studio",
+  data: "nav.data",
+  workbench: "nav.workbench",
+  runs: "nav.runs",
+  automations: "nav.automations",
+  localDify: "nav.localDify",
+  agent: "nav.agent",
+  knowledgeBase: "nav.knowledgeBase",
+  extensionTools: "nav.extensionTools",
+  plugins: "nav.plugins",
+  runtimes: "nav.runtimes",
+  secrets: "nav.secrets",
+};
+
 export function AppShell({ children }: PropsWithChildren) {
+  const { t } = useI18n();
   const activeNavigation = useAppStore((state) => state.activeNavigation);
   const setActiveNavigation = useAppStore((state) => state.setActiveNavigation);
   const setCommandOpen = useAppStore((state) => state.setCommandOpen);
@@ -278,7 +297,7 @@ export function AppShell({ children }: PropsWithChildren) {
         <div className="titlebar-spacer" data-tauri-drag-region />
         <button className="sync-state" type="button" aria-label="Host 状态" onClick={() => setActiveNavigation("runtimes")}>
           <span className="pulse-dot" />
-          Host 已连接
+          {t("status.hostConnected")}
         </button>
         <div className="window-controls" aria-label="窗口控制">
           <button type="button" aria-label="最小化" onClick={() => void controlWindow("minimize")}><Minus size={14} /></button>
@@ -295,25 +314,25 @@ export function AppShell({ children }: PropsWithChildren) {
         <button
           className="command-trigger"
           type="button"
-          aria-label="搜索或运行命令"
-          title={navigationCollapsed ? "搜索或运行命令" : undefined}
+          aria-label={t("nav.search")}
+          title={navigationCollapsed ? t("nav.search") : undefined}
           onClick={() => setCommandOpen(true)}
         >
           <Search size={15} />
-          <span>搜索或运行命令</span>
+          <span>{t("nav.search")}</span>
           <kbd>⌘ K</kbd>
         </button>
 
         <nav aria-label="主导航">
           <NavigationGroup
-            items={primaryNavigation}
+            items={primaryNavigation.map((item) => ({ ...item, label: t(navigationTranslationKeys[item.id]!) }))}
             activeId={activeNavigation}
             onSelect={setActiveNavigation}
             compact={navigationCollapsed}
           />
-          <div className="nav-label" aria-hidden={navigationCollapsed}>基础设施</div>
+          <div className="nav-label" aria-hidden={navigationCollapsed}>{t("nav.infrastructure")}</div>
           <NavigationGroup
-            items={infrastructureNavigation}
+            items={infrastructureNavigation.map((item) => ({ ...item, label: t(navigationTranslationKeys[item.id]!) }))}
             activeId={activeNavigation}
             onSelect={setActiveNavigation}
             compact={navigationCollapsed}
@@ -330,14 +349,14 @@ export function AppShell({ children }: PropsWithChildren) {
         >
           <div className="quick-run-icon"><Sparkles size={16} /></div>
           <div>
-            <strong>快速安装</strong>
-            <span>导入 RPAZ 包</span>
+            <strong>{t("nav.quickInstall")}</strong>
+            <span>{t("nav.importPackage")}</span>
           </div>
           <Play size={14} fill="currentColor" />
         </button>
         <div className="sidebar-utility">
-          <button type="button" aria-label="知识文档" title={navigationCollapsed ? "知识文档" : undefined} onClick={() => setActiveNavigation("docs")}><CircleHelp size={16} /><span>知识文档</span></button>
-          <button type="button" aria-label="设置" title={navigationCollapsed ? "设置" : undefined} onClick={() => setActiveNavigation("settings")}><Settings size={16} /><span>设置</span></button>
+          <button type="button" aria-label={t("nav.docs")} title={navigationCollapsed ? t("nav.docs") : undefined} onClick={() => setActiveNavigation("docs")}><CircleHelp size={16} /><span>{t("nav.docs")}</span></button>
+          <button type="button" aria-label={t("nav.settings")} title={navigationCollapsed ? t("nav.settings") : undefined} onClick={() => setActiveNavigation("settings")}><Settings size={16} /><span>{t("nav.settings")}</span></button>
         </div>
         <div className="account-card" title={navigationCollapsed ? currentUser.displayName : undefined}>
           <div className="avatar">{currentUser.initials}</div>
