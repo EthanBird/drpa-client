@@ -67,7 +67,7 @@ def main(ctx):
 - `ctx.output_file(relative_path, label)`：获得隔离输出路径并登记产物。
 - `ctx.open_output_directory()`：请求 Host 打开本次运行输出目录。
 - `ctx.sql`：连接工作区 SQLite；提供 `execute`、`executemany`、`query`、`scalar` 和事务。
-- `ctx.browser(headless=True)`：使用封装的 Chrome for Testing 与 DrissionPage。
+- `ctx.browser(headless=True)`：连接封装的 Chrome for Testing 与 DrissionPage 持久会话。Windows 任务结束和 `page.quit()` 不终止浏览器，后续任务继续复用同一 Profile 与调试端口。
 
 `ctx.sql` 示例：
 

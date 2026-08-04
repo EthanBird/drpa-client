@@ -141,6 +141,7 @@ pub(crate) struct AgentToolEvent {
 pub(crate) enum AgentStreamEvent {
     RoundStarted { round: usize },
     Delta { content: String },
+    ContentReplace { content: String },
     Tool { tool: AgentToolEvent },
 }
 
@@ -246,6 +247,7 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
 pub(crate) fn run_agent_turn<F>(
     mut request: AgentTurnRequest,
     workspace_root: PathBuf,
+    resource_dir: Option<PathBuf>,
     python: PathBuf,
     mut emit: F,
 ) -> Result<AgentTurnResult, String>
@@ -263,6 +265,9 @@ where
         request.api_key = provider.api_key;
     }
     validate_request(&request)?;
+    if request.mode == "developer" {
+        return crate::jcode::run_turn(&request, &workspace_root, resource_dir.as_deref(), emit);
+    }
     let started = Instant::now();
     let provider = OpenAiCompatibleAdapter::new(&request.base_url, &request.api_key)?;
     let sql_mode = request.mode == "sql";
@@ -469,7 +474,7 @@ pub(crate) fn agent_stream_event_name(request_id: &str) -> Result<String, String
 
 fn validate_request(request: &AgentTurnRequest) -> Result<(), String> {
     agent_stream_event_name(&request.request_id)?;
-    if !matches!(request.mode.as_str(), "rpaz" | "sql") {
+    if !matches!(request.mode.as_str(), "rpaz" | "sql" | "developer") {
         return Err("Agent 模式无效".to_owned());
     }
     if !matches!(
@@ -2176,7 +2181,7 @@ fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-fn validate_project_id(value: &str) -> Result<(), String> {
+pub(crate) fn validate_project_id(value: &str) -> Result<(), String> {
     let generated = value
         .strip_prefix("project-")
         .is_some_and(|hash| hash.len() == 24 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()));

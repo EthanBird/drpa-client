@@ -590,9 +590,12 @@ mod tests {
             std::process::id()
         ));
         let _ = fs::remove_file(&ack);
-        let error = wait_for_startup_ack(&mut child, &ack, Duration::from_millis(250)).unwrap_err();
+        // Loaded Windows CI runners can take longer than 250 ms to schedule
+        // cmd.exe even though it exits immediately. Keep this well below the
+        // production 30-second window while avoiding a scheduler-only failure.
+        let error = wait_for_startup_ack(&mut child, &ack, Duration::from_secs(2)).unwrap_err();
 
-        assert!(error.contains('7'));
+        assert!(error.contains('7'), "unexpected startup error: {error}");
     }
 
     #[test]

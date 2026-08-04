@@ -100,6 +100,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $assets, $overlay, $previous | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/drpa-desktop.exe" "$overlay/DRPA Next.exe"
           Copy-Item "target/${{ matrix.target }}/release/drpa-updater.exe" "$overlay/drpa-updater.exe"
+          python tools/windows/fetch_jcode.py --output-dir "$overlay/jcode"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to stage the pinned JCode developer agent" }
           python tools/offline/sync_runtime_adapter.py --runtime-root "$overlay/runtime"
           if ($LASTEXITCODE -ne 0) { throw "Failed to assemble the lightweight runtime adapter" }
 
@@ -135,12 +137,16 @@ jobs:
           $portable = Join-Path $env:RUNNER_TEMP "DRPA-Next-$env:DRPA_VERSION-windows-x86_64"
           $runtimeStage = Get-ChildItem "$env:RUNNER_TEMP/drpa-offline" -Directory -Filter "drpa-runtime-*-windows-x86_64" | Select-Object -First 1
           if (-not $runtimeStage) { throw "Sealed Windows runtime stage is missing" }
-          New-Item -ItemType Directory -Force -Path $assets, "$portable/runtime", "$portable/webview2", "$portable/examples" | Out-Null
+          New-Item -ItemType Directory -Force -Path $assets, "$portable/runtime", "$portable/webview2", "$portable/examples", "$portable/jcode" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/drpa-desktop.exe" "$portable/DRPA Next.exe"
           Copy-Item "target/${{ matrix.target }}/release/drpa-updater.exe" "$portable/drpa-updater.exe"
           Get-ChildItem $runtimeStage.FullName -Force | Copy-Item -Destination "$portable/runtime" -Recurse -Force
           Copy-Item "examples/bing_daily_image.rpaz" "$portable/examples/"
           Copy-Item "docs/PORTABLE_RELEASE.md" "$portable/README.md"
+          python tools/windows/fetch_jcode.py --output-dir "$portable/jcode"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to stage the pinned JCode developer agent" }
+          & "$portable/jcode/jcode.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled JCode startup smoke failed" }
 
           $cab = Join-Path $env:RUNNER_TEMP "Microsoft.WebView2.FixedVersionRuntime.$env:WEBVIEW2_VERSION.x64.cab"
           $expanded = Join-Path $env:RUNNER_TEMP "webview2-expanded"
@@ -224,7 +230,7 @@ jobs:
           else
             tag="desktop-v${DRPA_VERSION}-preview-${GITHUB_RUN_NUMBER}"
             title="DRPA Next ${DRPA_VERSION} 轻量更新 · ${GITHUB_RUN_NUMBER}"
-            notes="$(printf 'DRPA Next %s Windows x64 轻量更新包。\n\n仅包含变化的应用、更新器文件和合并后的安装库存；保留现有 Python、Chrome、Fixed Version WebView2 与用户数据。更新前检查协议和精确基线版本，重启后的 Host 确认窗口成功启动后才清理备份。' "$DRPA_VERSION")"
+            notes="$(printf 'DRPA Next %s Windows x64 轻量更新包。\n\n本次更新让 DrissionPage 浏览器在任务成功、失败或脚本调用 page.quit() 后继续保留，并由开发工作室和后续 RPAZ 任务复用；AI Agent 新增可切换的内置 RPAZ 模式与完整工具权限的 JCode 开发者模式。更新包仅包含变化的应用、JCode sidecar、运行时适配器和合并后的安装库存，保留现有 Python、Chrome、Fixed Version WebView2 与用户数据。' "$DRPA_VERSION")"
           fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber

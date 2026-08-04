@@ -198,6 +198,7 @@ export function AgentPage({
   const agentModel = useAppStore((state) => state.agentModel);
   const apiKey = useAppStore((state) => state.agentApiKey);
   const agentProviderRef = useAppStore((state) => state.agentProviderRef);
+  const agentMode = useAppStore((state) => state.agentMode);
   const agentStreamEnabled = useAppStore((state) => state.agentStreamEnabled);
   const agentContextWindow = useAppStore((state) => state.agentContextWindow);
   const agentMaxOutputTokens = useAppStore((state) => state.agentMaxOutputTokens);
@@ -214,6 +215,7 @@ export function AgentPage({
   const setAgentBaseUrl = useAppStore((state) => state.setAgentBaseUrl);
   const setAgentModel = useAppStore((state) => state.setAgentModel);
   const setApiKey = useAppStore((state) => state.setAgentApiKey);
+  const setAgentMode = useAppStore((state) => state.setAgentMode);
   const setAgentStreamEnabled = useAppStore((state) => state.setAgentStreamEnabled);
   const setAgentContextWindow = useAppStore((state) => state.setAgentContextWindow);
   const setAgentMaxOutputTokens = useAppStore((state) => state.setAgentMaxOutputTokens);
@@ -856,6 +858,8 @@ export function AgentPage({
             setStreamingContent("");
           } else if (event.type === "delta") {
             setStreamingContent((current) => current + event.content);
+          } else if (event.type === "contentReplace") {
+            setStreamingContent(event.content);
           } else {
             setStreamingTools((current) => [...current.filter((tool) => tool.callId !== event.tool.callId), event.tool]);
           }
@@ -868,6 +872,7 @@ export function AgentPage({
         model: agentModel.trim(),
         apiKey,
         providerRef: agentProviderRef,
+        mode: agentMode,
         projectId: embedded
           ? embeddedProjectId
           : useAppStore.getState().agentSessions.find((session) => session.id === sessionId)?.projectId ?? agentProjectId,
@@ -1012,7 +1017,8 @@ export function AgentPage({
     return (
       <section className="studio-agent agent-conversation" aria-label="开发工作室 AI Agent">
         <header className="studio-agent-header">
-          <div><Bot size={15} /><span><strong>AI Agent</strong><small>{selectedProject ? "当前项目已绑定" : "未选择项目"}</small></span></div>
+          <div><Bot size={15} /><span><strong>{agentMode === "developer" ? "JCode Agent" : "RPAZ Agent"}</strong><small>{agentMode === "developer" ? "完整开发工具" : selectedProject ? "当前项目已绑定" : "未选择项目"}</small></span></div>
+          <div className="studio-agent-mode" role="group" aria-label="工作室 Agent 模式"><button type="button" className={agentMode === "rpaz" ? "active" : ""} onClick={() => setAgentMode("rpaz")} disabled={busy}>RPAZ</button><button type="button" className={agentMode === "developer" ? "active" : ""} onClick={() => setAgentMode("developer")} disabled={busy}>JCode</button></div>
           <select aria-label="工作室 Agent 对话" value={embeddedSessions.some((session) => session.id === activeSession?.id) ? activeSession?.id : ""} onChange={(event) => { if (event.target.value) void openSession(event.target.value); }} disabled={busy || embeddedSessions.length === 0}>
             {embeddedSessions.length === 0 && <option value="">正在准备项目会话…</option>}
             {embeddedSessions.map((session) => <option value={session.id} key={session.id}>{session.title}</option>)}
@@ -1024,8 +1030,8 @@ export function AgentPage({
           {messages.length === 0 && !busy && (
             <div className="agent-welcome studio-agent-welcome">
               <div className="agent-orbit"><Sparkles size={20} /></div>
-              <h2>和 Agent 一起开发</h2>
-              <p>{selectedProject ? `已绑定“${selectedProject.name}”，可直接读取、修改和运行 Python；RPAZ 项目还可校验与构建。` : "选择一个开发项目后，Agent 会自动绑定当前工作区。"}</p>
+              <h2>{agentMode === "developer" ? "用 JCode 完成开发任务" : "和 Agent 一起开发"}</h2>
+              <p>{agentMode === "developer" ? `JCode 将在“${selectedProject?.name ?? embeddedProjectName}”目录运行完整开发工具。` : selectedProject ? `已绑定“${selectedProject.name}”，可直接读取、修改和运行 Python；RPAZ 项目还可校验与构建。` : "选择一个开发项目后，Agent 会自动绑定当前工作区。"}</p>
               <div className="agent-suggestions">{suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => void send(suggestion)}><MessageSquarePlus size={13} /><span>{suggestion}</span></button>)}</div>
             </div>
           )}
@@ -1034,7 +1040,7 @@ export function AgentPage({
               <div className="agent-message-avatar">{message.role === "assistant" ? <Bot size={14} /> : "你"}</div>
               <div className="agent-message-body">
                 <header>
-                  <strong>{message.role === "assistant" ? "DRPA Agent" : "你"}</strong>
+                  <strong>{message.role === "assistant" ? agentMode === "developer" ? "JCode Agent" : "DRPA Agent" : "你"}</strong>
                   {message.role === "assistant" && <span>{message.durationMs} ms · {message.tokens ?? 0} tokens</span>}
                   <span className="agent-message-actions">
                     {message.role === "user" && message.id === latestUserMessageId && <button type="button" aria-label="编辑最新消息" onClick={() => { setEditingMessageId(message.id); setEditingDraft(visibleMessageContent(message.content)); }} disabled={busy}><Pencil size={12} /></button>}
@@ -1055,7 +1061,7 @@ export function AgentPage({
             <article className="agent-message assistant pending">
               <div className="agent-message-avatar"><Bot size={14} /></div>
               <div className="agent-message-body">
-                <header><strong>DRPA Agent</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
+                <header><strong>{agentMode === "developer" ? "JCode Agent" : "DRPA Agent"}</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
                 {streamingTools.length > 0 && <div className="agent-tool-events">{streamingTools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
                 {streamingContent ? <AgentMarkdown content={streamingContent} streaming /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
               </div>
@@ -1117,6 +1123,8 @@ export function AgentPage({
           <h1>AI Agent</h1>
           <p>面向通用项目、数据分析与 RPAZ 自动化的本地持久化智能工作台。</p>
         </div>
+        <span className="agent-beta-badge">BETA</span>
+        <div className="agent-mode-switch" role="group" aria-label="Agent 模式"><button type="button" className={agentMode === "rpaz" ? "active" : ""} onClick={() => setAgentMode("rpaz")} disabled={busy}>RPAZ Agent</button><button type="button" className={agentMode === "developer" ? "active" : ""} onClick={() => setAgentMode("developer")} disabled={busy}>JCode 开发者</button></div>
         <div className="agent-connection-state"><span /> OpenAI Compatible</div>
         <button className="button ghost small" type="button" aria-label={agentInspectorOpen ? "隐藏 Agent 配置" : "显示 Agent 配置"} onClick={toggleAgentInspector}>{agentInspectorOpen ? <PanelRightClose size={13} /> : <PanelRightOpen size={13} />} {agentInspectorOpen ? "隐藏配置" : "显示配置"}</button>
         <button className="button ghost small" type="button" onClick={() => activeSession && setConfirmation({ kind: "clear", sessionId: activeSession.id, title: activeSession.title })} disabled={messages.length === 0 || busy}><Trash2 size={13} /> 清空对话</button>
@@ -1199,8 +1207,8 @@ export function AgentPage({
             {messages.length === 0 && !busy && (
               <div className="agent-welcome">
                 <div className="agent-orbit"><Sparkles size={24} /></div>
-                <h2>从一次对话或一个项目开始</h2>
-                <p>{selectedProject ? `Agent 已绑定“${selectedProject.name}”，可以使用 Skills、知识库、项目文件与 Python；RPAZ 是其中的规范化项目子集。` : "普通会话可直接问答和处理文档；绑定任意项目后即可使用项目文件与 Python 工具。"}</p>
+                <h2>{agentMode === "developer" ? "JCode 开发者 Agent" : "从一次对话或一个项目开始"}</h2>
+                <p>{agentMode === "developer" ? selectedProject ? `JCode 已绑定“${selectedProject.name}”，将在项目目录使用完整文件、命令和开发工具。` : "JCode 将以当前 DRPA 工作区为工作目录，使用完整开发工具处理任务。" : selectedProject ? `Agent 已绑定“${selectedProject.name}”，可以使用 Skills、知识库、项目文件与 Python；RPAZ 是其中的规范化项目子集。` : "普通会话可直接问答和处理文档；绑定任意项目后即可使用项目文件与 Python 工具。"}</p>
                 <div className="agent-suggestions">
                   {suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => void send(suggestion)}><MessageSquarePlus size={14} /><span>{suggestion}</span></button>)}
                 </div>
@@ -1211,7 +1219,7 @@ export function AgentPage({
                 <div className="agent-message-avatar">{message.role === "assistant" ? <Bot size={15} /> : "你"}</div>
                 <div className="agent-message-body">
                   <header>
-                    <strong>{message.role === "assistant" ? "DRPA Agent" : "你"}</strong>
+                    <strong>{message.role === "assistant" ? agentMode === "developer" ? "JCode Agent" : "DRPA Agent" : "你"}</strong>
                     {message.role === "assistant" && <span>{message.durationMs} ms · {message.tokens ?? 0} tokens</span>}
                     <span className="agent-message-actions">
                       {message.role === "user" && message.id === latestUserMessageId && <button type="button" aria-label="编辑最新消息" title="编辑并重新生成" onClick={() => { setEditingMessageId(message.id); setEditingDraft(visibleMessageContent(message.content)); }} disabled={busy}><Pencil size={12} /></button>}
@@ -1233,7 +1241,7 @@ export function AgentPage({
               <article className="agent-message assistant pending">
                 <div className="agent-message-avatar"><Bot size={15} /></div>
                 <div className="agent-message-body">
-                  <header><strong>DRPA Agent</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
+                  <header><strong>{agentMode === "developer" ? "JCode Agent" : "DRPA Agent"}</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
                   {streamingTools.length > 0 && <div className="agent-tool-events">{streamingTools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
                   {streamingContent ? <AgentMarkdown content={streamingContent} streaming /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
                 </div>
@@ -1291,6 +1299,11 @@ export function AgentPage({
           <header><div><Wrench size={15} /><strong>Agent 配置</strong></div><button type="button" aria-label="收起右侧 Agent 配置" onClick={toggleAgentInspector}><PanelRightClose size={13} /></button></header>
           <div className="agent-inspector-scroll">
             <section className="agent-config-section">
+              <h2><Bot size={13} /> Agent 模式</h2>
+              <div className="agent-mode-cards"><button type="button" className={agentMode === "rpaz" ? "active" : ""} onClick={() => setAgentMode("rpaz")} disabled={busy}><strong>RPAZ Agent</strong><small>DRPA 内置工具与可配置工具策略</small></button><button type="button" className={agentMode === "developer" ? "active developer" : "developer"} onClick={() => setAgentMode("developer")} disabled={busy}><strong>JCode 开发者 Agent</strong><small>完整文件、命令与开发工具访问</small></button></div>
+            </section>
+
+            <section className="agent-config-section">
               <h2><Link2 size={13} /> 模型连接</h2>
               <label><span>OpenAI 兼容 URL</span><input aria-label="OpenAI 兼容 URL" value={agentBaseUrl} onChange={(event) => setAgentBaseUrl(event.target.value)} placeholder="http://127.0.0.1/v1" /></label>
               <label><span>Model</span><div className="agent-input-icon"><Cpu size={13} /><input aria-label="模型名称" value={agentModel} onChange={(event) => setAgentModel(event.target.value)} placeholder="deepseek-v4-flash" /></div></label>
@@ -1314,11 +1327,11 @@ export function AgentPage({
             </section>
 
             <section className="agent-config-section agent-tools-section">
-              <h2><Wrench size={13} /> 内置工具 <span>{activeToolCount} ACTIVE</span></h2>
-              <div className="agent-tool-list">{Object.entries(toolLabels).map(([name, label]) => { const active = toolIsActive(name); return <div className={active ? "active" : ""} key={name}><CheckCircle2 size={12} /><span><strong>{label}</strong><code>{name}</code></span></div>; })}</div>
+              <h2><Wrench size={13} /> {agentMode === "developer" ? "JCode 工具" : "内置工具"} <span>{agentMode === "developer" ? "FULL" : `${activeToolCount} ACTIVE`}</span></h2>
+              {agentMode === "developer" ? <div className="agent-developer-tool-note"><Code2 size={16} /><span><strong>完整开发工具已启用</strong><small>JCode 可访问当前工作目录中的文件、命令、构建与测试工具；DRPA 内置工具分类开关仅作用于 RPAZ Agent。</small></span></div> : <div className="agent-tool-list">{Object.entries(toolLabels).map(([name, label]) => { const active = toolIsActive(name); return <div className={active ? "active" : ""} key={name}><CheckCircle2 size={12} /><span><strong>{label}</strong><code>{name}</code></span></div>; })}</div>}
             </section>
           </div>
-          <footer><span className="agent-limit-dot" /> 单 Agent · 最多 {agentMaxRounds} 轮模型/工具循环 · Python {agentPythonTimeoutSeconds} 秒</footer>
+          <footer><span className="agent-limit-dot" /> {agentMode === "developer" ? "JCode 完整开发工具 · 单任务串行运行" : `单 Agent · 最多 ${agentMaxRounds} 轮模型/工具循环 · Python ${agentPythonTimeoutSeconds} 秒`}</footer>
         </aside>}
       </div>
       {projectContextMenu && (
@@ -1493,7 +1506,7 @@ function DocumentComposerContext({
 function ToolEvent({ event }: { event: AgentToolEvent }) {
   return (
     <details className={`agent-tool-event ${event.status}`}>
-      <summary>{event.status === "completed" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}<span><strong>{toolLabels[event.name] ?? event.name}</strong><small>{event.summary}</small></span><ChevronDown size={13} /></summary>
+      <summary>{event.status === "running" ? <LoaderCircle className="spin" size={13} /> : event.status === "completed" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}<span><strong>{toolLabels[event.name] ?? event.name}</strong><small>{event.summary}</small></span><ChevronDown size={13} /></summary>
       <pre>{event.output}</pre>
     </details>
   );

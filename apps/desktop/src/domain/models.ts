@@ -574,12 +574,14 @@ export interface AgentProviderRef {
   providerId: string;
 }
 
+export type AgentMode = "rpaz" | "developer";
+
 export interface AgentTurnRequest {
   requestId: string;
   sessionId?: string;
   baseUrl: string;
   model: string;
-  mode?: "rpaz" | "sql";
+  mode?: AgentMode | "sql";
   databaseDialect?: "sqlite" | "postgresql" | "mysql";
   apiKey: string;
   providerRef?: AgentProviderRef | null;
@@ -598,7 +600,7 @@ export interface AgentTurnRequest {
 export interface AgentToolEvent {
   callId: string;
   name: string;
-  status: "completed" | "failed";
+  status: "running" | "completed" | "failed";
   summary: string;
   output: string;
 }
@@ -606,6 +608,7 @@ export interface AgentToolEvent {
 export type AgentStreamEvent =
   | { type: "roundStarted"; round: number }
   | { type: "delta"; content: string }
+  | { type: "contentReplace"; content: string }
   | { type: "tool"; tool: AgentToolEvent };
 
 export interface AgentConversationMessage extends AgentMessage {

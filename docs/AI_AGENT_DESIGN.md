@@ -1,6 +1,13 @@
-# 轻量 RPAZ AI Agent
+# DRPA 双模式 AI Agent
 
-DRPA Next 在“基础设施 → AI Agent”提供面向 RPAZ 开发的单 Orchestrator 对话入口。ProviderAdapter 负责模型连接，ToolRegistry 统一发现内置工具、Skills 2.0 工具和插件工具；插件服务由 Rust PluginSupervisor 管理。
+DRPA Next 在“基础设施 → AI Agent”提供共享会话与 Provider 配置的双模式入口。`RPAZ Agent` 由内置 Orchestrator、ProviderAdapter 和 ToolRegistry 编排内置工具、Skills 2.0 与插件工具；`JCode 开发者 Agent` 以 sidecar 方式运行完整开发工具集，可在工作区或绑定项目中直接处理代码、文件和命令。
+
+## 模式
+
+- **RPAZ Agent**：默认模式。工具能力受 DRPA 分类开关和项目边界管理，适合自动化包、知识库、数据和文档任务。
+- **JCode 开发者 Agent**：完整开发模式。JCode 在当前工作区或绑定项目根目录运行 `full/all` 工具配置，适合跨目录重构、构建、测试和本地服务联调。
+- 两种模式共用 OpenAI-compatible URL、model、会话、上下文窗口、输出 token、Temperature 与流式 Markdown；切换模式不会删除会话正文。
+- JCode 使用固定版本 sidecar。Provider key 只进入子进程环境变量，生成的 `config.toml` 只记录环境变量名。
 
 ## 配置与会话
 

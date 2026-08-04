@@ -68,6 +68,7 @@ describe("DRPA Next desktop shell", () => {
       agentModel: "deepseek-v4-flash",
       agentApiKey: "",
       agentProviderRef: null,
+      agentMode: "rpaz",
       agentStreamEnabled: true,
       agentContextWindow: 393216,
       agentMaxOutputTokens: 98304,
@@ -562,7 +563,7 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByText("CR")).toBeVisible();
   });
 
-  it("runs the lightweight AI Agent with persisted endpoint settings and a session key", async () => {
+  it("switches between RPAZ and JCode Agents with persisted endpoint settings", async () => {
     const project = { id: "project-000000000000000000000001", name: "Agent 测试项目", files: ["manifest.yaml", "main.py"] };
     vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
     const runAgent = vi.spyOn(desktopGateway, "runAgentTurn").mockResolvedValue({
@@ -586,10 +587,20 @@ describe("DRPA Next desktop shell", () => {
       baseUrl: "http://127.0.0.1/v1",
       model: "deepseek-v4-flash",
       apiKey: "session-key",
+      mode: "rpaz",
       projectId: project.id,
     })));
     expect(await screen.findByText("项目校验通过。")).toBeVisible();
     expect(screen.getByText("manifest.yaml 校验通过")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "JCode 开发者" }));
+    fireEvent.change(composer, { target: { value: "使用完整开发工具继续检查" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+    await waitFor(() => expect(runAgent).toHaveBeenCalledTimes(2));
+    expect(runAgent.mock.calls[1][0]).toEqual(expect.objectContaining({
+      mode: "developer",
+      projectId: project.id,
+    }));
 
     fireEvent.click(screen.getByRole("button", { name: "隐藏 Agent 配置" }));
     expect(screen.queryByLabelText("OpenAI 兼容 URL")).not.toBeInTheDocument();
@@ -597,14 +608,14 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByLabelText("OpenAI 兼容 URL")).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "新建 Agent 对话" }));
-    expect(await screen.findByText("从一次对话或一个项目开始")).toBeVisible();
+    expect(await screen.findByText("JCode 开发者 Agent")).toBeVisible();
     fireEvent.click(screen.getAllByRole("button", { name: "删除对话 新对话" })[0]);
     expect(screen.getByRole("dialog", { name: "确认删除对话" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.getAllByRole("button", { name: "打开对话 新对话" })[0]).toBeVisible();
     const previousSession = screen.getByRole("button", { name: "打开对话 校验当前项目" });
     fireEvent.click(previousSession);
-    expect(screen.getByText("项目校验通过。")).toBeVisible();
+    expect(screen.getAllByText("项目校验通过。")[0]).toBeVisible();
   });
 
   it("migrates only legacy Agent sessions missing from session.db before clearing the cache", async () => {
@@ -759,7 +770,7 @@ describe("DRPA Next desktop shell", () => {
     act(() => {
       streamListener?.({ type: "roundStarted", round: 1 });
       streamListener?.({ type: "delta", content: "# 实时结果\n\n" });
-      streamListener?.({ type: "delta", content: "正在生成" });
+      streamListener?.({ type: "contentReplace", content: "# 实时结果\n\n正在生成" });
     });
 
     expect(await screen.findByRole("heading", { name: "实时结果" })).toBeVisible();

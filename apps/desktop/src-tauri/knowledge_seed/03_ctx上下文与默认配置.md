@@ -309,10 +309,10 @@ page = ctx.browser(headless=True)
 3. `headless is None` 时读取 `bool(ctx.params.get("headless", False))`。
 4. 创建 `ChromiumOptions()`。
 5. 如果环境变量 `DRPA_BROWSER_PATH` 存在，调用 `options.set_browser_path(path)`。
-6. 调用 `options.headless(headless)`。
-7. 创建 `ctx.output_dir / "downloads"`。
-8. 调用 `options.set_download_path(...)`。
-9. 返回 `ChromiumPage(options)`。
+6. 为有界面/headless 会话分配独立调试端口和工作区持久 Profile。
+7. 调用 `options.headless(headless)`。
+8. 创建 `ctx.output_dir / "downloads"`，连接后再次应用本次下载目录。
+9. 返回连接到持久 Chrome 的 `ChromiumPage`。
 
 所以浏览器默认是**有界面模式**。若任务应默认后台运行，需要在 manifest 中显式加入：
 
@@ -329,7 +329,7 @@ page = ctx.browser(headless=True)
 page = ctx.browser(headless=bool(ctx.params.get("headless", True)))
 ```
 
-下载目录由 Context 自动设置，不要写死用户下载目录。浏览器结束时应主动关闭：
+下载目录由 Context 自动设置，不要写死用户下载目录。`page.quit()` 在 RPAZ 中表示释放本次脚本句柄，Runtime 会拦截该调用并保留 Chrome，所以既可以继续沿用常见的 `finally` 写法，也不会在成功或失败后丢失调试现场：
 
 ```python
 page = ctx.browser()
@@ -339,6 +339,8 @@ try:
 finally:
     page.quit()
 ```
+
+Windows 中有界面会话默认使用 `DRPA_BROWSER_PORT=9222`，headless 使用下一个端口；Profile 保存在工作区 `browser/drissionpage/visible|headless`。多个 RPAZ worker 和开发工作室会连接同一会话。需要真正结束时可直接关闭浏览器窗口；不要在包代码中通过 `page.browser.quit()` 绕过 Runtime 生命周期。
 
 ## 9. `ctx.package_dir`
 

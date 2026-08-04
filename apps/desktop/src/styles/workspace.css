@@ -586,7 +586,7 @@
 .studio-agent-pane { grid-column: 4; grid-row: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface-1); }
 .studio-agent { position: relative; height: 100%; min-height: 0; }
 .studio-agent.agent-conversation { grid-template-rows: 44px minmax(0, 1fr) auto; }
-.studio-agent-header { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(100px, 145px) 28px 28px; align-items: center; gap: 5px; min-height: 44px; padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-1); }
+.studio-agent-header { display: grid; grid-template-columns: minmax(105px, 1fr) auto minmax(90px, 130px) 28px 28px; align-items: center; gap: 5px; min-height: 44px; padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-1); }
 .studio-agent-header > div { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--accent); }
 .studio-agent-header > div > span { display: grid; min-width: 0; gap: 1px; }
 .studio-agent-header strong, .studio-agent-header small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -595,6 +595,9 @@
 .studio-agent-header select { min-width: 0; height: 28px; padding: 0 6px; border: 1px solid var(--border); border-radius: 5px; outline: 0; background: var(--surface-2); color: var(--text-2); font-size: calc(7px * var(--font-scale)); }
 .studio-agent-header > button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--text-3); cursor: pointer; }
 .studio-agent-header > button:hover { background: var(--surface-2); color: var(--text-1); }
+.studio-agent-mode { display: inline-flex !important; gap: 2px !important; padding: 2px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-2); }
+.studio-agent-mode button { height: 22px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--text-3); font-size: calc(7px * var(--font-scale)); cursor: pointer; }
+.studio-agent-mode button.active { background: var(--accent); color: var(--accent-contrast); }
 .studio-agent-transcript { padding: 16px 12px 20px; }
 .studio-agent-welcome { margin-top: min(7vh, 52px); }
 .studio-agent-welcome h2 { font-size: calc(14px * var(--font-scale)); }
@@ -731,6 +734,20 @@
 .agent-header p { margin: 3px 0 0; overflow: hidden; color: var(--text-3); font-size: calc(9px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }
 .agent-connection-state { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-3); font: calc(7px * var(--font-scale)) var(--font-mono); }
 .agent-connection-state span { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.agent-beta-badge { padding: 3px 6px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--warning) 12%, var(--surface-1)); color: var(--warning); font: 700 calc(7px * var(--font-scale)) var(--font-mono); }
+.agent-mode-switch { display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface-2); }
+.agent-mode-switch button { height: 26px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--text-3); font-size: calc(8px * var(--font-scale)); cursor: pointer; }
+.agent-mode-switch button.active { background: var(--accent); color: var(--accent-contrast); box-shadow: var(--shadow-sm); }
+.agent-mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.agent-mode-cards button { display: grid; gap: 3px; min-width: 0; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface-2); color: var(--text-2); text-align: left; cursor: pointer; }
+.agent-mode-cards button strong { font-size: calc(8px * var(--font-scale)); }
+.agent-mode-cards button small { color: var(--text-3); font-size: calc(7px * var(--font-scale)); line-height: 1.4; }
+.agent-mode-cards button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
+.agent-mode-cards button.developer.active { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, var(--surface-2)); color: var(--warning); }
+.agent-developer-tool-note { display: flex; align-items: flex-start; gap: 8px; padding: 9px; border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border)); border-radius: 7px; background: color-mix(in srgb, var(--warning) 8%, var(--surface-2)); color: var(--warning); }
+.agent-developer-tool-note span { display: grid; gap: 3px; }
+.agent-developer-tool-note strong { color: var(--text-1); font-size: calc(8px * var(--font-scale)); }
+.agent-developer-tool-note small { color: var(--text-3); font-size: calc(7px * var(--font-scale)); line-height: 1.5; }
 .agent-layout { display: grid; grid-template-columns: 190px minmax(320px, 1fr) 285px; min-width: 0; min-height: 0; gap: 1px; overflow: hidden; background: var(--border-subtle); }
 .agent-layout.config-hidden { grid-template-columns: 190px minmax(0, 1fr); }
 .agent-layout.sessions-collapsed { grid-template-columns: 30px minmax(320px, 1fr) 285px; }
@@ -834,9 +851,11 @@
 .agent-tool-events { display: grid; gap: 6px; margin: 5px 0 9px; }
 .agent-tool-event { overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface-2); }
 .agent-tool-event.completed { border-left: 2px solid var(--success); }
+.agent-tool-event.running { border-left: 2px solid var(--accent); }
 .agent-tool-event.failed { border-left: 2px solid var(--danger); }
 .agent-tool-event summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 38px; padding: 6px 9px; color: var(--success); cursor: pointer; list-style: none; }
 .agent-tool-event.failed summary { color: var(--danger); }
+.agent-tool-event.running summary { color: var(--accent); }
 .agent-tool-event summary > span { display: grid; min-width: 0; gap: 2px; }
 .agent-tool-event summary strong { color: var(--text-1); font-size: calc(8px * var(--font-scale)); }
 .agent-tool-event summary small { overflow: hidden; color: var(--text-3); font-size: calc(7px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }

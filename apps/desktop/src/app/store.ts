@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { AgentConversationMessage, AgentConversationSession, AgentProviderRef, AgentToolPolicy, NavigationId, WorkspaceSnapshot } from "../domain/models";
+import type { AgentConversationMessage, AgentConversationSession, AgentMode, AgentProviderRef, AgentToolPolicy, NavigationId, WorkspaceSnapshot } from "../domain/models";
 
 export type FontScale = "small" | "standard" | "large" | "extraLarge";
 export type UiDensity = "comfortable" | "compact";
@@ -46,6 +46,7 @@ interface AppStore {
   agentModel: string;
   agentApiKey: string;
   agentProviderRef: AgentProviderRef | null;
+  agentMode: AgentMode;
   agentStreamEnabled: boolean;
   agentContextWindow: number;
   agentMaxOutputTokens: number;
@@ -80,6 +81,7 @@ interface AppStore {
   setAgentModel: (model: string) => void;
   setAgentApiKey: (apiKey: string) => void;
   setAgentProviderRef: (providerRef: AgentProviderRef | null) => void;
+  setAgentMode: (mode: AgentMode) => void;
   setAgentStreamEnabled: (enabled: boolean) => void;
   setAgentContextWindow: (tokens: number) => void;
   setAgentMaxOutputTokens: (tokens: number) => void;
@@ -118,6 +120,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   agentModel: "deepseek-v4-flash",
   agentApiKey: "",
   agentProviderRef: null,
+  agentMode: "rpaz",
   agentStreamEnabled: true,
   agentContextWindow: 393216,
   agentMaxOutputTokens: 98304,
@@ -171,6 +174,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setAgentModel: (agentModel) => set({ agentModel, agentProviderRef: null }),
   setAgentApiKey: (agentApiKey) => set({ agentApiKey, agentProviderRef: null }),
   setAgentProviderRef: (agentProviderRef) => set({ agentProviderRef }),
+  setAgentMode: (agentMode) => set({ agentMode }),
   setAgentStreamEnabled: (agentStreamEnabled) => set({ agentStreamEnabled }),
   setAgentContextWindow: (agentContextWindow) => set({ agentContextWindow }),
   setAgentMaxOutputTokens: (agentMaxOutputTokens) => set({ agentMaxOutputTokens }),
@@ -293,7 +297,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   })),
 }), {
   name: "drpa-ui-preferences",
-  version: 5,
+  version: 6,
   migrate: (persistedState, version) => {
     const state = (persistedState ?? {}) as Partial<AppStore>;
     const migrated = { ...state };
@@ -353,6 +357,9 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
       }
       migrated.agentSessions = normalizeSessions(state.agentSessions);
     }
+    if (version < 6) {
+      migrated.agentMode = state.agentMode === "developer" ? "developer" : "rpaz";
+    }
     return migrated as never;
   },
   partialize: (state) => ({
@@ -364,6 +371,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     agentBaseUrl: state.agentBaseUrl,
     agentModel: state.agentModel,
     agentProviderRef: state.agentProviderRef,
+    agentMode: state.agentMode,
     agentStreamEnabled: state.agentStreamEnabled,
     agentContextWindow: state.agentContextWindow,
     agentMaxOutputTokens: state.agentMaxOutputTokens,

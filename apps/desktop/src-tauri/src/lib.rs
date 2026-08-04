@@ -27,6 +27,7 @@ mod agent_extensions;
 mod agent_sessions;
 mod automations;
 mod database;
+mod jcode;
 mod knowledge;
 mod knowledge_base;
 mod local_dify;
@@ -1397,14 +1398,20 @@ async fn run_agent_turn(
     let event_name = agent::agent_stream_event_name(&request.request_id)?;
     let paths = paths.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let python = if request.mode == "sql" {
+        let python = if matches!(request.mode.as_str(), "sql" | "developer") {
             PathBuf::new()
         } else {
             locate_runtime(&paths)?.python
         };
-        agent::run_agent_turn(request, paths.workspace_root.clone(), python, |event| {
-            let _ = app.emit(&event_name, event);
-        })
+        agent::run_agent_turn(
+            request,
+            paths.workspace_root.clone(),
+            paths.resource_dir.clone(),
+            python,
+            |event| {
+                let _ = app.emit(&event_name, event);
+            },
+        )
     })
     .await
     .map_err(|error| format!("Agent 后台任务失败：{error}"))?
@@ -2423,7 +2430,11 @@ fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKerne
         .env("PYTHONNOUSERSITE", "1")
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8");
+        .env("PYTHONIOENCODING", "utf-8")
+        .env(
+            "DRPA_BROWSER_PROFILE_ROOT",
+            paths.workspace_root.join("browser").join("drissionpage"),
+        );
     if let Some(python_path) = python_path {
         command.env("PYTHONPATH", python_path);
     }
@@ -2500,7 +2511,11 @@ fn execute_python_run(
         .env("PYTHONNOUSERSITE", "1")
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8");
+        .env("PYTHONIOENCODING", "utf-8")
+        .env(
+            "DRPA_BROWSER_PROFILE_ROOT",
+            paths.workspace_root.join("browser").join("drissionpage"),
+        );
     if let Some(python_path) = runtime.python_path {
         command.env("PYTHONPATH", python_path);
     }

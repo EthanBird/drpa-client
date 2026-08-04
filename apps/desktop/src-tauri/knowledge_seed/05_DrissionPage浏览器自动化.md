@@ -1,6 +1,6 @@
 # DrissionPage 浏览器自动化
 
-DRPA 的浏览器入口是 `ctx.browser()`。它使用安装包中的 Chrome for Testing、DrissionPage 和本次运行独立下载目录，避免依赖系统浏览器路径。本文以 DrissionPage 4.x 常用语法为主，并说明 RPAZ 中的推荐组织方式。
+DRPA 的浏览器入口是 `ctx.browser()`。它使用安装包中的 Chrome for Testing、DrissionPage、工作区持久 Profile 和本次运行独立下载目录，避免依赖系统浏览器路径。任务结束后浏览器继续运行，可被开发工作室与后续 RPAZ 任务复用。本文以 DrissionPage 4.x 常用语法为主，并说明 RPAZ 中的推荐组织方式。
 
 ## 1. 获取浏览器
 
@@ -20,6 +20,10 @@ def main(ctx):
 - 从 `DRPA_BROWSER_PATH` 设置封装浏览器位置。
 - 根据参数设置 headless。
 - 将浏览器下载目录设为本次 output 下的 `downloads/`。
+- 有界面/headless 分别连接固定调试端口与持久 Profile。
+- 拦截包内 `page.quit()`：释放逻辑句柄但保留 Chrome 和当前页面。
+
+因此上面 `finally: page.quit()` 仍是兼容写法，但不会退出 Chrome。成功和失败都保留页面，便于继续开发、复用登录态和定位问题。真正需要结束会话时，在浏览器界面关闭窗口。
 
 不要再创建 `ChromiumOptions().set_browser_path("C:/...")`。确有高级选项时，优先扩展 Context 能力或在目标离线 runtime 中验证后再使用。
 

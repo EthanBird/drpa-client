@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Windows 浏览器与 Agent
+
+- `ctx.browser()` 改为连接工作区级持久 DrissionPage 会话：有界面与 headless 使用独立调试端口和持久 Profile，任务成功、失败或包内调用 `page.quit()` 后均保留 Chrome，供开发工作室和后续 RPAZ 任务复用。
+- 每次连接后重新应用当前任务的 `output/downloads` 下载目录；嵌套 `ctx.invoke()` 与父包共享浏览器句柄登记，运行日志明确提示浏览器已保留。
+- AI Agent 新增模式切换：内置 RPAZ Agent 继续使用 DRPA ToolRegistry 与分类权限，JCode 开发者 Agent 使用完整开发工具集并复用 OpenAI-compatible Provider、流式 Markdown 和 DRPA 会话。
+- Windows 轻量更新和全量安装流水线固定打包经 SHA-256 校验的 JCode sidecar；密钥只通过子进程环境传递，不写入 JCode 配置文件。
+
 ## [2.0.0] - 2026-07-19
 
 > 本次正式 Release 仅发布 Windows x64 全量离线安装包；Linux 发行资产继续保持在 `desktop-v1.0.0`。

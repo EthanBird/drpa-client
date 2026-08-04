@@ -1,6 +1,6 @@
 # DRPA Next Windows 离线版
 
-当前只提供 Windows x64，包含 DRPA 桌面端、CPython 3.11、完整离线依赖、真实 Jupyter Kernel、Chrome for Testing、Fixed Version WebView2 和 Bing 每日一图示例包。目标机器无需预装 Python、Node.js、浏览器或联网下载 pip 依赖。
+当前只提供 Windows x64，包含 DRPA 桌面端、CPython 3.11、完整离线依赖、真实 Jupyter Kernel、Chrome for Testing、Fixed Version WebView2、JCode 开发者 Agent sidecar 和 Bing 每日一图示例包。目标机器无需预装 Python、Node.js、浏览器或联网下载 pip 依赖。
 
 ## 首次安装
 
@@ -38,7 +38,7 @@
 
 Host 会检查平台、schema、Host/Worker protocol、最低 Host 版本、精确基线版本、安全路径、文件数量与写入大小，不执行逐文件哈希验证。更新器只替换清单列出的应用文件，并明确保护 `data/` 和 WebView2；因此包、项目、运行历史和环境不会被日常应用更新波及。
 
-完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些大组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。普通 push 默认只发布轻量 update：主程序、更新器、Python adapter wheel、运行时 bootstrap 和合并后的完整库存。adapter wheel 变化时客户端只原位刷新该小包，不重建 pandas、Jupyter、DrissionPage 等完整依赖。手工选择 `full`，或使用 `release(windows):` 提交前缀准备稳定版本时，才重新生成 Setup、完整 runtime、WebView2 和示例资产。
+完整安装包必须携带 CPython、Chrome 和 Fixed Version WebView2，保证目标离线机器首次安装即可运行；这些大组件不会在每个热更新包中重复。安装根目录的 `install-manifest.json` 是完整文件库存。普通 push 默认只发布轻量 update：主程序、更新器、变化的 sidecar、Python adapter wheel、运行时 bootstrap 和合并后的完整库存。JCode 只有在基线尚未包含或固定版本发生变化时进入更新；adapter wheel 变化时客户端只原位刷新该小包，不重建 pandas、Jupyter、DrissionPage 等完整依赖。手工选择 `full`，或使用 `release(windows):` 提交前缀准备稳定版本时，才重新生成 Setup、完整 runtime、WebView2 和示例资产。
 
 发布 stage 内的文件必须是实体文件。库存生成器拒绝 symlink、Junction 和 reparse point，防止安装包在构建机器上通过、复制到离线机器后才暴露缺失依赖。
 

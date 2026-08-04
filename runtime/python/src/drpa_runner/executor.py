@@ -84,13 +84,17 @@ def execute_request(request: ExecutionRequest, events: EventWriter) -> int:
                 encoding="utf-8",
             )
     except KeyboardInterrupt:
+        context.finalize_browsers(failed=False)
         events.emit("warning", message="run cancelled")
         events.emit("completed", exit_code=130)
         return 130
     except Exception as exc:  # noqa: BLE001 - package code is the isolation boundary
+        context.finalize_browsers(failed=True)
         events.emit("error", message=str(exc), traceback=traceback.format_exc())
         events.emit("completed", exit_code=1)
         return 1
+    else:
+        context.finalize_browsers(failed=False)
     finally:
         context.sql.close()
 
