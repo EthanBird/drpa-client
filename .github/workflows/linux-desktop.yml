@@ -100,6 +100,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.88.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -366,7 +367,10 @@ jobs:
           test "${#assets[@]}" -eq 9
           gh release view "$DRPA_RELEASE_TAG" >/dev/null
           gh release upload "$DRPA_RELEASE_TAG" "${assets[@]}" --clobber
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${DRPA_RELEASE_TAG}" \
+            -f sha="$GITHUB_SHA" -F force=true >/dev/null
           gh release edit "$DRPA_RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
             --title "DRPA Next 2.0.3 Windows x64 + Linux/UOS x86_64 全量离线包" \
             --notes "$DRPA_RELEASE_NOTES"
           published_assets="$(gh release view "$DRPA_RELEASE_TAG" --json assets --jq '.assets[].name')"
