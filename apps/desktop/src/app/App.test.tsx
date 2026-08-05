@@ -961,6 +961,36 @@ describe("DRPA Next desktop shell", () => {
     expect((await screen.findAllByText("全部项目"))[0]).toBeVisible();
   });
 
+  it("keeps the new vault credential form mounted while typing", async () => {
+    const unlockedStatus = {
+      initialized: true,
+      unlocked: true,
+      unlockedUntil: Math.floor(Date.now() / 1000) + 86_400,
+      itemCount: 0,
+      failedAttempts: 0,
+      retryAfterSeconds: 0,
+      service: { running: false, port: 34131, endpoint: "http://127.0.0.1:34131/v1/vault", lastError: "" },
+    };
+    vi.spyOn(desktopGateway, "getVaultStatus").mockResolvedValue(unlockedStatus);
+    vi.spyOn(desktopGateway, "listVaultCredentials").mockResolvedValue([]);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    render(<SecretsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "新增凭据" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "生产环境 API" } });
+    fireEvent.change(screen.getByLabelText("账号 / 标识"), { target: { value: "automation@example.com" } });
+    fireEvent.change(screen.getByLabelText("密码 / Secret"), { target: { value: "local-secret" } });
+    fireEvent.change(screen.getByLabelText("网站 / 服务地址"), { target: { value: "https://api.example.com/v1" } });
+    fireEvent.change(screen.getByLabelText("标签"), { target: { value: "开发, 本地" } });
+    fireEvent.change(screen.getByLabelText("安全备注"), { target: { value: "仅供本机测试" } });
+
+    expect(screen.getByLabelText("名称")).toHaveValue("生产环境 API");
+    expect(screen.getByLabelText("账号 / 标识")).toHaveValue("automation@example.com");
+    expect(screen.getByLabelText("密码 / Secret")).toHaveValue("local-secret");
+    expect(screen.getByRole("heading", { name: "生产环境 API" })).toBeVisible();
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
   it("runs the shared AI Agent from the Studio right panel with the selected project", async () => {
     const project = { id: "project-000000000000000000000042", name: "右侧 Agent 项目", files: ["main.py"] };
     vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);

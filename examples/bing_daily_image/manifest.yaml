@@ -1,7 +1,7 @@
 schema: 2
 id: com.drpa.bing-daily-image
 name: Bing 每日一图
-version: 2.0.2
+version: 2.0.3
 
 entrypoint:
   runtime: python

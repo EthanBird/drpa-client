@@ -15,7 +15,7 @@ Unicode true
 !endif
 
 !define APP_NAME "DRPA Next"
-!define APP_VERSION "2.0.2"
+!define APP_VERSION "2.0.3"
 
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUTPUT_FILE}"

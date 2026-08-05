@@ -100,6 +100,10 @@ export function SecretsPage() {
   const [error, setError] = useState("");
   const [deletePending, setDeletePending] = useState(false);
 
+  const updateDraft = useCallback(<Key extends keyof VaultCredentialInput>(key: Key, value: VaultCredentialInput[Key]) => {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }, []);
+
   const loadCredentials = useCallback(async (preferredId?: string) => {
     const items = await desktopGateway.listVaultCredentials();
     setCredentials(items);
@@ -432,15 +436,15 @@ export function SecretsPage() {
           </div>
         </section>
         <main className="vault-detail-pane">
-          <header><div><span>{draft.id ? "编辑凭据" : "新建凭据"}</span><h2>{draft.name || "未命名凭据"}</h2></div><button className={`vault-star-button ${draft.favorite ? "active" : ""}`} type="button" title="收藏" onClick={() => setDraft((current) => ({ ...current, favorite: !current.favorite }))}><Star size={18} fill={draft.favorite ? "currentColor" : "none"} /></button></header>
+          <header><div><span>{draft.id ? "编辑凭据" : "新建凭据"}</span><h2>{draft.name || "未命名凭据"}</h2></div><button className={`vault-star-button ${draft.favorite ? "active" : ""}`} type="button" title="收藏" onClick={() => updateDraft("favorite", !draft.favorite)}><Star size={18} fill={draft.favorite ? "currentColor" : "none"} /></button></header>
           <div className="vault-detail-form">
-            <label><span>名称</span><input autoFocus={!draft.id} value={draft.name} placeholder="例如：OpenAI 开发密钥" onChange={(event) => setDraft((current) => ({ ...current, name: event.currentTarget.value }))} /></label>
-            <label><span>类型</span><select value={draft.kind} onChange={(event) => setDraft((current) => ({ ...current, kind: event.currentTarget.value as VaultCredentialKind }))}>{KIND_OPTIONS.map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></label>
-            <label><span>账号 / 标识</span><input value={draft.username} placeholder="用户名、邮箱或 Key ID" onChange={(event) => setDraft((current) => ({ ...current, username: event.currentTarget.value }))} /></label>
-            <label><span>密码 / Secret</span><div className="vault-secret-input"><input type={revealSecret ? "text" : "password"} value={draft.secret} placeholder="输入敏感值" onChange={(event) => setDraft((current) => ({ ...current, secret: event.currentTarget.value }))} /><button type="button" title={revealSecret ? "隐藏" : "显示"} onClick={() => setRevealSecret((value) => !value)}>{revealSecret ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" title="复制" disabled={!draft.secret} onClick={() => void copyText(draft.secret, "Secret")}><Copy size={16} /></button></div></label>
-            <label><span>网站 / 服务地址</span><input value={draft.uri} placeholder="https://api.example.com/v1" onChange={(event) => setDraft((current) => ({ ...current, uri: event.currentTarget.value }))} /></label>
+            <label><span>名称</span><input autoFocus={!draft.id} value={draft.name} placeholder="例如：OpenAI 开发密钥" onChange={(event) => updateDraft("name", event.currentTarget.value)} /></label>
+            <label><span>类型</span><select value={draft.kind} onChange={(event) => updateDraft("kind", event.currentTarget.value as VaultCredentialKind)}>{KIND_OPTIONS.map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></label>
+            <label><span>账号 / 标识</span><input value={draft.username} placeholder="用户名、邮箱或 Key ID" onChange={(event) => updateDraft("username", event.currentTarget.value)} /></label>
+            <label><span>密码 / Secret</span><div className="vault-secret-input"><input type={revealSecret ? "text" : "password"} value={draft.secret} placeholder="输入敏感值" onChange={(event) => updateDraft("secret", event.currentTarget.value)} /><button type="button" title={revealSecret ? "隐藏" : "显示"} onClick={() => setRevealSecret((value) => !value)}>{revealSecret ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" title="复制" disabled={!draft.secret} onClick={() => void copyText(draft.secret, "Secret")}><Copy size={16} /></button></div></label>
+            <label><span>网站 / 服务地址</span><input value={draft.uri} placeholder="https://api.example.com/v1" onChange={(event) => updateDraft("uri", event.currentTarget.value)} /></label>
             <label><span>标签</span><input value={tagsDraft} placeholder="开发, 本地, 数据库（逗号分隔）" onChange={(event) => setTagsDraft(event.currentTarget.value)} /></label>
-            <label><span>安全备注</span><textarea rows={6} value={draft.notes} placeholder="仅存储在加密保险箱中的说明" onChange={(event) => setDraft((current) => ({ ...current, notes: event.currentTarget.value }))} /></label>
+            <label><span>安全备注</span><textarea rows={6} value={draft.notes} placeholder="仅存储在加密保险箱中的说明" onChange={(event) => updateDraft("notes", event.currentTarget.value)} /></label>
           </div>
           <footer><button className="button danger-ghost" type="button" disabled={!draft.id} onClick={() => setDeletePending(true)}><Trash2 size={15} />删除</button><span>{notice || "保存后全部字段会重新加密写入本地文件"}</span><button className="button primary" type="button" disabled={busy || !draft.name.trim()} onClick={() => void saveCredential()}><Save size={16} />保存凭据</button></footer>
         </main>

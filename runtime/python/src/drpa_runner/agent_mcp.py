@@ -300,7 +300,7 @@ def _serve_mcp() -> int:
                 response = _mcp_result(request_id, {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "drpa-agent-tools", "version": "2.0.2"},
+                    "serverInfo": {"name": "drpa-agent-tools", "version": "2.0.3"},
                 })
             elif method == "tools/list":
                 response = _mcp_result(request_id, {"tools": TOOL_DEFINITIONS})
