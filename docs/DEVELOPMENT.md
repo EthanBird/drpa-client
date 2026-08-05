@@ -168,6 +168,8 @@ Studio Python 补全复用同一个项目 Kernel：Monaco 调用 `complete_studi
 
 用户数据使用独立的 `data/databases/workspace.sqlite3`。RPAZ 通过 `ctx.sql` 访问，数据工作台通过 `apps/desktop/src-tauri/src/database.rs` 访问；React 始终经过 `DesktopGateway`。实现和扩展约定见 [`DATA_WORKBENCH.md`](DATA_WORKBENCH.md)。
 
+BI 主页定义保存在工作区 `dashboard/home.json`，由 `apps/desktop/src-tauri/src/dashboard.rs` 验证和持久化。前端 `DashboardDataRuntime` 把 DRPA 内置数据与数据工作台连接统一转换为表格式 Dataset，组件渲染器不直接访问数据库。完整分层与扩展约定见 [`architecture/BI_DASHBOARD.md`](architecture/BI_DASHBOARD.md)。
+
 ## 7. Windows 全量升级
 
 Windows 不再发布或接受 `.drpa-update`。每个正式版本重新构建 sealed runtime、JCode、Fixed Version WebView2、Host 和 NSIS Setup；用户退出旧版后把新版安装到原目录。NSIS 跳过 `data/`，所以包、项目、运行历史、知识文档和生成环境不会被安装器覆盖。

@@ -112,6 +112,67 @@ export interface DatabaseQueryResult {
   statementType: string;
 }
 
+export type DashboardWidgetKind = "metric" | "line" | "bar" | "pie" | "table" | "markdown";
+export type DashboardBuiltinDataset = "workspaceSummary" | "runHistory" | "runStatus" | "packages";
+export type DashboardNumberFormat = "number" | "compact" | "percent" | "currency" | "hours" | "text";
+
+export interface DashboardDocument {
+  schema: number;
+  activeDashboardId: string;
+  dashboards: DashboardDefinition[];
+}
+
+export interface DashboardDefinition {
+  id: string;
+  title: string;
+  description: string;
+  columns: number;
+  rowHeight: number;
+  widgets: DashboardWidget[];
+}
+
+export interface DashboardWidget {
+  id: string;
+  title: string;
+  kind: DashboardWidgetKind;
+  layout: DashboardWidgetLayout;
+  source?: DashboardDataSource;
+  encoding: DashboardEncoding;
+  options: DashboardWidgetOptions;
+}
+
+export interface DashboardWidgetLayout {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export type DashboardDataSource =
+  | { kind: "builtin"; dataset: DashboardBuiltinDataset }
+  | { kind: "database"; profileId: string; sql: string };
+
+export interface DashboardEncoding {
+  categoryField: string;
+  valueField: string;
+  seriesField: string;
+}
+
+export interface DashboardWidgetOptions {
+  text: string;
+  numberFormat: DashboardNumberFormat;
+  color: string;
+  showLegend: boolean;
+  refreshSeconds: number;
+}
+
+export interface DashboardDataset {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  durationMs: number;
+  truncated: boolean;
+}
+
 export interface RemoteDatabaseProfile {
   id: string;
   name: string;

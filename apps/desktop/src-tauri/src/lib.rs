@@ -26,6 +26,7 @@ mod agent_documents;
 mod agent_extensions;
 mod agent_sessions;
 mod automations;
+mod dashboard;
 mod database;
 mod jcode;
 mod knowledge;
@@ -3339,6 +3340,10 @@ pub fn run() {
             database::describe_remote_database_table,
             database::execute_remote_database_sql,
             database::get_remote_database_schema_context,
+            database::execute_dashboard_database_query,
+            dashboard::get_bi_dashboard,
+            dashboard::save_bi_dashboard,
+            dashboard::reset_bi_dashboard,
             knowledge_base::list_knowledge_bases,
             knowledge_base::create_knowledge_base,
             knowledge_base::delete_knowledge_base,

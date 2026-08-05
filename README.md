@@ -14,6 +14,7 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路，并通过标准 `complete_request` / `inspect_request` 为 Python 文件和 Notebook 提供离线补全、悬停文档与参数提示。
 - 运行记录持久化到 Host SQLite；可进入详情查看完整时间线、筛选/复制日志、参数、产物、错误回溯和重启中断状态。
 - 内置自有数据工作台：工作区 SQLite、外部 SQLite、PostgreSQL/MySQL 与只读 Excel 工作簿数据源，对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；Excel sheet 会映射为可查询表，RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
+- 可编辑 BI 主页：工作区级响应式栅格、指标/折线图/柱状图/饼图/表格/Markdown 组件，既可读取 DRPA 运行数据，也可复用数据工作台连接执行只读 SQL；布局与数据适配器、组件渲染器解耦。
 - 基础设施内置双模式 AI Agent：RPAZ Agent 通过 ProviderAdapter 与 ToolRegistry 编排内置、Skills 2.0 和插件工具；JCode 开发者 Agent 提供完整文件、命令和开发工具。两种模式复用 OpenAI-compatible URL/model/key、流式 Markdown、持久会话和逐会话项目绑定，开发工作室右侧可直接切换。
 - 内置 DRPA Local Dify：管理 Chat/Completion/Workflow/Chatflow 应用和 OpenAI-compatible Provider；提供可视化工作流画布、节点连线与属性、图校验、本地节点执行、流式 Markdown 调试、SQLite 运行轨迹、Dify YAML DSL 导入导出，以及带独立应用 Token 的本地 Dify Service API；通用 Provider 插件可把外部模型服务接入 AI Agent。
 - Skills 2.0 使用 `skill.yaml + instructions.md` 能力包，可携带工作流、资源、可执行 Python/Command 工具和可调用代码库；设置页提供目录树、Monaco 编辑及文件/目录创建、重命名、删除，旧版 `SKILL.md` 自动迁移。
@@ -101,6 +102,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - [RPAZ 开发](docs/RPAZ_DEVELOPMENT.md)：schema v2、Runtime Context、直接运行和示例包。
 - [Jupyter 集成](docs/JUPYTER_INTEGRATION.md)：真实能力、VS Code Jupyter 对照和明确边界。
 - [数据工作台与 `ctx.sql`](docs/DATA_WORKBENCH.md)：SQLite 存储分层、Host API、脚本 API 与扩展约定。
+- [BI 主页架构](docs/architecture/BI_DASHBOARD.md)：仪表盘定义、数据适配器、只读查询和响应式栅格扩展约定。
 - [AI Agent 设计](docs/AI_AGENT_DESIGN.md)：OpenAI-compatible 对话循环、RPAZ 工具和配置边界。
 - [Local Dify 开发平台](docs/LOCAL_DIFY.md)：应用、Provider、调试、Service API、DSL 兼容和套娃链路。
 - [Local Dify 工作流设计器](docs/LOCAL_DIFY_WORKFLOW.md)：Workflow IR、可视化画布、节点执行、校验、调试和 Dify Graph 互操作。

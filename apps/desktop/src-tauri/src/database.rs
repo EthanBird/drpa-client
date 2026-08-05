@@ -239,6 +239,16 @@ pub(crate) async fn agent_execute_read_only_query(
 }
 
 #[tauri::command]
+pub(crate) async fn execute_dashboard_database_query(
+    profile_id: String,
+    password: String,
+    sql: String,
+    paths: State<'_, AppPaths>,
+) -> Result<DatabaseQueryResult, String> {
+    agent_execute_read_only_query(&paths.workspace_root, &profile_id, &password, &sql).await
+}
+
+#[tauri::command]
 pub(crate) fn delete_remote_database_profile(
     profile_id: String,
     paths: State<'_, AppPaths>,

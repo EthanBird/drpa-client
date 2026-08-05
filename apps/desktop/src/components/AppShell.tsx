@@ -42,7 +42,7 @@ const primaryNavigation: Array<{
   icon: typeof Gauge;
   shortcut?: string;
 }> = [
-  { id: "overview", label: "总览", icon: Gauge },
+  { id: "overview", label: "BI 主页", icon: Gauge },
   { id: "library", label: "RPAZ 包", icon: Library },
   { id: "studio", label: "开发工作室", icon: Code2 },
   { id: "data", label: "数据工作台", icon: Database },

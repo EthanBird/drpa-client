@@ -5,6 +5,7 @@ import { App } from "./app/App";
 import "./styles/tokens.css";
 import "./styles/global.css";
 import "./styles/workspace.css";
+import "./styles/dashboard.css";
 import "./styles/data.css";
 import "./styles/local-dify.css";
 import "./styles/local-dify-workflow.css";

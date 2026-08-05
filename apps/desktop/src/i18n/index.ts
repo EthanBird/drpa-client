@@ -3,7 +3,7 @@ import { useCallback } from "react";
 import { useAppStore, type UiLanguage } from "../app/store";
 
 const zhCN = {
-  "nav.overview": "总览",
+  "nav.overview": "BI 主页",
   "nav.library": "RPAZ 包",
   "nav.studio": "开发工作室",
   "nav.data": "数据工作台",
@@ -69,7 +69,7 @@ const zhCN = {
 export type TranslationKey = keyof typeof zhCN;
 
 const enUS: Record<TranslationKey, string> = {
-  "nav.overview": "Overview",
+  "nav.overview": "BI Home",
   "nav.library": "RPAZ Packages",
   "nav.studio": "Studio",
   "nav.data": "Data Workspace",

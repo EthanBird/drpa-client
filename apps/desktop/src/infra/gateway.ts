@@ -21,6 +21,8 @@ import type {
   DatabaseInfo,
   DatabaseQueryResult,
   DatabaseTable,
+  DashboardDocument,
+  DashboardWidget,
   RemoteConnectionTest,
   RemoteDatabaseProfile,
   KnowledgeEntry,
@@ -124,6 +126,10 @@ export interface DesktopGateway {
   describeRemoteDatabaseTable(profileId: string, password: string, tableName: string): Promise<DatabaseColumn[]>;
   executeRemoteDatabaseSql(profileId: string, password: string, sql: string): Promise<DatabaseQueryResult>;
   getRemoteDatabaseSchemaContext(profileId: string, password: string): Promise<string>;
+  getBiDashboard(): Promise<DashboardDocument>;
+  saveBiDashboard(document: DashboardDocument): Promise<DashboardDocument>;
+  resetBiDashboard(): Promise<DashboardDocument>;
+  executeDashboardDatabaseQuery(profileId: string, password: string, sql: string): Promise<DatabaseQueryResult>;
   listLocalDifyApps(): Promise<LocalDifyApp[]>;
   createLocalDifyApp(name: string, mode: LocalDifyAppMode): Promise<LocalDifyApp>;
   saveLocalDifyApp(app: LocalDifyApp): Promise<LocalDifyApp>;
@@ -296,6 +302,42 @@ const mockKnowledgeContents = new Map<string, string>([
 let mockAgentAgentsMarkdown = "# DRPA Agent 工作约定\n\n- 修改项目后运行 `rpaz_validate`。\n";
 let mockAgentMemoryMarkdown = "# Agent Memory\n\n记录稳定事实与偏好。\n";
 let mockRemoteDatabaseProfiles: RemoteDatabaseProfile[] = [];
+const mockBiDashboardSeed: DashboardDocument = {
+  schema: 1,
+  activeDashboardId: "home",
+  dashboards: [{
+    id: "home",
+    title: "业务总览",
+    description: "把 DRPA 运行数据与数据工作台查询组合成一个可编辑的 BI 主页。",
+    columns: 12,
+    rowHeight: 58,
+    widgets: [
+      dashboardMetric("active-runs", "活动任务", 0, "activeRuns", "number", "#4f6bed"),
+      dashboardMetric("success-rate", "30 天成功率", 3, "successRate", "percent", "#159570"),
+      dashboardMetric("package-count", "RPAZ 包", 6, "packages", "number", "#8b5cf6"),
+      dashboardMetric("saved-hours", "预计节省时间", 9, "savedHours", "hours", "#d97706"),
+      {
+        id: "run-duration", title: "最近运行耗时", kind: "line", layout: { x: 0, y: 2, w: 8, h: 5 },
+        source: { kind: "builtin", dataset: "runHistory" },
+        encoding: { categoryField: "startedAt", valueField: "durationSeconds", seriesField: "" },
+        options: { text: "", numberFormat: "number", color: "#4f6bed", showLegend: true, refreshSeconds: 0 },
+      },
+      {
+        id: "run-status", title: "运行状态分布", kind: "pie", layout: { x: 8, y: 2, w: 4, h: 5 },
+        source: { kind: "builtin", dataset: "runStatus" },
+        encoding: { categoryField: "status", valueField: "count", seriesField: "" },
+        options: { text: "", numberFormat: "number", color: "#4f6bed", showLegend: true, refreshSeconds: 0 },
+      },
+      {
+        id: "recent-runs", title: "最近运行", kind: "table", layout: { x: 0, y: 7, w: 12, h: 5 },
+        source: { kind: "builtin", dataset: "runHistory" },
+        encoding: { categoryField: "", valueField: "", seriesField: "" },
+        options: { text: "", numberFormat: "number", color: "#4f6bed", showLegend: true, refreshSeconds: 0 },
+      },
+    ],
+  }],
+};
+let mockBiDashboard = structuredClone(mockBiDashboardSeed);
 let mockLocalDifyProviders: LocalDifyProvider[] = [{
   id: "provider-openai-compatible",
   name: "OpenAI 兼容 Provider",
@@ -607,6 +649,25 @@ function addMockProject(project: StudioProject): StudioProject {
   return structuredClone(existing ?? project);
 }
 
+function dashboardMetric(
+  id: string,
+  title: string,
+  x: number,
+  valueField: string,
+  numberFormat: DashboardWidget["options"]["numberFormat"],
+  color: string,
+): DashboardWidget {
+  return {
+    id,
+    title,
+    kind: "metric",
+    layout: { x, y: 0, w: 3, h: 2 },
+    source: { kind: "builtin", dataset: "workspaceSummary" },
+    encoding: { categoryField: "", valueField, seriesField: "" },
+    options: { text: "", numberFormat, color, showLegend: true, refreshSeconds: 0 },
+  };
+}
+
 const mockGateway: DesktopGateway = {
   async listWorkspaces() {
     return structuredClone(mockWorkspaces.map((workspace) => ({
@@ -885,6 +946,27 @@ const mockGateway: DesktopGateway = {
   },
   async getRemoteDatabaseSchemaContext() {
     return "-- PostgreSQL 数据库结构\n\nCREATE TABLE public.remote_tasks (id bigint NOT NULL);\n";
+  },
+  async getBiDashboard() {
+    return structuredClone(mockBiDashboard);
+  },
+  async saveBiDashboard(document) {
+    mockBiDashboard = structuredClone(document);
+    return structuredClone(mockBiDashboard);
+  },
+  async resetBiDashboard() {
+    mockBiDashboard = structuredClone(mockBiDashboardSeed);
+    return structuredClone(mockBiDashboard);
+  },
+  async executeDashboardDatabaseQuery(_profileId, _password, sql) {
+    return {
+      columns: ["category", "value"],
+      rows: [["预览", sql.length], ["示例", Math.max(1, Math.round(sql.length / 2))]],
+      affectedRows: 0,
+      durationMs: 3,
+      truncated: false,
+      statementType: "SELECT",
+    };
   },
   async listLocalDifyApps() {
     return structuredClone(mockLocalDifyApps);
@@ -1643,6 +1725,10 @@ const tauriGateway: DesktopGateway = {
   describeRemoteDatabaseTable: (profileId, password, tableName) => invoke<DatabaseColumn[]>("describe_remote_database_table", { profileId, password, tableName }),
   executeRemoteDatabaseSql: (profileId, password, sql) => invoke<DatabaseQueryResult>("execute_remote_database_sql", { profileId, password, sql }),
   getRemoteDatabaseSchemaContext: (profileId, password) => invoke<string>("get_remote_database_schema_context", { profileId, password }),
+  getBiDashboard: () => invoke<DashboardDocument>("get_bi_dashboard"),
+  saveBiDashboard: (document) => invoke<DashboardDocument>("save_bi_dashboard", { document }),
+  resetBiDashboard: () => invoke<DashboardDocument>("reset_bi_dashboard"),
+  executeDashboardDatabaseQuery: (profileId, password, sql) => invoke<DatabaseQueryResult>("execute_dashboard_database_query", { profileId, password, sql }),
   listLocalDifyApps: () => invoke<LocalDifyApp[]>("list_local_dify_apps"),
   createLocalDifyApp: (name, mode) => invoke<LocalDifyApp>("create_local_dify_app", { input: { name, mode } }),
   saveLocalDifyApp: (app) => invoke<LocalDifyApp>("save_local_dify_app", { app }),

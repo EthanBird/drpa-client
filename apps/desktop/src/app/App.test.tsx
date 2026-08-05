@@ -400,6 +400,19 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.queryByText("紧凑布局")).not.toBeInTheDocument();
   });
 
+  it("renders the low-code BI homepage and exposes the widget palette", async () => {
+    useAppStore.setState({ activeNavigation: "overview" });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "业务总览", level: 1 })).toBeVisible();
+    expect(screen.getByText("最近运行耗时")).toBeVisible();
+    expect(screen.getByText("运行状态分布")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "编辑主页" }));
+    expect(screen.getByRole("button", { name: "指标" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "折线图" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Markdown" })).toBeVisible();
+  });
+
   it("switches the shell and settings copy through the i18n catalog", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "设置" }));
