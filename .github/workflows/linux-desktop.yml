@@ -92,7 +92,14 @@ jobs:
           test -n "$runtime_stage"
           rm -rf apps/desktop/src-tauri/resources/linux/runtime
           mkdir -p apps/desktop/src-tauri/resources/linux/runtime
-          cp -a "$runtime_stage/." apps/desktop/src-tauri/resources/linux/runtime/
+          # Tauri's resource walker does not retain every symbolic link from the
+          # standalone Python distribution. Materialize link targets before
+          # bundling so the manifest executable survives AppImage/deb creation.
+          cp -aL "$runtime_stage/." apps/desktop/src-tauri/resources/linux/runtime/
+          if find apps/desktop/src-tauri/resources/linux/runtime -type l -print -quit | grep -q .; then
+            echo "sealed runtime still contains symbolic links" >&2
+            exit 1
+          fi
           python tools/linux/verify_runtime_layout.py --runtime-root apps/desktop/src-tauri/resources/linux/runtime
       - uses: actions/setup-node@v4
         with:
