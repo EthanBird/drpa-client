@@ -975,13 +975,12 @@ impl CronExpression {
         let day_of_month_matches = self.days_of_month[value.day() as usize];
         let day_of_week_matches =
             self.days_of_week[value.weekday().num_days_from_sunday() as usize];
-        let day_matches = match (self.day_of_month_wildcard, self.day_of_week_wildcard) {
+        match (self.day_of_month_wildcard, self.day_of_week_wildcard) {
             (true, true) => true,
             (true, false) => day_of_week_matches,
             (false, true) => day_of_month_matches,
             (false, false) => day_of_month_matches || day_of_week_matches,
-        };
-        day_matches
+        }
     }
 }
 
@@ -1515,9 +1514,9 @@ mod tests {
     #[test]
     fn running_slots_enforce_exclusive_and_parallel_policies() {
         let manager = SchedulerManager::default();
-        assert_eq!(manager.try_acquire("plan-a", false).unwrap(), true);
-        assert_eq!(manager.try_acquire("plan-a", false).unwrap(), false);
-        assert_eq!(manager.try_acquire("plan-a", true).unwrap(), true);
+        assert!(manager.try_acquire("plan-a", false).unwrap());
+        assert!(!manager.try_acquire("plan-a", false).unwrap());
+        assert!(manager.try_acquire("plan-a", true).unwrap());
         assert_eq!(manager.running_count("plan-a").unwrap(), 2);
         manager.release("plan-a");
         manager.release("plan-a");

@@ -2788,12 +2788,15 @@ mod tests {
     const PROCESS_TREE_HELPER_TEST: &str = "agent::tests::python_process_tree_test_helper";
 
     #[test]
+    #[allow(clippy::zombie_processes)]
     fn python_process_tree_test_helper() {
         match std::env::var(PROCESS_TREE_HELPER_ENV).as_deref() {
             Ok("parent") => {
                 // Give the supervising test enough time to attach this process to
                 // its Job Object/process group before creating the descendant.
                 thread::sleep(Duration::from_millis(200));
+                // The supervising test owns and terminates the complete process tree.
+                // Waiting here would prevent this helper from exercising descendant cleanup.
                 let descendant = Command::new(std::env::current_exe().unwrap())
                     .args(["--exact", PROCESS_TREE_HELPER_TEST, "--nocapture"])
                     .env(PROCESS_TREE_HELPER_ENV, "descendant")

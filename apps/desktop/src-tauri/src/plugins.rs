@@ -1107,6 +1107,7 @@ fn start_plugin_process(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_plugin_service(
     workspace_root: &Path,
     plugin_id: &str,
@@ -1625,7 +1626,7 @@ fn refresh_processes(manager: &PluginManager) -> Result<(), String> {
             .entry(manager_plugin_key)
             .and_modify(|current| {
                 if !current.is_empty() {
-                    current.push_str("；");
+                    current.push('；');
                 }
                 current.push_str(&error);
             })
@@ -2668,22 +2669,23 @@ fn ensure_plugins_root(workspace_root: &Path) -> Result<(), String> {
 fn ensure_plugins_root_uncached(workspace_root: &Path) -> Result<(), String> {
     let root = plugins_root(workspace_root);
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-    if BUILTIN_DIFY2API_SERVICE_NAME.is_empty() {
+    let service_name = BUILTIN_DIFY2API_SERVICE_NAME;
+    // Unsupported desktop targets use an empty compile-time sentinel so their
+    // legacy built-in service is retired instead of installing a foreign binary.
+    #[allow(clippy::const_is_empty)]
+    if service_name.is_empty() {
         return retire_legacy_builtin_dify(&root);
     }
     let builtin = root.join("dify2api");
     let removed = root.join(".removed-dify2api");
-    if !removed.is_file()
-        && !builtin.join("plugin.yaml").is_file()
-        && !BUILTIN_DIFY2API_SERVICE_NAME.is_empty()
-    {
+    if !removed.is_file() && !builtin.join("plugin.yaml").is_file() {
         fs::create_dir_all(builtin.join("service")).map_err(|error| error.to_string())?;
         fs::write(builtin.join(".builtin"), b"dify2api@1.0.0\n")
             .map_err(|error| error.to_string())?;
     }
     if builtin.join(".builtin").is_file() {
         let marker = fs::read_to_string(builtin.join(".builtin")).unwrap_or_default();
-        let service_path = builtin.join(BUILTIN_DIFY2API_SERVICE_NAME);
+        let service_path = builtin.join(service_name);
         let bundle_is_current = marker.trim() == BUILTIN_DIFY2API_MARKER
             && builtin.join("plugin.yaml").is_file()
             && builtin.join("config.schema.json").is_file()

@@ -3410,7 +3410,7 @@ fn handle_service_connection(mut stream: TcpStream, paths: &AppPaths) -> Result<
         let result = run_app_internal(paths, run_request, |event| {
             if let LocalDifyStreamEvent::Delta { content } = event {
                 let event = json!({"event": "message", "answer": content, "conversation_id": "", "message_id": ""});
-                let _ = writeln!(stream, "data: {}\n", event);
+                let _ = writeln!(stream, "data: {event}\n");
                 let _ = stream.flush();
             }
         });

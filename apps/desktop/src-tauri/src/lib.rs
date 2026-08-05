@@ -402,6 +402,7 @@ fn complete_startup(app: tauri::AppHandle, startup: State<'_, StartupState>) -> 
     Ok(())
 }
 
+#[cfg(windows)]
 fn complete_startup_from_handle(app: &tauri::AppHandle) {
     let Some(startup) = app.try_state::<StartupState>() else {
         return;
