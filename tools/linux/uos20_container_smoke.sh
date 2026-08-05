@@ -163,7 +163,10 @@ export DISPLAY=:99
 window_id="$(xdotool search --onlyvisible --name '^DRPA Next$' | head -n 1)"
 test -n "$window_id"
 xdotool windowfocus --sync "$window_id"
-xdotool key --clearmodifiers ctrl+k
+# Open the palette through its always-present sidebar trigger. A relative
+# pointer event is stable with or without a window manager and avoids distro
+# differences in synthetic Ctrl-key modifier mapping.
+xdotool mousemove --sync --window "$window_id" 27 60 click 1
 # The command palette input owns autofocus. Typing directly keeps this smoke
 # independent of page-header density and dashboard layout coordinates while
 # still exercising WebKit's native keyboard/input-method event path.
@@ -174,7 +177,7 @@ xwd -display :99 -root -silent -out /tmp/drpa-uos20-input-stage.xwd
 convert /tmp/drpa-uos20-input-stage.xwd "$diagnostics/drpa-uos20-input-stage.png"
 xdotool key --clearmodifiers Escape
 sleep 0.2
-xdotool mousemove --sync 100 155 click 1
+xdotool mousemove --sync --window "$window_id" 100 155 click 1
 xwd -display :99 -root -silent -out /tmp/drpa-uos20-post-input-click.xwd
 convert /tmp/drpa-uos20-post-input-click.xwd "$diagnostics/drpa-uos20-post-input-click.png"
 input_responsive=0
