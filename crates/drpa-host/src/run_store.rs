@@ -513,7 +513,7 @@ fn runtime_event_fields(
             Some("progress".to_owned()),
             message
                 .clone()
-                .unwrap_or_else(|| format!("进度 {:.0}%", value)),
+                .unwrap_or_else(|| format!("进度 {value:.0}%")),
         ),
         RuntimeEvent::Artifact {
             sequence,
