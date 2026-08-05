@@ -5,6 +5,7 @@ import { parsePythonSignature, StudioPage } from "../pages/StudioPage";
 import { AgentPage } from "../pages/AgentPage";
 import { WorkbenchPage } from "../pages/WorkbenchPage";
 import { RuntimePage } from "../pages/RuntimePage";
+import { SecretsPage } from "../pages/SecretsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { desktopGateway } from "../infra/gateway";
 import { App } from "./App";
@@ -34,6 +35,7 @@ vi.mock("monaco-editor/esm/vs/editor/editor.worker.js?worker", () => ({ default:
 vi.mock("monaco-editor/esm/vs/basic-languages/python/python.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js", () => ({}));
+vi.mock("qrcode", () => ({ default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,dmF1bHQ=") } }));
 
 
 describe("DRPA Next desktop shell", () => {
@@ -897,6 +899,66 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "新建项目" }));
 
     expect(await screen.findByText(/内部 ID 已自动生成/)).toBeVisible();
+  });
+
+  it("keeps multiple Studio files in tabs and supports save and close shortcuts", async () => {
+    const project = { id: "project-tabbed-editor", name: "多页签项目", files: ["main.py", "worker.py", "manifest.yaml"] };
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
+    vi.spyOn(desktopGateway, "readProjectFile").mockImplementation(async (_projectId, path) => path === "worker.py" ? "def work():\n    return 1\n" : path === "manifest.yaml" ? "name: tabbed\n" : "def main(ctx):\n    return {}\n");
+    const writeFile = vi.spyOn(desktopGateway, "writeProjectFile").mockResolvedValue();
+    render(<StudioPage />);
+
+    expect(await screen.findByRole("tab", { name: "main.py" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("button", { name: "worker.py" }));
+    expect(await screen.findByRole("tab", { name: "worker.py" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "main.py" })).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("mock-editor"), { target: { value: "def work():\n    return 2\n" } });
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    await waitFor(() => expect(writeFile).toHaveBeenCalledWith(project.id, "worker.py", "def work():\n    return 2\n"));
+
+    fireEvent.keyDown(window, { key: "w", ctrlKey: true });
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "worker.py" })).not.toBeInTheDocument());
+    expect(screen.getByRole("tab", { name: "main.py" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("initializes the local vault with a TOTP QR code and presents the recovery code once", async () => {
+    const lockedStatus = {
+      initialized: false,
+      unlocked: false,
+      itemCount: 0,
+      failedAttempts: 0,
+      retryAfterSeconds: 0,
+      service: { running: false, port: 34131, endpoint: "http://127.0.0.1:34131/v1/vault", lastError: "" },
+    };
+    const unlockedStatus = { ...lockedStatus, initialized: true, unlocked: true, unlockedUntil: Math.floor(Date.now() / 1000) + 86_400 };
+    vi.spyOn(desktopGateway, "getVaultStatus").mockResolvedValue(lockedStatus);
+    vi.spyOn(desktopGateway, "beginVaultSetup").mockResolvedValue({
+      setupId: "setup-test",
+      account: "developer@local",
+      issuer: "DRPA",
+      manualKey: "JBSWY3DPEHPK3PXP",
+      otpAuthUri: "otpauth://totp/DRPA:developer?secret=JBSWY3DPEHPK3PXP&issuer=DRPA",
+      expiresAt: Math.floor(Date.now() / 1000) + 600,
+    });
+    vi.spyOn(desktopGateway, "completeVaultSetup").mockResolvedValue({
+      status: unlockedStatus,
+      serviceToken: "runtime-token",
+      recoveryCode: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567",
+    });
+    vi.spyOn(desktopGateway, "listVaultCredentials").mockResolvedValue([]);
+    render(<SecretsPage />);
+
+    expect(await screen.findByRole("heading", { name: "开发凭据保险箱" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "生成初始化二维码" }));
+    expect(await screen.findByAltText("Google Authenticator 初始化二维码")).toHaveAttribute("src", expect.stringContaining("data:image/png"));
+    fireEvent.change(screen.getByLabelText("6 位验证码"), { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "验证并创建保险箱" }));
+
+    expect(await screen.findByRole("heading", { name: "保存恢复码" })).toBeVisible();
+    expect(screen.getByText("ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "我已妥善保存" }));
+    expect((await screen.findAllByText("全部项目"))[0]).toBeVisible();
   });
 
   it("runs the shared AI Agent from the Studio right panel with the selected project", async () => {

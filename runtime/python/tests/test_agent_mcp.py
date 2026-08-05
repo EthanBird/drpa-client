@@ -19,6 +19,9 @@ def test_mcp_exposes_chrome_rpaz_and_run_debug_tools() -> None:
         "rpaz_run_package",
         "run_list",
         "run_get_detail",
+        "vault_list_credentials",
+        "vault_get_credential",
+        "vault_upsert_credential",
     } <= names
 
 

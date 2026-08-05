@@ -367,7 +367,7 @@ cargo test -p drpa-desktop
 ./.venv/bin/python -m unittest discover -s tools/linux/tests -v
 ./.venv/bin/python -m compileall -q tools/offline tools/linux offline/bootstrap runtime/python/src
 ./.venv/bin/python tools/offline/validate_requirements.py offline/requirements/runtime.txt
-./.venv/bin/python tools/release/check_version_consistency.py --expected 2.0.1
+./.venv/bin/python tools/release/check_version_consistency.py --expected 2.0.2
 ```
 
 `tools/windows/tests` 在 Linux CI 主要运行安装库存、路径与 Windows WebView 配置的纯 Python策略测试，不代表 Linux 使用 Windows 安装器。

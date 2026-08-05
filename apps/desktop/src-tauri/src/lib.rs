@@ -26,6 +26,7 @@ mod agent_documents;
 mod agent_extensions;
 mod agent_sessions;
 mod automations;
+mod credential_vault;
 mod dashboard;
 mod database;
 mod jcode;
@@ -1397,6 +1398,7 @@ async fn run_agent_turn(
     paths: State<'_, AppPaths>,
     state: State<'_, HostState>,
     processes: State<'_, RunProcessManager>,
+    vault: State<'_, credential_vault::CredentialVaultManager>,
 ) -> Result<agent::AgentTurnResult, String> {
     let event_name = agent::agent_stream_event_name(&request.request_id)?;
     let paths = paths.inner().clone();
@@ -1404,6 +1406,7 @@ async fn run_agent_turn(
         state.inner().clone(),
         paths.clone(),
         processes.inner().clone(),
+        vault.inner().clone(),
     );
     tauri::async_runtime::spawn_blocking(move || {
         let runtime = if request.mode == "sql" {
@@ -3115,6 +3118,7 @@ fn initialize_desktop(
     app.manage(system_metrics::SystemMetricsMonitor::default());
     app.manage(plugin_manager);
     app.manage(local_dify::LocalDifyServiceManager::default());
+    app.manage(credential_vault::CredentialVaultManager::default());
 
     set_startup_progress_handle(&app, 76, "正在装载本地服务", "services://agent-tools");
     let scheduler = automations::SchedulerManager::default();
@@ -3344,6 +3348,19 @@ pub fn run() {
             dashboard::get_bi_dashboard,
             dashboard::save_bi_dashboard,
             dashboard::reset_bi_dashboard,
+            credential_vault::get_vault_status,
+            credential_vault::begin_vault_setup,
+            credential_vault::complete_vault_setup,
+            credential_vault::unlock_vault,
+            credential_vault::unlock_vault_with_recovery,
+            credential_vault::lock_vault,
+            credential_vault::list_vault_credentials,
+            credential_vault::get_vault_credential,
+            credential_vault::save_vault_credential,
+            credential_vault::delete_vault_credential,
+            credential_vault::start_vault_service,
+            credential_vault::stop_vault_service,
+            credential_vault::export_vault_recovery_code,
             knowledge_base::list_knowledge_bases,
             knowledge_base::create_knowledge_base,
             knowledge_base::delete_knowledge_base,

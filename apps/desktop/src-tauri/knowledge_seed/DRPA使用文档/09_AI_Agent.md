@@ -107,6 +107,8 @@
 
 API Key 直接输入时只保留当前应用会话；插件 Provider 可使用宿主安全引用。
 
+保险箱已解锁时，RPAZ Agent 与 JCode Agent 可使用 `vault_list_credentials`、`vault_get_credential` 和 `vault_upsert_credential`。列表只返回摘要；读取工具会把指定 secret 提供给当前模型工具回合，但持久会话和工具时间线只保存脱敏摘要。先在[凭据保险箱](13_凭据保险箱.md)完成 6 位验证码验证，并且只向可信模型 Provider 提供任务所需的条目。
+
 ## 限制与安全（工具边界）
 
 - 工具总开关关闭后，模型不会看到工具定义；Host 执行时还会复核分类权限。

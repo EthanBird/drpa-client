@@ -248,6 +248,9 @@ TOOLS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "rpaz_run_package": lambda arguments: _host_call("rpaz_run_package", arguments),
     "run_list": lambda arguments: _host_call("run_list", arguments),
     "run_get_detail": lambda arguments: _host_call("run_get_detail", arguments),
+    "vault_list_credentials": lambda arguments: _host_call("vault_list_credentials", arguments),
+    "vault_get_credential": lambda arguments: _host_call("vault_get_credential", arguments),
+    "vault_upsert_credential": lambda arguments: _host_call("vault_upsert_credential", arguments),
 }
 
 
@@ -270,6 +273,9 @@ TOOL_DEFINITIONS = [
     {"name": "rpaz_run_package", "description": "Run an installed RPAZ package through DRPA Host so it appears in run history.", "inputSchema": _schema({"packageId": {"type": "string"}, "profileId": {"type": "string"}, "parameters": {"type": "object"}}, ["packageId"])},
     {"name": "run_list", "description": "List DRPA run records.", "inputSchema": _schema({"packageId": {"type": "string"}, "status": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}})},
     {"name": "run_get_detail", "description": "Read complete DRPA run details, structured events, and debug logs.", "inputSchema": _schema({"runId": {"type": "string"}}, ["runId"])},
+    {"name": "vault_list_credentials", "description": "List unlocked DRPA credential summaries without secret values.", "inputSchema": _schema({})},
+    {"name": "vault_get_credential", "description": "Read one sensitive credential after the user has unlocked the local vault.", "inputSchema": _schema({"id": {"type": "string"}}, ["id"])},
+    {"name": "vault_upsert_credential", "description": "Create or update a credential in the unlocked local vault.", "inputSchema": _schema({"id": {"type": "string"}, "name": {"type": "string"}, "kind": {"type": "string", "enum": ["login", "apiKey", "token", "database", "ssh", "secureNote"]}, "username": {"type": "string"}, "secret": {"type": "string"}, "uri": {"type": "string"}, "notes": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}, "favorite": {"type": "boolean"}}, ["name", "kind", "secret"])},
 ]
 
 
@@ -294,7 +300,7 @@ def _serve_mcp() -> int:
                 response = _mcp_result(request_id, {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "drpa-agent-tools", "version": "2.0.1"},
+                    "serverInfo": {"name": "drpa-agent-tools", "version": "2.0.2"},
                 })
             elif method == "tools/list":
                 response = _mcp_result(request_id, {"tools": TOOL_DEFINITIONS})

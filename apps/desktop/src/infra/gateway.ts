@@ -23,6 +23,13 @@ import type {
   DatabaseTable,
   DashboardDocument,
   DashboardWidget,
+  VaultCredential,
+  VaultCredentialInput,
+  VaultCredentialSummary,
+  VaultServiceStatus,
+  VaultSetup,
+  VaultStatus,
+  VaultUnlockResult,
   RemoteConnectionTest,
   RemoteDatabaseProfile,
   KnowledgeEntry,
@@ -130,6 +137,19 @@ export interface DesktopGateway {
   saveBiDashboard(document: DashboardDocument): Promise<DashboardDocument>;
   resetBiDashboard(): Promise<DashboardDocument>;
   executeDashboardDatabaseQuery(profileId: string, password: string, sql: string): Promise<DatabaseQueryResult>;
+  getVaultStatus(): Promise<VaultStatus>;
+  beginVaultSetup(): Promise<VaultSetup>;
+  completeVaultSetup(setupId: string, code: string): Promise<VaultUnlockResult>;
+  unlockVault(code: string): Promise<VaultUnlockResult>;
+  unlockVaultWithRecovery(recoveryCode: string): Promise<VaultUnlockResult>;
+  lockVault(): Promise<void>;
+  listVaultCredentials(): Promise<VaultCredentialSummary[]>;
+  getVaultCredential(id: string): Promise<VaultCredential>;
+  saveVaultCredential(input: VaultCredentialInput): Promise<VaultCredential>;
+  deleteVaultCredential(id: string): Promise<void>;
+  startVaultService(port: number): Promise<VaultServiceStatus>;
+  stopVaultService(): Promise<VaultServiceStatus>;
+  exportVaultRecoveryCode(recoveryCode: string, targetPath: string): Promise<string>;
   listLocalDifyApps(): Promise<LocalDifyApp[]>;
   createLocalDifyApp(name: string, mode: LocalDifyAppMode): Promise<LocalDifyApp>;
   saveLocalDifyApp(app: LocalDifyApp): Promise<LocalDifyApp>;
@@ -302,6 +322,10 @@ const mockKnowledgeContents = new Map<string, string>([
 let mockAgentAgentsMarkdown = "# DRPA Agent 工作约定\n\n- 修改项目后运行 `rpaz_validate`。\n";
 let mockAgentMemoryMarkdown = "# Agent Memory\n\n记录稳定事实与偏好。\n";
 let mockRemoteDatabaseProfiles: RemoteDatabaseProfile[] = [];
+let mockVaultUnlocked = false;
+let mockVaultInitialized = false;
+let mockVaultService: VaultServiceStatus = { running: false, port: 34131, endpoint: "http://127.0.0.1:34131/v1/vault", lastError: "" };
+let mockVaultCredentials: VaultCredential[] = [];
 const mockBiDashboardSeed: DashboardDocument = {
   schema: 1,
   activeDashboardId: "home",
@@ -668,6 +692,18 @@ function dashboardMetric(
   };
 }
 
+function mockVaultStatus(): VaultStatus {
+  return {
+    initialized: mockVaultInitialized,
+    unlocked: mockVaultUnlocked,
+    unlockedUntil: mockVaultUnlocked ? Math.floor(Date.now() / 1000) + 86_400 : undefined,
+    itemCount: mockVaultUnlocked ? mockVaultCredentials.length : 0,
+    failedAttempts: 0,
+    retryAfterSeconds: 0,
+    service: structuredClone(mockVaultService),
+  };
+}
+
 const mockGateway: DesktopGateway = {
   async listWorkspaces() {
     return structuredClone(mockWorkspaces.map((workspace) => ({
@@ -968,6 +1004,49 @@ const mockGateway: DesktopGateway = {
       statementType: "SELECT",
     };
   },
+  async getVaultStatus() { return mockVaultStatus(); },
+  async beginVaultSetup() {
+    return { setupId: "setup-browser-preview", account: "developer@browser", issuer: "DRPA", manualKey: "JBSWY3DPEHPK3PXP", otpAuthUri: "otpauth://totp/DRPA%3Adeveloper%40browser?secret=JBSWY3DPEHPK3PXP&issuer=DRPA&algorithm=SHA1&digits=6&period=30", expiresAt: Math.floor(Date.now() / 1000) + 600 };
+  },
+  async completeVaultSetup(_setupId, code) {
+    if (!/^\d{6}$/.test(code)) throw new Error("请输入 6 位验证码");
+    mockVaultInitialized = true;
+    mockVaultUnlocked = true;
+    return { status: mockVaultStatus(), serviceToken: "browser-runtime-token", recoveryCode: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567" };
+  },
+  async unlockVault(code) {
+    if (!/^\d{6}$/.test(code)) throw new Error("请输入 6 位验证码");
+    mockVaultUnlocked = true;
+    return { status: mockVaultStatus(), serviceToken: "browser-runtime-token" };
+  },
+  async unlockVaultWithRecovery(recoveryCode) {
+    if (!recoveryCode.trim()) throw new Error("请输入恢复码");
+    mockVaultUnlocked = true;
+    return { status: mockVaultStatus(), serviceToken: "browser-runtime-token", recoveryCode: "NEW2-RECO-VERY2-CODE-ABCD-EFGH-IJKL-MNOP" };
+  },
+  async lockVault() { mockVaultUnlocked = false; },
+  async listVaultCredentials() {
+    if (!mockVaultUnlocked) throw new Error("凭据保险箱已锁定");
+    return structuredClone(mockVaultCredentials.map(({ secret, notes: _notes, createdAt: _createdAt, ...item }) => ({ ...item, hasSecret: Boolean(secret) })));
+  },
+  async getVaultCredential(id) {
+    if (!mockVaultUnlocked) throw new Error("凭据保险箱已锁定");
+    const item = mockVaultCredentials.find((credential) => credential.id === id);
+    if (!item) throw new Error("凭据不存在");
+    return structuredClone(item);
+  },
+  async saveVaultCredential(input) {
+    if (!mockVaultUnlocked) throw new Error("凭据保险箱已锁定");
+    const now = Math.floor(Date.now() / 1000);
+    const existing = mockVaultCredentials.find((credential) => credential.id === input.id);
+    const saved: VaultCredential = { ...input, id: input.id || `credential-${Date.now()}`, hasSecret: Boolean(input.secret), createdAt: existing?.createdAt ?? now, updatedAt: now };
+    mockVaultCredentials = existing ? mockVaultCredentials.map((item) => item.id === saved.id ? saved : item) : [saved, ...mockVaultCredentials];
+    return structuredClone(saved);
+  },
+  async deleteVaultCredential(id) { mockVaultCredentials = mockVaultCredentials.filter((item) => item.id !== id); },
+  async startVaultService(port) { mockVaultService = { running: true, port, endpoint: `http://127.0.0.1:${port}/v1/vault`, startedAt: Math.floor(Date.now() / 1000), lastError: "" }; return structuredClone(mockVaultService); },
+  async stopVaultService() { mockVaultService = { ...mockVaultService, running: false, startedAt: undefined }; return structuredClone(mockVaultService); },
+  async exportVaultRecoveryCode(_recoveryCode, targetPath) { return targetPath; },
   async listLocalDifyApps() {
     return structuredClone(mockLocalDifyApps);
   },
@@ -1729,6 +1808,19 @@ const tauriGateway: DesktopGateway = {
   saveBiDashboard: (document) => invoke<DashboardDocument>("save_bi_dashboard", { document }),
   resetBiDashboard: () => invoke<DashboardDocument>("reset_bi_dashboard"),
   executeDashboardDatabaseQuery: (profileId, password, sql) => invoke<DatabaseQueryResult>("execute_dashboard_database_query", { profileId, password, sql }),
+  getVaultStatus: () => invoke<VaultStatus>("get_vault_status"),
+  beginVaultSetup: () => invoke<VaultSetup>("begin_vault_setup"),
+  completeVaultSetup: (setupId, code) => invoke<VaultUnlockResult>("complete_vault_setup", { setupId, code }),
+  unlockVault: (code) => invoke<VaultUnlockResult>("unlock_vault", { code }),
+  unlockVaultWithRecovery: (recoveryCode) => invoke<VaultUnlockResult>("unlock_vault_with_recovery", { recoveryCode }),
+  lockVault: () => invoke<void>("lock_vault"),
+  listVaultCredentials: () => invoke<VaultCredentialSummary[]>("list_vault_credentials"),
+  getVaultCredential: (id) => invoke<VaultCredential>("get_vault_credential", { id }),
+  saveVaultCredential: (input) => invoke<VaultCredential>("save_vault_credential", { input }),
+  deleteVaultCredential: (id) => invoke<void>("delete_vault_credential", { id }),
+  startVaultService: (port) => invoke<VaultServiceStatus>("start_vault_service", { port }),
+  stopVaultService: () => invoke<VaultServiceStatus>("stop_vault_service"),
+  exportVaultRecoveryCode: (recoveryCode, targetPath) => invoke<string>("export_vault_recovery_code", { recoveryCode, targetPath }),
   listLocalDifyApps: () => invoke<LocalDifyApp[]>("list_local_dify_apps"),
   createLocalDifyApp: (name, mode) => invoke<LocalDifyApp>("create_local_dify_app", { input: { name, mode } }),
   saveLocalDifyApp: (app) => invoke<LocalDifyApp>("save_local_dify_app", { app }),

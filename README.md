@@ -2,7 +2,7 @@
 
 DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包运行管理器。用户无需配置系统 Python，即可安装、开发、运行和观察 `.rpaz` 自动化脚本包。
 
-当前版本为 `2.0.1`。Windows x64 只交付完整离线 Setup，升级时直接运行新版安装包并选择原安装目录；Linux x86_64 继续使用 `1.0.0` AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
+当前版本为 `2.0.2`。Windows x64 只交付完整离线 Setup，升级时直接运行新版安装包并选择原安装目录；Linux x86_64 继续使用 `1.0.0` AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
 ## 当前能力
 
@@ -10,7 +10,7 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - 引导式、无注册表写入的 Windows NSIS 安装器；应用和用户数据均可放在非系统盘安装目录。
 - 内置 CPython 3.11、完整离线 wheels、Chrome for Testing、Fixed Version WebView2 和真实 Jupyter Kernel 依赖。
 - 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
-- 工作室可新建项目、编辑源码和 Notebook、直接运行工作副本、导出 `.rpaz`，也可将已安装包复制为可编辑项目。
+- 工作室可新建项目、通过 VS Code 风格多文件页签编辑源码和 Notebook，支持保存/全部保存/关闭/切换快捷键、脏页签确认、直接运行工作副本和导出 `.rpaz`，也可将已安装包复制为可编辑项目。
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路，并通过标准 `complete_request` / `inspect_request` 为 Python 文件和 Notebook 提供离线补全、悬停文档与参数提示。
 - 运行记录持久化到 Host SQLite；可进入详情查看完整时间线、筛选/复制日志、参数、产物、错误回溯和重启中断状态。
 - 内置自有数据工作台：工作区 SQLite、外部 SQLite、PostgreSQL/MySQL 与只读 Excel 工作簿数据源，对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；Excel sheet 会映射为可查询表，RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
@@ -20,18 +20,19 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - Skills 2.0 使用 `skill.yaml + instructions.md` 能力包，可携带工作流、资源、可执行 Python/Command 工具和可调用代码库；设置页提供目录树、Monaco 编辑及文件/目录创建、重命名、删除，旧版 `SKILL.md` 自动迁移。
 - 内置能力驱动的离线插件系统：支持 `.drpa-plugin` 安装、配置、启停、多服务、Provider、工具、调试端点、结构化事件和自定义面板；插件开发工作台可生成 Tool/Service/Bundle 模板并验证、构建、安装。内置 Dify2API 可把 Dify App API 转换为本地 OpenAI 兼容接口、适配 `tool_calls`，并提供服务与上游调试器。
 - 内置本地 Markdown 知识库：支持目录树、阅读/编辑/分栏渲染、相对文档跳转、内联新建/重命名/删除、拖拽导入、原生导入导出与自动保存，并首次初始化多篇详细 RPAZ 开发指南。
+- 内置开发凭据保险箱：完整字段 AES-256-GCM 加密、Windows DPAPI 设备保护、Google Authenticator 兼容 TOTP 初始化/解锁、一次性轮换恢复码、24 小时运行时会话、Bitwarden 风格三栏管理、显式启动的 loopback 读写 API，以及 RPAZ/JCode Agent 凭据工具。
 - Windows 版本统一使用全量离线 Setup；安装器覆盖应用与封装运行时，始终保留安装目录下的 `data/` 用户数据。
 - Windows 上 `ctx.browser()` 使用工作区级持久 Chrome/Profile；任务成功、失败或调用 `page.quit()` 都只释放当前脚本句柄，不退出浏览器，后续 Studio 与多个 RPAZ 任务可直接复用登录态和调试页面。
 
-Windows 2.0.1 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.0.1>
+Windows 2.0.2 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.0.2>
 
-> `2.0.1` 是当前推荐的 Windows 全量离线安装包。升级时退出旧版并把 Setup 安装到原目录；安装器不会覆盖 `data/`。
+> `2.0.2` 是当前推荐的 Windows 全量离线安装包。升级时退出旧版并把 Setup 安装到原目录；安装器不会覆盖 `data/`。
 
 ## 平台状态
 
 | 平台 | 源码开发 | CI | 正式发行 |
 | --- | --- | --- | --- |
-| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `2.0.1` 全量离线安装包 |
+| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `2.0.2` 全量离线安装包 |
 | Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 构建；Debian 10 与 Deepin 20.8/glibc 2.28 实装、React/IPC 和非白屏截图门禁 | `1.0.0` AppImage、现代 deb 与 UOS 20 专用 deb |
 | macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
 
@@ -103,6 +104,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - [Jupyter 集成](docs/JUPYTER_INTEGRATION.md)：真实能力、VS Code Jupyter 对照和明确边界。
 - [数据工作台与 `ctx.sql`](docs/DATA_WORKBENCH.md)：SQLite 存储分层、Host API、脚本 API 与扩展约定。
 - [BI 主页架构](docs/architecture/BI_DASHBOARD.md)：仪表盘定义、数据适配器、只读查询和响应式栅格扩展约定。
+- [凭据保险箱安全架构](docs/architecture/CREDENTIAL_VAULT.md)：密钥层级、TOTP/恢复流程、loopback API、Agent 脱敏和威胁模型。
 - [AI Agent 设计](docs/AI_AGENT_DESIGN.md)：OpenAI-compatible 对话循环、RPAZ 工具和配置边界。
 - [Local Dify 开发平台](docs/LOCAL_DIFY.md)：应用、Provider、调试、Service API、DSL 兼容和套娃链路。
 - [Local Dify 工作流设计器](docs/LOCAL_DIFY_WORKFLOW.md)：Workflow IR、可视化画布、节点执行、校验、调试和 Dify Graph 互操作。
@@ -114,7 +116,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 
 ## 当前限制
 
-- Windows 当前稳定 Release 为 `desktop-v2.0.0` x64 Setup；Linux 发行资产继续保持在 `desktop-v1.0.0`，包含 runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。UOS 包固定 X11 软件渲染以换取老显卡兼容性，仍需要系统内核和 X11 server；真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
+- Windows 当前稳定 Release 为 `desktop-v2.0.2` x64 Setup；Linux 发行资产继续保持在 `desktop-v1.0.0`，包含 runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。UOS 包固定 X11 软件渲染以换取老显卡兼容性，仍需要系统内核和 X11 server；真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
 - Windows 升级统一使用新版全量 Setup，不再发布或在界面中接受 `.drpa-update`。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
 - AI Agent 当前采用单 Orchestrator，已支持流式 Markdown、ProviderAdapter、动态 ToolRegistry、Skills 2.0、插件 Provider/Tool 与本地会话；diff/checkpoint、会话导出、长期服务双向 JSON-RPC 和 Skill evaluation 仍在后续阶段。

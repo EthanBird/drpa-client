@@ -9,6 +9,7 @@ import "./styles/dashboard.css";
 import "./styles/data.css";
 import "./styles/local-dify.css";
 import "./styles/local-dify-workflow.css";
+import "./styles/secrets.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

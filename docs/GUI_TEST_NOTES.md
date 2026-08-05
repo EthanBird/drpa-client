@@ -1,5 +1,13 @@
 # GUI 测试记录
 
+## 2026-08-05 Studio 多页签与凭据保险箱
+
+- 浏览器预览以 1280×720 截图复核开发工作室：同时打开 `main.py` 与 `manifest.yaml` 后出现两个独立页签，当前页签和关闭按钮清晰，快捷键提示位于页签条右侧，编辑区未溢出。
+- 凭据保险箱覆盖初始化总览、Google Authenticator 二维码/手动密钥、一次性恢复码和三栏管理工作区四种状态；主工作区在 1280×720 下完整显示分类、列表、详情和服务控制，没有黑色缺失配色或遮挡。
+- 浏览器控制台四个状态均为 0 error / 0 warning。
+- 截图保存在 `target/v2.0.2-screenshots/`：`studio-tabs.png`、`vault-onboarding.png`、`vault-totp-setup.png`、`vault-recovery.png`、`vault-workspace.png`。
+- Testing Library 新增多页签保存/关闭快捷键、TOTP 初始化与恢复码一次性展示回归；Rust 新增 RFC 6238、密文往返/锁定和恢复码轮换测试。
+
 ## 2026-07-14 · Markdown 知识库回归
 
 - 构建并启动 `target/debug/drpa-desktop.exe`，实际 Host 在 `target/debug/data/knowledge/RPAZ 开发指南/` 首次生成 11 篇 Markdown；逐文件确认存在，`03_ctx上下文与默认配置.md` 为 UTF-8 且内容完整。

@@ -36,7 +36,7 @@ jobs:
     runs-on: windows-latest
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 2.0.1
+      DRPA_VERSION: 2.0.2
       WEBVIEW2_VERSION: 150.0.4078.65
       WEBVIEW2_URL: https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c00b9782-0422-4114-be27-8eec079b394d/Microsoft.WebView2.FixedVersionRuntime.150.0.4078.65.x64.cab
       WEBVIEW2_SHA256: ca01385bc232dea83242c35ed78e98403866a36b1a0952e97fa7fd870fc39ab4
@@ -129,11 +129,11 @@ jobs:
           retention-days: 30
 
   publish:
-    name: Publish Windows v2.0.1 full release
+    name: Publish Windows v2.0.2 full release
     needs: build
     runs-on: ubuntu-latest
     env:
-      DRPA_VERSION: 2.0.1
+      DRPA_VERSION: 2.0.2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -157,7 +157,7 @@ jobs:
           mapfile -t assets < <(find artifacts -type f | sort)
           tag="desktop-v${DRPA_VERSION}"
           title="DRPA Next ${DRPA_VERSION} Windows x64 full offline installer"
-          notes="$(printf 'DRPA Next %s Windows x64 full offline installer.\n\nIncludes the RPAZ Agent/JCode Chrome bridge, RPAZ execution and debug-log tools, a 75%%-200%% font scale, Chinese/English UI, and automatic reuse of the AI Agent provider in the workflow designer. WebView2 now uses a lower-memory policy and feature pages are loaded on demand.\n\nRelease assets contain the full Setup installer, install inventory, and Bing example RPAZ only. Incremental update packages are not produced.' "$DRPA_VERSION")"
+          notes="$(printf 'DRPA Next %s Windows x64 full offline installer.\n\nAdds VS Code-style multi-file Studio tabs with save/close/switch shortcuts and an encrypted local developer credential vault with Google Authenticator-compatible TOTP setup, rotating recovery codes, a 24-hour runtime session, loopback read/write API, and RPAZ/JCode Agent tools.\n\nRelease assets contain the full Setup installer, install inventory, and Bing example RPAZ only. Incremental update packages are not produced.' "$DRPA_VERSION")"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" -f sha="$GITHUB_SHA" -F force=true >/dev/null

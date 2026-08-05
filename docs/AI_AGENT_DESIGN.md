@@ -59,8 +59,11 @@ React Agent UI
 | `rpaz_validate` | 使用 `drpa-package` 校验 schema 2 manifest 与入口文件 |
 | `rpaz_build` | 校验后在工作区 `build/` 生成 `.rpaz` |
 | `rpaz_python` | 使用 sealed Python 在项目目录执行辅助代码，30 秒超时 |
+| `vault_list_credentials` | 列出已解锁保险箱的条目摘要，不返回 secret |
+| `vault_get_credential` | 按 ID 向当前模型工具回合提供一条完整凭据，持久工具事件脱敏 |
+| `vault_upsert_credential` | 在已解锁保险箱创建或更新凭据 |
 
-路径先经过 `safe_relative_path`，再校验目录链和符号链接。知识工具限定在数据目录 `knowledge/`；RPAZ 工具限定在绑定项目。工具不读取凭据保险箱、不访问安装包目录、不暴露任意 Tauri command，也没有通用 shell。
+路径先经过 `safe_relative_path`，再校验目录链和符号链接。知识工具限定在数据目录 `knowledge/`；RPAZ 工具限定在绑定项目。凭据工具只在用户使用 6 位 TOTP 解锁后的 24 小时运行时会话内工作，模型可以看到被明确读取的凭据，但 UI 工具时间线和持久会话只记录脱敏摘要。工具不访问安装包目录、不暴露任意 Tauri command，也没有通用 shell。完整密钥层级、loopback API 与威胁模型见[凭据保险箱安全架构](architecture/CREDENTIAL_VAULT.md)。
 
 ## 产品参考与取舍
 

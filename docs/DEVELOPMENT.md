@@ -1,6 +1,6 @@
 # DRPA Next 开发与交接手册
 
-本文档描述 `codex/drpa-next-platform` 分支和 Windows `2.0.1` 基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
+本文档描述 `codex/drpa-next-platform` 分支和 Windows `2.0.2` 基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
 
 ## 1. 产品状态
 
@@ -143,6 +143,8 @@ Workbench / Studio
 
 Studio 项目名称允许自然语言；项目 ID 与 package ID 由 Host 生成，用户无需输入包名格式。项目可直接运行，不需要先安装。
 
+代码编辑采用项目内多文档页签。`StudioPage` 为每个打开文件保存 `content/savedContent/loading/error`，切换文件不会丢弃未保存缓冲区；重命名和删除会同步页签路径或关闭受影响页签。快捷键为 `Ctrl/Cmd+S` 保存当前页签、`Ctrl/Cmd+Shift+S` 保存当前项目全部页签、`Ctrl/Cmd+W` 或 `Ctrl/Cmd+F4` 关闭、`Ctrl/Cmd+Tab` 切换。关闭脏页签必须经过应用内保存/放弃确认。Notebook 页签通过实际路径持久化，不能再硬编码 `notebook.ipynb`。
+
 Notebook 的进程边界：
 
 ```text
@@ -274,12 +276,12 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 
 1. 阅读本文件、`ROADMAP.md`、`offline/README.md` 和 `JUPYTER_INTEGRATION.md`；Linux 开发者额外完整阅读 `LINUX_DEVELOPMENT.md`。
 2. 查看分支、PR、最新提交和工作区状态，先区分当前 Tauri 实现与冻结的 PySide6 参考代码。
-3. Windows 维护者安装 `2.0.0` 到非系统盘；Linux 维护者使用隔离的 `DRPA_DATA_DIR` 启动真实 Tauri Host，确认数据目录实际位置。
+3. Windows 维护者安装 `2.0.2` 到非系统盘；Linux 维护者使用隔离的 `DRPA_DATA_DIR` 启动真实 Tauri Host，确认数据目录实际位置。
 4. 安装并运行 Bing 每日一图示例，检查实时日志、进度、输出目录和产物。
 5. 在 Studio 新建中文名称项目，运行源码、Markdown 单元和两个 Python notebook 单元。
 6. 阅读 `apps/desktop/src/infra/gateway.ts` 与 `apps/desktop/src-tauri/src/lib.rs` 的对应 command，确认参数在 Host 重新验证。
 7. 运行第 9 节全部本地检查，并对目标平台执行原生 GUI/runtime 测试。
-8. 查看 Windows `desktop-v2.0.0` 与 Linux `desktop-v1.0.0` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 Linux deb manifest 版本应分别为 `1.0.0-2` 与 `1.0.0-2+uos20.3`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
+8. 查看 Windows `desktop-v2.0.2` 与 Linux `desktop-v1.0.0` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 Linux deb manifest 版本应分别为 `1.0.0-2` 与 `1.0.0-2+uos20.3`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
 9. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
 
-当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `2.0.0` 发布基线由 `desktop-v2.0.0` 标签指向通过全量发布门禁的提交；Linux `1.0.0` 由专用 Ubuntu 22.04 workflow 构建并发布，后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。
+当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。Windows `2.0.2` 发布基线由 `desktop-v2.0.2` 标签指向通过全量发布门禁的提交；Linux `1.0.0` 由专用 Ubuntu 22.04 workflow 构建并发布，后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。

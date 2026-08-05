@@ -26,9 +26,10 @@ import {
   TerminalSquare,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import type { DragEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -277,6 +278,20 @@ interface ProjectRenameDraft {
   value: string;
 }
 
+interface OpenStudioDocument {
+  projectId: string;
+  path: string;
+  content: string;
+  savedContent: string;
+  loading: boolean;
+  error?: string;
+}
+
+interface PendingClose {
+  projectId: string;
+  path: string;
+}
+
 export function StudioPage() {
   const projectsCollapsed = useSidebarCollapsed("studio-projects");
   const filesCollapsed = useSidebarCollapsed("studio-files");
@@ -287,7 +302,8 @@ export function StudioPage() {
   const [selectedId, setSelectedId] = useState("");
   const [selectedFile, setSelectedFile] = useState("main.py");
   const [selectedEntry, setSelectedEntry] = useState("main.py");
-  const [content, setContent] = useState("");
+  const [openDocuments, setOpenDocuments] = useState<OpenStudioDocument[]>([]);
+  const openDocumentsRef = useRef<OpenStudioDocument[]>([]);
   const [projectName, setProjectName] = useState("我的自动化项目");
   const [installedPackageId, setInstalledPackageId] = useState("");
   const [runParameters, setRunParameters] = useState("{}");
@@ -298,6 +314,7 @@ export function StudioPage() {
   const [inlineDraft, setInlineDraft] = useState<InlineDraft | null>(null);
   const [projectRename, setProjectRename] = useState<ProjectRenameDraft | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
   const [agentOpen, setAgentOpen] = useState(true);
 
   const selected = useMemo(() => projects.find((item) => item.id === selectedId), [projects, selectedId]);
@@ -309,6 +326,21 @@ export function StudioPage() {
     : normalizedEntry.includes("/")
       ? normalizedEntry.slice(0, normalizedEntry.lastIndexOf("/"))
       : "";
+  const activeDocument = openDocuments.find((document) => document.projectId === selectedId && document.path === selectedFile);
+  const projectDocuments = openDocuments.filter((document) => document.projectId === selectedId);
+  const content = activeDocument?.content ?? "";
+
+  const updateOpenDocuments = useCallback((updater: (current: OpenStudioDocument[]) => OpenStudioDocument[]) => {
+    const next = updater(openDocumentsRef.current);
+    openDocumentsRef.current = next;
+    setOpenDocuments(next);
+  }, []);
+
+  const setContent = useCallback((value: string) => {
+    updateOpenDocuments((current) => current.map((document) => document.projectId === selectedId && document.path === selectedFile
+      ? { ...document, content: value }
+      : document));
+  }, [selectedFile, selectedId, updateOpenDocuments]);
 
   const pickInitialFile = (project: StudioProject | undefined) => {
     if (!project) return "main.py";
@@ -316,20 +348,40 @@ export function StudioPage() {
     return project.files.find((file) => !file.endsWith("/")) ?? "main.py";
   };
 
+  const activateFile = useCallback(async (projectId: string, path: string) => {
+    if (!projectId || !path || path.endsWith("/")) return;
+    setSelectedId(projectId);
+    setSelectedFile(path);
+    setSelectedEntry(path);
+    if (openDocumentsRef.current.some((document) => document.projectId === projectId && document.path === path)) return;
+    updateOpenDocuments((current) => [...current, { projectId, path, content: "", savedContent: "", loading: true }]);
+    try {
+      const source = await desktopGateway.readProjectFile(projectId, path);
+      updateOpenDocuments((current) => current.map((document) => document.projectId === projectId && document.path === path
+        ? { ...document, content: source, savedContent: source, loading: false, error: undefined }
+        : document));
+    } catch (error) {
+      updateOpenDocuments((current) => current.map((document) => document.projectId === projectId && document.path === path
+        ? { ...document, loading: false, error: String(error) }
+        : document));
+      setNotice(`读取文件失败：${String(error)}`);
+    }
+  }, [updateOpenDocuments]);
+
   const refresh = async (preferredFile?: string, preferredProjectId = selectedId) => {
     const next = await desktopGateway.listStudioProjects();
     setProjects(next);
+    const projectIds = new Set(next.map((project) => project.id));
+    updateOpenDocuments((current) => current.filter((document) => projectIds.has(document.projectId)));
     const project = next.find((item) => item.id === preferredProjectId) ?? next[0];
     if (project) {
-      setSelectedId(project.id);
-      const nextFile = preferredFile && project.files.includes(preferredFile) ? preferredFile : pickInitialFile(project);
-      setSelectedFile(nextFile);
-      setSelectedEntry(nextFile);
+      const remembered = openDocumentsRef.current.find((document) => document.projectId === project.id && project.files.includes(document.path));
+      const nextFile = preferredFile && project.files.includes(preferredFile) ? preferredFile : remembered?.path ?? pickInitialFile(project);
+      await activateFile(project.id, nextFile);
     } else {
       setSelectedId("");
       setSelectedFile("");
       setSelectedEntry("");
-      setContent("");
     }
   };
 
@@ -337,10 +389,6 @@ export function StudioPage() {
   useEffect(() => {
     if (!installedPackageId && packages[0]) setInstalledPackageId(packages[0].id);
   }, [installedPackageId, packages]);
-  useEffect(() => {
-    if (!selectedId || !selectedFile || selectedFile.endsWith("/")) return;
-    void desktopGateway.readProjectFile(selectedId, selectedFile).then(setContent).catch((error: unknown) => setNotice(String(error)));
-  }, [selectedFile, selectedId]);
 
   const createProject = async () => {
     if (!projectName.trim()) return setNotice("请输入项目名称");
@@ -366,16 +414,90 @@ export function StudioPage() {
     } finally { setBusy(false); }
   };
 
-  const save = async () => {
-    if (!selectedId || !selectedFile || selectedFile.endsWith("/")) return;
+  const persistDocument = useCallback(async (document: OpenStudioDocument) => {
+    await desktopGateway.writeProjectFile(document.projectId, document.path, document.content);
+    updateOpenDocuments((current) => current.map((item) => item.projectId === document.projectId && item.path === document.path
+      ? { ...item, content: document.content, savedContent: document.content, loading: false, error: undefined }
+      : item));
+  }, [updateOpenDocuments]);
+
+  const save = useCallback(async () => {
+    const document = openDocumentsRef.current.find((item) => item.projectId === selectedId && item.path === selectedFile);
+    if (!document || document.loading) return;
     setBusy(true);
     try {
-      await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
-      await refresh(selectedFile);
-      setNotice(`已保存 ${selectedFile}`);
+      await persistDocument(document);
+      setNotice(`已保存 ${document.path}`);
     } catch (error) { setNotice(`失败：${String(error)}`); }
     finally { setBusy(false); }
-  };
+  }, [persistDocument, selectedFile, selectedId]);
+
+  const saveProjectDocuments = useCallback(async (projectId: string) => {
+    const dirtyDocuments = openDocumentsRef.current.filter((document) => document.projectId === projectId && !document.loading && document.content !== document.savedContent);
+    for (const document of dirtyDocuments) await persistDocument(document);
+    return dirtyDocuments.length;
+  }, [persistDocument]);
+
+  const closeDocument = useCallback((projectId: string, path: string, discard = false) => {
+    const documents = openDocumentsRef.current;
+    const target = documents.find((document) => document.projectId === projectId && document.path === path);
+    if (!target) return;
+    if (!discard && target.content !== target.savedContent) {
+      setPendingClose({ projectId, path });
+      return;
+    }
+    const projectTabs = documents.filter((document) => document.projectId === projectId);
+    const targetIndex = projectTabs.findIndex((document) => document.path === path);
+    const nextDocument = projectTabs[targetIndex + 1] ?? projectTabs[targetIndex - 1];
+    updateOpenDocuments((current) => current.filter((document) => document.projectId !== projectId || document.path !== path));
+    if (selectedId === projectId && selectedFile === path) {
+      setSelectedFile(nextDocument?.path ?? "");
+      if (nextDocument) setSelectedEntry(nextDocument.path);
+    }
+    setPendingClose(null);
+  }, [selectedFile, selectedId, updateOpenDocuments]);
+
+  const saveAndClosePending = useCallback(async () => {
+    if (!pendingClose) return;
+    const document = openDocumentsRef.current.find((item) => item.projectId === pendingClose.projectId && item.path === pendingClose.path);
+    if (!document) return setPendingClose(null);
+    setBusy(true);
+    try {
+      await persistDocument(document);
+      closeDocument(document.projectId, document.path, true);
+      setNotice(`已保存并关闭 ${document.path}`);
+    } catch (error) {
+      setNotice(`保存失败：${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [closeDocument, pendingClose, persistDocument]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === "s") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          void saveProjectDocuments(selectedId).then((count) => setNotice(count ? `已保存 ${count} 个文件` : "没有待保存的文件"));
+        } else {
+          void save();
+        }
+      } else if (key === "w" || key === "f4") {
+        event.preventDefault();
+        if (selectedId && selectedFile) closeDocument(selectedId, selectedFile);
+      } else if (key === "tab" && projectDocuments.length > 1) {
+        event.preventDefault();
+        const index = projectDocuments.findIndex((document) => document.path === selectedFile);
+        const delta = event.shiftKey ? -1 : 1;
+        const next = projectDocuments[(index + delta + projectDocuments.length) % projectDocuments.length];
+        if (next) void activateFile(next.projectId, next.path);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activateFile, closeDocument, projectDocuments, save, saveProjectDocuments, selectedFile, selectedId]);
 
   const startCreate = (kind: "file" | "folder") => {
     if (!selectedId) return;
@@ -420,6 +542,12 @@ export function StudioPage() {
         const nextFile = directory && selectedFile.startsWith(`${source}/`)
           ? `${target}${selectedFile.slice(source.length)}`
           : selectedFile === source ? target : selectedFile;
+        updateOpenDocuments((current) => current.map((document) => {
+          if (document.projectId !== selectedId) return document;
+          if (document.path === source) return { ...document, path: target };
+          if (directory && document.path.startsWith(`${source}/`)) return { ...document, path: `${target}${document.path.slice(source.length)}` };
+          return document;
+        }));
         await refresh(nextFile);
         setSelectedEntry(directory ? `${target}/` : target);
         setNotice(`已重命名为 ${target}`);
@@ -436,10 +564,13 @@ export function StudioPage() {
     try {
       if (pendingDelete.kind === "project") {
         await desktopGateway.deleteStudioProject(pendingDelete.project.id);
+        updateOpenDocuments((current) => current.filter((document) => document.projectId !== pendingDelete.project.id));
         await refresh(undefined, "");
         setNotice(`已删除开发项目：${pendingDelete.project.name}`);
       } else if (selectedId) {
-        await desktopGateway.deleteProjectEntry(selectedId, pendingDelete.path.replace(/\/$/, ""));
+        const deletedPath = pendingDelete.path.replace(/\/$/, "");
+        await desktopGateway.deleteProjectEntry(selectedId, deletedPath);
+        updateOpenDocuments((current) => current.filter((document) => document.projectId !== selectedId || (document.path !== deletedPath && !document.path.startsWith(`${deletedPath}/`))));
         await refresh();
         setNotice(`已删除 ${pendingDelete.path}`);
       }
@@ -504,7 +635,7 @@ export function StudioPage() {
     setBusy(true);
     try {
       const parameters = JSON.parse(runParameters) as Record<string, unknown>;
-      if (selectedFile && !selectedFile.endsWith("/")) await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
+      await saveProjectDocuments(selectedId);
       const runId = await desktopGateway.runStudioProject(selectedId, parameters);
       setSnapshot(await desktopGateway.getWorkspaceSnapshot());
       setNotice(`开发态运行已启动：${runId}（没有构建或安装，可在运行工作台查看实时日志）`);
@@ -516,7 +647,7 @@ export function StudioPage() {
     if (!selectedId) return;
     setBusy(true);
     try {
-      if (selectedFile && !selectedFile.endsWith("/")) await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
+      await saveProjectDocuments(selectedId);
       const archivePath = await desktopGateway.buildStudioProject(selectedId);
       try {
         await desktopGateway.openBuildOutputDirectory();
@@ -549,9 +680,7 @@ export function StudioPage() {
     if (!selectedId) return;
     setBusy(true);
     try {
-      if (selectedFile && !selectedFile.endsWith("/")) {
-        await desktopGateway.writeProjectFile(selectedId, selectedFile, content);
-      }
+      await saveProjectDocuments(selectedId);
       const installed = await desktopGateway.installStudioProject(selectedId);
       setSnapshot(await desktopGateway.getWorkspaceSnapshot());
       setInstalledPackageId(installed.id);
@@ -572,7 +701,7 @@ export function StudioPage() {
         <div><div className="eyebrow">RPaz + Notebook 集成开发环境</div><h1>开发工作室</h1><p>编辑源码、直接运行项目，并使用持久 Python Kernel 交互调试。</p></div>
         <div className="header-actions">
           <button className="button secondary" type="button" onClick={() => setAgentOpen((current) => !current)} aria-pressed={agentOpen}>{agentOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />} {agentOpen ? "收起 Agent" : "打开 Agent"}</button>
-          <button className="button secondary" type="button" onClick={save} disabled={!selectedId || busy || selectedFile.endsWith("/")}><Save size={15} /> 保存</button>
+          <button className="button secondary" type="button" onClick={() => void save()} disabled={!activeDocument || activeDocument.loading || busy}><Save size={15} /> 保存</button>
           <button className="button secondary" type="button" onClick={() => void saveToPackageLibrary()} disabled={!selectedId || busy}><PackageCheck size={15} /> 保存到 RPAZ 包</button>
           <button className="button secondary" type="button" onClick={exportProject} disabled={!selectedId || busy}><PackageCheck size={15} /> 导出 RPAZ</button>
           <button className="button primary" type="button" onClick={runProject} disabled={!selectedId || busy}><Play size={15} fill="currentColor" /> {busy ? "处理中…" : "直接运行"}</button>
@@ -612,7 +741,10 @@ export function StudioPage() {
               type="button"
               key={project.id}
               className={project.id === selectedId ? "selected" : ""}
-              onClick={() => { const file = pickInitialFile(project); setSelectedId(project.id); setSelectedFile(file); setSelectedEntry(file); }}
+              onClick={() => {
+                const remembered = openDocumentsRef.current.find((document) => document.projectId === project.id && project.files.includes(document.path));
+                void activateFile(project.id, remembered?.path ?? pickInitialFile(project));
+              }}
               onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedId(project.id); setProjectMenu({ x: event.clientX, y: event.clientY, project }); }}
             >
               <Box size={14} /><span><strong>{project.name}</strong><small>内部 ID · {project.id.slice(-8)}</small></span>
@@ -679,7 +811,7 @@ export function StudioPage() {
                 type="button"
                 key={file}
                 className={file === selectedEntry ? "selected" : ""}
-                onClick={() => { setSelectedEntry(file); if (!directory) setSelectedFile(file); }}
+                onClick={() => { setSelectedEntry(file); if (!directory) void activateFile(selectedId, file); }}
                 onDoubleClick={() => startRename(file)}
                 onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedEntry(file); setFileMenu({ x: event.clientX, y: event.clientY, target: file }); }}
               >
@@ -698,10 +830,28 @@ export function StudioPage() {
           )}
         </aside>}
         <section className={notebook ? "studio-editor notebook-editor" : "studio-editor"}>
-          {notebook ? (
-            <NotebookWorkspace projectId={selectedId} content={content} onChange={setContent} onNotice={setNotice} theme={theme} />
+          <div className="studio-editor-tabs" role="tablist" aria-label="已打开文件">
+            {projectDocuments.map((document) => {
+              const active = document.path === selectedFile;
+              const dirty = document.content !== document.savedContent;
+              return <div className={`studio-editor-tab ${active ? "active" : ""}`} key={`${document.projectId}:${document.path}`}>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  title={`${document.path}${dirty ? " · 尚未保存" : ""}`}
+                  onClick={() => void activateFile(document.projectId, document.path)}
+                  onAuxClick={(event) => { if (event.button === 1) closeDocument(document.projectId, document.path); }}
+                ><FileCode2 size={13} /><span>{document.path.split("/").at(-1)}</span>{dirty && <i aria-label="尚未保存" />}</button>
+                <button type="button" className="studio-tab-close" aria-label={`关闭 ${document.path}`} onClick={() => closeDocument(document.projectId, document.path)}><X size={12} /></button>
+              </div>;
+            })}
+            {projectDocuments.length > 0 && <span className="studio-tab-shortcuts">Ctrl+S 保存 · Ctrl+W 关闭 · Ctrl+Tab 切换</span>}
+          </div>
+          {!activeDocument ? <div className="studio-editor-empty"><Code2 size={32} /><strong>打开文件开始编辑</strong><span>从左侧文件树选择文件，已打开内容会保留在页签中。</span></div> : activeDocument.loading ? <div className="studio-editor-empty"><LoaderCircle className="spin" size={24} /><strong>正在读取 {selectedFile}</strong></div> : activeDocument.error ? <div className="studio-editor-empty error"><FileCode2 size={28} /><strong>文件读取失败</strong><span>{activeDocument.error}</span><button className="button secondary small" type="button" onClick={() => { updateOpenDocuments((current) => current.filter((document) => document !== activeDocument)); void activateFile(selectedId, selectedFile); }}>重试</button></div> : notebook ? (
+            <NotebookWorkspace projectId={selectedId} filePath={selectedFile} content={content} onChange={setContent} onPersist={(value) => void persistDocument({ ...activeDocument, content: value })} onNotice={setNotice} theme={theme} />
           ) : (
-            <><div className="editor-tab"><FileCode2 size={14} /> {selectedFile || "未选择文件"}<span>{language}</span></div><Editor beforeMount={ensurePythonCompletionProvider} path={language === "python" && selectedId ? pythonModelPath(selectedId, selectedFile) : undefined} height="100%" language={language} value={content} onChange={(value) => setContent(value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 14, minimap: { enabled: false }, automaticLayout: true, tabSize: 4, wordWrap: "on", quickSuggestions: { other: true, comments: false, strings: false }, suggestOnTriggerCharacters: true }} /></>
+            <Editor beforeMount={ensurePythonCompletionProvider} path={language === "python" && selectedId ? pythonModelPath(selectedId, selectedFile) : undefined} height="100%" language={language} value={content} onChange={(value) => setContent(value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 14, minimap: { enabled: false }, automaticLayout: true, tabSize: 4, wordWrap: "on", quickSuggestions: { other: true, comments: false, strings: false }, suggestOnTriggerCharacters: true }} />
           )}
         </section>
         {agentOpen && <aside className="studio-agent-pane"><AgentPage embedded embeddedProjectId={selected?.id ?? ""} embeddedProjectName={selected?.name ?? ""} /></aside>}
@@ -716,11 +866,20 @@ export function StudioPage() {
           </section>
         </div>
       )}
+      {pendingClose && (
+        <div className="studio-confirm-overlay" role="dialog" aria-modal="true" aria-label="保存文件后关闭" onClick={(event) => event.stopPropagation()}>
+          <section className="studio-confirm-dialog studio-save-dialog">
+            <Save size={22} />
+            <div><h2>保存对“{pendingClose.path}”的更改？</h2><p>关闭页签前可以保存本次修改，也可以放弃尚未写入磁盘的内容。</p></div>
+            <footer><button className="button ghost" type="button" onClick={() => setPendingClose(null)} disabled={busy}>取消</button><button className="button danger" type="button" onClick={() => closeDocument(pendingClose.projectId, pendingClose.path, true)} disabled={busy}>放弃</button><button className="button primary" type="button" onClick={() => void saveAndClosePending()} disabled={busy}><Save size={14} /> {busy ? "保存中…" : "保存并关闭"}</button></footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
 
-function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { projectId: string; content: string; onChange: (value: string) => void; onNotice: (value: string) => void; theme: "light" | "dark" }) {
+function NotebookWorkspace({ projectId, filePath, content, onChange, onPersist, onNotice, theme }: { projectId: string; filePath: string; content: string; onChange: (value: string) => void; onPersist: (value: string) => void; onNotice: (value: string) => void; theme: "light" | "dark" }) {
   const [document, setDocument] = useState<NotebookDocument>(() => parseNotebook(content));
   const [executing, setExecuting] = useState<number | null>(null);
   const [variables, setVariables] = useState<StudioVariable[]>([]);
@@ -746,7 +905,7 @@ function NotebookWorkspace({ projectId, content, onChange, onNotice, theme }: { 
     const serialized = JSON.stringify(next, null, 2) + "\n";
     setDocument(next);
     onChange(serialized);
-    if (persist && projectId) void desktopGateway.writeProjectFile(projectId, "notebook.ipynb", serialized);
+    if (persist && projectId && filePath) onPersist(serialized);
   };
 
   const updateSource = (index: number, source: string) => {

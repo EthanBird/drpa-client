@@ -499,11 +499,26 @@
 .studio-confirm-dialog h2 { margin: 1px 0 6px; font-size: calc(14px * var(--font-scale)); }
 .studio-confirm-dialog p { margin: 0; color: var(--text-2); font-size: calc(9px * var(--font-scale)); line-height: 1.6; }
 .studio-confirm-dialog footer { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 7px; margin-top: 8px; }
+.studio-save-dialog > svg { background: var(--accent-soft); color: var(--accent-strong); }
 .empty-hint { padding: 10px; color: var(--text-3); font-size: calc(9px * var(--font-scale)); line-height: 1.5; }
-.studio-editor { display: grid; grid-template-rows: 34px minmax(0, 1fr); }
-.studio-editor.notebook-editor { display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
-.editor-tab { display: flex; align-items: center; gap: 7px; padding: 0 10px; border-bottom: 1px solid var(--border); color: var(--text-2); font: calc(9px * var(--font-scale)) var(--font-mono); }
-.editor-tab span { margin-left: auto; color: var(--text-3); }
+.studio-editor, .studio-editor.notebook-editor { display: grid; grid-template-rows: 36px minmax(0, 1fr); overflow: hidden; }
+.studio-editor-tabs { display: flex; min-width: 0; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--border); background: var(--surface-2); scrollbar-width: thin; }
+.studio-editor-tab { position: relative; display: grid; flex: 0 0 auto; grid-template-columns: minmax(0, 1fr) 25px; min-width: 112px; max-width: 220px; border-right: 1px solid var(--border-subtle); background: var(--surface-2); }
+.studio-editor-tab.active { background: var(--surface-1); box-shadow: inset 0 2px 0 var(--accent); }
+.studio-editor-tab > button { min-width: 0; height: 35px; padding: 0 3px 0 9px; border: 0; background: transparent; color: var(--text-3); cursor: pointer; }
+.studio-editor-tab > button[role="tab"] { display: flex; align-items: center; gap: 6px; text-align: left; font: calc(8px * var(--font-scale)) var(--font-mono); }
+.studio-editor-tab > button[role="tab"] span { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
+.studio-editor-tab.active > button[role="tab"] { color: var(--text-1); }
+.studio-editor-tab > button[role="tab"] i { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.studio-editor-tab .studio-tab-close { display: grid; place-items: center; width: 22px; height: 22px; align-self: center; padding: 0; border-radius: 4px; opacity: 0; }
+.studio-editor-tab:hover .studio-tab-close, .studio-editor-tab.active .studio-tab-close { opacity: 1; }
+.studio-editor-tab .studio-tab-close:hover { background: var(--surface-3); color: var(--text-1); }
+.studio-tab-shortcuts { flex: 0 0 auto; align-self: center; margin-left: auto; padding: 0 10px; color: var(--text-3); font-size: calc(7px * var(--font-scale)); white-space: nowrap; }
+.studio-editor-empty { display: grid; place-items: center; align-content: center; gap: 8px; min-height: 0; padding: 24px; color: var(--text-3); text-align: center; }
+.studio-editor-empty svg { color: var(--accent-strong); opacity: .7; }
+.studio-editor-empty strong { color: var(--text-1); font-size: calc(11px * var(--font-scale)); }
+.studio-editor-empty span { max-width: 520px; overflow-wrap: anywhere; font-size: calc(8px * var(--font-scale)); }
+.studio-editor-empty.error svg { color: var(--danger); }
 .studio-console { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding: 0 12px; color: var(--text-3); font-size: calc(9px * var(--font-scale)); }
 .studio-agent-pane { grid-column: 4; grid-row: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface-1); }
 .studio-agent { position: relative; height: 100%; min-height: 0; }

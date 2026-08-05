@@ -12,9 +12,9 @@ const DocsPage = lazy(() => import("../pages/DocsPage").then((module) => ({ defa
 const ExtensionToolsPage = lazy(() => import("../pages/ExtensionToolsPage").then((module) => ({ default: module.ExtensionToolsPage })));
 const LibraryPage = lazy(() => import("../pages/LibraryPage").then((module) => ({ default: module.LibraryPage })));
 const PluginsPage = lazy(() => import("../pages/PluginsPage").then((module) => ({ default: module.PluginsPage })));
-const PlaceholderPage = lazy(() => import("../pages/PlaceholderPage").then((module) => ({ default: module.PlaceholderPage })));
 const RunsPage = lazy(() => import("../pages/RunsPage").then((module) => ({ default: module.RunsPage })));
 const RuntimePage = lazy(() => import("../pages/RuntimePage").then((module) => ({ default: module.RuntimePage })));
+const SecretsPage = lazy(() => import("../pages/SecretsPage").then((module) => ({ default: module.SecretsPage })));
 const SettingsPage = lazy(() => import("../pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const StudioPage = lazy(() => import("../pages/StudioPage").then((module) => ({ default: module.StudioPage })));
 const DataPage = lazy(() => import("../pages/DataPage").then((module) => ({ default: module.DataPage })));
@@ -221,13 +221,7 @@ export function App() {
         {activeNavigation === "docs" && <Suspense fallback={<PageFallback />}><DocsPage /></Suspense>}
         {activeNavigation === "knowledgeBase" && <Suspense fallback={<PageFallback />}><KnowledgeBasePage /></Suspense>}
         {activeNavigation === "runtimes" && <Suspense fallback={<PageFallback />}><RuntimePage /></Suspense>}
-        {activeNavigation === "secrets" && (
-          <Suspense fallback={<PageFallback />}><PlaceholderPage
-            eyebrow="敏感数据保护"
-            title="凭据保险箱"
-            description="任务只绑定凭据引用；真实值不会进入 RPAZ 包、运行历史、日志或命令行。"
-          /></Suspense>
-        )}
+        {activeNavigation === "secrets" && <Suspense fallback={<PageFallback />}><SecretsPage /></Suspense>}
         {activeNavigation === "settings" && <Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>}
       </AppShell>
       {dragActive && <div className="drop-overlay"><div><strong>{activeNavigation === "docs" ? "释放以导入 Markdown" : activeNavigation === "knowledgeBase" ? "释放以索引到向量知识库" : activeNavigation === "agent" ? "释放以附加到当前对话" : activeNavigation === "studio" ? "释放以添加项目文件" : activeNavigation === "data" ? "释放以创建文件数据源" : "释放以安装 RPAZ"}</strong><span>{activeNavigation === "docs" ? "支持同时导入多个 `.md` / `.markdown` 文档" : activeNavigation === "knowledgeBase" ? "支持 PDF、Word、Excel、PowerPoint 与文本资料" : activeNavigation === "agent" ? "支持 PDF、DOCX、XLSX 与 PPTX" : activeNavigation === "studio" ? "文件将添加到当前项目目录" : activeNavigation === "data" ? "支持 SQLite、XLS、XLSX、XLSB 与 ODS" : "支持同时拖入多个 `.rpaz` RPAZ 包"}</span></div></div>}

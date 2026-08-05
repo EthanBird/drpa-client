@@ -22,8 +22,8 @@ use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
 use crate::{
-    AppPaths, RunProcessManager, agent_config, agent_documents, agent_extensions, database,
-    dispatch_run_background, knowledge, knowledge_base, plugins,
+    AppPaths, RunProcessManager, agent_config, agent_documents, agent_extensions, credential_vault,
+    database, dispatch_run_background, knowledge, knowledge_base, plugins,
 };
 use drpa_host::HostState;
 
@@ -181,14 +181,21 @@ pub(crate) struct AgentHostContext {
     state: HostState,
     paths: AppPaths,
     processes: RunProcessManager,
+    vault: credential_vault::CredentialVaultManager,
 }
 
 impl AgentHostContext {
-    pub(crate) fn new(state: HostState, paths: AppPaths, processes: RunProcessManager) -> Self {
+    pub(crate) fn new(
+        state: HostState,
+        paths: AppPaths,
+        processes: RunProcessManager,
+        vault: credential_vault::CredentialVaultManager,
+    ) -> Self {
         Self {
             state,
             paths,
             processes,
+            vault,
         }
     }
 
@@ -255,7 +262,7 @@ impl AgentHostContext {
                     .filter(|run| package_id.is_empty() || run.package_id == package_id)
                     .filter(|run| {
                         status.is_empty()
-                            || serde_json::to_value(&run.status)
+                            || serde_json::to_value(run.status)
                                 .ok()
                                 .and_then(|value| value.as_str().map(str::to_owned))
                                 .is_some_and(|value| value == status)
@@ -273,6 +280,29 @@ impl AgentHostContext {
                 serde_json::to_value(detail)
                     .map(|detail| json!({"ok": true, "detail": detail}))
                     .map_err(|error| format!("序列化运行详情失败：{error}"))
+            }
+            "vault_list_credentials" => {
+                let items = self.vault.list_credentials(&self.paths)?;
+                serde_json::to_value(items)
+                    .map(|items| json!({"ok": true, "items": items}))
+                    .map_err(|error| format!("序列化凭据列表失败：{error}"))
+            }
+            "vault_get_credential" => {
+                let id = argument_string(arguments, "id")?;
+                let item = self.vault.get_credential(&self.paths, id)?;
+                serde_json::to_value(item)
+                    .map(|item| json!({"ok": true, "item": item, "sensitive": true}))
+                    .map_err(|error| format!("序列化凭据失败：{error}"))
+            }
+            "vault_upsert_credential" => {
+                let input = serde_json::from_value::<credential_vault::VaultCredentialInput>(
+                    arguments.clone(),
+                )
+                .map_err(|error| format!("凭据参数无效：{error}"))?;
+                let item = self.vault.save_credential(&self.paths, input)?;
+                Ok(
+                    json!({"ok": true, "id": item.id, "name": item.name, "updatedAt": item.updated_at}),
+                )
             }
             _ => Err(format!("未知 DRPA Host 工具：{name}")),
         }
@@ -516,11 +546,17 @@ where
                 ),
             };
             let output_text = truncate_text(&output.to_string(), MAX_TOOL_OUTPUT_BYTES);
-            let event_output = if name == "document_read" && status == "completed" {
+            let event_output = if (name == "document_read" || name == "vault_get_credential")
+                && status == "completed"
+            {
                 json!({
                     "ok": true,
                     "redacted": true,
-                    "message": "文档正文只传给当前模型回合，不写入持久化工具事件"
+                    "message": if name == "vault_get_credential" {
+                        "凭据内容只传给当前模型回合，不写入持久化工具事件"
+                    } else {
+                        "文档正文只传给当前模型回合，不写入持久化工具事件"
+                    }
                 })
                 .to_string()
             } else {
@@ -976,6 +1012,7 @@ fn system_prompt(has_project: bool, injected_context: &str) -> String {
          小范围修改优先使用只在项目内生效的 edit_file。你也可以按策略使用 knowledge、document 与扩展工具。\
          浏览器任务使用 browser_* 工具，它连接 DRPA 内置 Chrome 并与 RPAZ ctx.browser() 复用同一持久会话；\
          已安装 RPAZ 包必须用 rpaz_run_package 启动，并用 run_get_detail 查看实时事件与 debug 日志。\n\
+         凭据工具只在用户已用 Google Authenticator 验证并解锁保险箱后工作；先列出不含密文的摘要，再按需读取或写入。\n\
          只有规范化 RPAZ 项目才调用 rpaz_validate；需要交付 RPAZ 归档时调用 rpaz_build。\n\
          回答使用简体中文，先给结论，再列出实际完成的文件与验证结果。\
          {injected_context}"
@@ -1062,6 +1099,21 @@ fn agent_tool_definitions(
             "run_get_detail",
             "读取一条运行记录的完整详情、进度、产物、结构化事件和 debug 日志。",
             json!({"type":"object","properties":{"runId":{"type":"string"}},"required":["runId"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "vault_list_credentials",
+            "列出已解锁的本地凭据保险箱条目摘要，不返回 secret。保险箱锁定时 Host 会要求用户先验证。",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "vault_get_credential",
+            "按 id 读取一条本地凭据的完整内容。返回值包含敏感 secret，只在完成一次 TOTP 验证后的 24 小时运行期会话中可用。",
+            json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "vault_upsert_credential",
+            "创建或更新本地加密凭据。更新时传入 id；支持 login、apiKey、token、database、ssh、secureNote。",
+            json!({"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"kind":{"type":"string","enum":["login","apiKey","token","database","ssh","secureNote"]},"username":{"type":"string"},"secret":{"type":"string"},"uri":{"type":"string"},"notes":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"favorite":{"type":"boolean"}},"required":["name","kind","secret"],"additionalProperties":false}),
         ),
         tool_definition(
             "agent_list_skills",
@@ -1275,7 +1327,10 @@ fn ensure_tool_allowed(policy: &AgentToolPolicy, name: &str) -> Result<(), Strin
         | "rpaz_list_packages"
         | "rpaz_run_package"
         | "run_list"
-        | "run_get_detail" => true,
+        | "run_get_detail"
+        | "vault_list_credentials"
+        | "vault_get_credential"
+        | "vault_upsert_credential" => true,
         "agent_write_skill" | "agent_write_memory" | "knowledge_write_document" => {
             policy.workspace_write
         }
@@ -1374,7 +1429,13 @@ fn execute_tool(
         | "browser_screenshot" | "browser_status" => {
             return execute_browser_tool(context, name, arguments);
         }
-        "rpaz_list_packages" | "rpaz_run_package" | "run_list" | "run_get_detail" => {
+        "rpaz_list_packages"
+        | "rpaz_run_package"
+        | "run_list"
+        | "run_get_detail"
+        | "vault_list_credentials"
+        | "vault_get_credential"
+        | "vault_upsert_credential" => {
             let output = context
                 .host
                 .as_ref()
@@ -1390,6 +1451,9 @@ fn execute_tool(
                         .unwrap_or_default()
                 ),
                 "run_list" => "已读取运行记录".to_owned(),
+                "vault_list_credentials" => "已读取凭据保险箱摘要".to_owned(),
+                "vault_get_credential" => "已向当前模型回合提供一条敏感凭据".to_owned(),
+                "vault_upsert_credential" => "已更新本地加密凭据".to_owned(),
                 _ => "已读取完整运行详情和调试日志".to_owned(),
             };
             return Ok(ToolResult { output, summary });

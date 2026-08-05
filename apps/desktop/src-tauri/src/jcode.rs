@@ -671,7 +671,7 @@ fn render_imported_conversation(messages: &[AgentMessage], context_window: u32) 
     }
     selected.reverse();
     let mut prompt = String::from(
-        "这是 DRPA 会话导入的上下文。你是 JCode 开发者 Agent，可直接使用完整工具集在当前工作目录完成最后一条用户请求。浏览器操作使用 mcp__drpa__browser_*，不要调用 JCode 自带的 Firefox browser setup；运行 RPAZ 包使用 mcp__drpa__rpaz_run_package，并用 mcp__drpa__run_get_detail 查看实时事件和 debug 日志。\n\n",
+        "这是 DRPA 会话导入的上下文。你是 JCode 开发者 Agent，可直接使用完整工具集在当前工作目录完成最后一条用户请求。浏览器操作使用 mcp__drpa__browser_*，不要调用 JCode 自带的 Firefox browser setup；运行 RPAZ 包使用 mcp__drpa__rpaz_run_package，并用 mcp__drpa__run_get_detail 查看实时事件和 debug 日志。凭据保险箱已由用户验证解锁时，可使用 mcp__drpa__vault_list_credentials、mcp__drpa__vault_get_credential 和 mcp__drpa__vault_upsert_credential。\n\n",
     );
     for message in selected {
         let label = if message.role == "assistant" {

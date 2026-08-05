@@ -77,4 +77,4 @@ def main(ctx):
 
 ## 扩展约定
 
-后续增加 SQL Server、Oracle 等驱动时继续经过 Host connection registry，并保持当前 `connectionId`、列名/二维值、截断标记协议，避免 UI 与驱动耦合。密码目前是会话级内存值；需要跨启动保存时应接入操作系统凭据保险箱，只在连接配置中保存 secret reference。
+后续增加 SQL Server、Oracle 等驱动时继续经过 Host connection registry，并保持当前 `connectionId`、列名/二维值、截断标记协议，避免 UI 与驱动耦合。密码目前仍是数据页面会话级内存值；凭据保险箱已经提供独立的加密条目和稳定 ID，下一步连接配置应只保存 credential ID，并在执行时由 Rust Host 解析，而不是把 secret 复制进数据库 profile。

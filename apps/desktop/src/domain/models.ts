@@ -173,6 +173,71 @@ export interface DashboardDataset {
   truncated: boolean;
 }
 
+export type VaultCredentialKind = "login" | "apiKey" | "token" | "database" | "ssh" | "secureNote";
+
+export interface VaultServiceStatus {
+  running: boolean;
+  port: number;
+  endpoint: string;
+  startedAt?: number;
+  lastError: string;
+}
+
+export interface VaultStatus {
+  initialized: boolean;
+  unlocked: boolean;
+  unlockedUntil?: number;
+  itemCount: number;
+  failedAttempts: number;
+  retryAfterSeconds: number;
+  service: VaultServiceStatus;
+}
+
+export interface VaultSetup {
+  setupId: string;
+  account: string;
+  issuer: string;
+  manualKey: string;
+  otpAuthUri: string;
+  expiresAt: number;
+}
+
+export interface VaultUnlockResult {
+  status: VaultStatus;
+  serviceToken: string;
+  recoveryCode?: string;
+}
+
+export interface VaultCredentialSummary {
+  id: string;
+  name: string;
+  kind: VaultCredentialKind;
+  username: string;
+  uri: string;
+  tags: string[];
+  favorite: boolean;
+  hasSecret: boolean;
+  updatedAt: number;
+}
+
+export interface VaultCredential extends VaultCredentialSummary {
+  secret: string;
+  notes: string;
+  createdAt: number;
+}
+
+export interface VaultCredentialInput {
+  id: string;
+  name: string;
+  kind: VaultCredentialKind;
+  username: string;
+  secret: string;
+  uri: string;
+  notes: string;
+  tags: string[];
+  favorite: boolean;
+}
+
 export interface RemoteDatabaseProfile {
   id: string;
   name: string;

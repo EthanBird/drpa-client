@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-08-05
+
+### 开发工作室
+
+- 源码和 Notebook 支持 VS Code 风格多文件页签；每个页签独立保存内容、已保存基线、加载与错误状态，项目切换时保留当前项目的打开集合。
+- 新增 `Ctrl/Cmd+S` 当前保存、`Ctrl/Cmd+Shift+S` 项目全部保存、`Ctrl/Cmd+W`/`Ctrl/Cmd+F4` 关闭和 `Ctrl/Cmd+Tab` 正反向切换；关闭脏页签会显示保存/放弃/取消确认。
+- 文件、目录和项目重命名/删除同步更新页签；Notebook 使用真实相对路径持久化，不再固定写入 `notebook.ipynb`。
+
+### 开发凭据保险箱
+
+- 新增 Bitwarden 风格本地凭据工作区，支持登录账号、API Key、令牌、数据库、SSH、安全笔记、收藏、标签、搜索、显隐复制、编辑和删除确认。
+- 初始化采用 Google Authenticator 兼容 `otpauth://` 二维码、RFC 6238 6 位 TOTP 和 10 分钟 setup；恢复码只展示一次并支持下载，恢复解锁后立即轮换。
+- 完整 Payload 使用随机 Vault Key 与 AES-256-GCM 加密；Windows 通过当前用户 DPAPI 保护 TOTP seed/device secret，恢复 key-wrap 独立于设备保护，密钥会话退出、锁定或 24 小时到期后清除。
+- 新增显式启动的 `127.0.0.1` 凭据读写 API，TOTP verify 后签发随机 Bearer Token，限制请求体且禁止缓存；手动锁定或会话到期立即使 Token 失效。
+- RPAZ Agent 与 JCode MCP 新增 `vault_list_credentials`、`vault_get_credential`、`vault_upsert_credential`；敏感读取只进入当前模型工具回合，持久工具事件脱敏。
+
+### 发布与验证
+
+- Windows 版本统一提升为 `2.0.2`，只发布全量离线 Setup、安装库存和 Bing 示例，不生成增量更新包。
+- 新增 RFC TOTP、密文往返/锁定、恢复码轮换、Agent MCP 工具、多页签快捷键与初始化恢复 UI 回归；1280×720 截图检查全部通过且浏览器控制台无 error/warning。
+
+## [2.0.1] - 2026-08-05
+
 ### Windows 浏览器与 Agent
 
 - `ctx.browser()` 改为连接工作区级持久 DrissionPage 会话：有界面与 headless 使用独立调试端口和持久 Profile，任务成功、失败或包内调用 `page.quit()` 后均保留 Chrome，供开发工作室和后续 RPAZ 任务复用。
