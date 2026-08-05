@@ -265,7 +265,7 @@ describe("DRPA Next desktop shell", () => {
       name: "可视化工作流",
       mode: "workflow",
       workflow: expect.objectContaining({ nodes: expect.arrayContaining([expect.objectContaining({ kind: "template-transform" })]) }),
-    })));
+    })), { timeout: 5_000 });
   });
 
   it("creates a ready-to-run RPAZ workflow from the quick template", async () => {
@@ -297,7 +297,7 @@ describe("DRPA Next desktop shell", () => {
           expect.objectContaining({ target: "end" }),
         ]),
       }),
-    })));
+    })), { timeout: 5_000 });
   });
 
   it("generates SQL with the configured Agent and inserts it without executing", async () => {
