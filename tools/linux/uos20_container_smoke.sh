@@ -164,8 +164,10 @@ window_id="$(xdotool search --onlyvisible --name '^DRPA Next$' | head -n 1)"
 test -n "$window_id"
 xdotool windowfocus --sync "$window_id"
 xdotool key --clearmodifiers ctrl+k
-sleep 0.4
-xdotool mousemove --sync 640 95 click 1
+# The command palette input owns autofocus. Typing directly keeps this smoke
+# independent of page-header density and dashboard layout coordinates while
+# still exercising WebKit's native keyboard/input-method event path.
+sleep 0.6
 xdotool type --delay 20 --clearmodifiers 'drpa-input-smoke'
 sleep 0.2
 xwd -display :99 -root -silent -out /tmp/drpa-uos20-input-stage.xwd
