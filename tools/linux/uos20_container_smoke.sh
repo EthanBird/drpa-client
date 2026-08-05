@@ -160,13 +160,26 @@ cp "$ui_ready" "$diagnostics/drpa-uos20-ui-ready.json"
 # the command palette focuses an input; the explicit click and typing reproduce
 # the UOS freeze that only appeared after the first editable field received focus.
 export DISPLAY=:99
-window_id="$(xdotool search --onlyvisible --name '^DRPA Next$' | head -n 1)"
+# report_ui_ready can arrive while the 880x550 splash window is still visible.
+# Wait for the configured main window (minimum 1024x640) so subsequent events do
+# not target a window that the startup hand-off is about to destroy.
+window_id=""
+for _ in $(seq 1 100); do
+  for candidate in $(xdotool search --onlyvisible --name '^(DRPA Next|drpa-desktop)$' 2>/dev/null || true); do
+    geometry="$(xdotool getwindowgeometry --shell "$candidate" 2>/dev/null || true)"
+    width="$(printf '%s\n' "$geometry" | sed -n 's/^WIDTH=//p')"
+    height="$(printf '%s\n' "$geometry" | sed -n 's/^HEIGHT=//p')"
+    if [ "${width:-0}" -ge 1024 ] && [ "${height:-0}" -ge 640 ]; then
+      window_id="$candidate"
+      break 2
+    fi
+  done
+  sleep 0.1
+done
 test -n "$window_id"
+xwininfo -display :99 -root -tree >"$window_tree" 2>&1 || true
 xdotool windowfocus --sync "$window_id"
-# Open the palette through its always-present sidebar trigger. A relative
-# pointer event is stable with or without a window manager and avoids distro
-# differences in synthetic Ctrl-key modifier mapping.
-xdotool mousemove --sync --window "$window_id" 27 60 click 1
+xdotool key --clearmodifiers ctrl+k
 # The command palette input owns autofocus. Typing directly keeps this smoke
 # independent of page-header density and dashboard layout coordinates while
 # still exercising WebKit's native keyboard/input-method event path.
