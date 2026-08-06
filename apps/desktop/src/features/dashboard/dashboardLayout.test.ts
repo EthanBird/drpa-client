@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { DashboardWidget, DashboardWidgetKind } from "../../domain/models";
-import { compactDashboardWidgets, moveWidgetAndReflow, projectResponsiveLayouts, translateResponsiveDrag } from "./dashboardLayout";
+import {
+  compactDashboardWidgets,
+  moveWidgetAndReflow,
+  projectResponsiveLayouts,
+  resizeWidgetAndReflow,
+  translateResponsiveDrag,
+} from "./dashboardLayout";
 
 function widget(id: string, layout: DashboardWidget["layout"], kind: DashboardWidgetKind = "markdown"): DashboardWidget {
   return {
@@ -22,46 +28,55 @@ function overlaps(left: DashboardWidget["layout"], right: DashboardWidget["layou
 }
 
 describe("dashboard adaptive layout", () => {
-  it("moves an occupied widget into the vacated slot like a launcher", () => {
+  it("changes the linear order and repacks every following card after a drag", () => {
     const result = moveWidgetAndReflow([
       widget("moving", { x: 0, y: 0, w: 2, h: 2 }),
-      widget("occupied", { x: 2, y: 0, w: 2, h: 2 }),
-      widget("stable", { x: 4, y: 0, w: 2, h: 2 }),
-    ], "moving", { x: 2, y: 0, w: 2, h: 2 }, 6);
-
-    expect(result.find((item) => item.id === "moving")?.layout).toEqual({ x: 2, y: 0, w: 2, h: 2 });
-    expect(result.find((item) => item.id === "occupied")?.layout).toEqual({ x: 0, y: 0, w: 2, h: 2 });
-    expect(result.find((item) => item.id === "stable")?.layout).toEqual({ x: 4, y: 0, w: 2, h: 2 });
-  });
-
-  it("does not compact or move cards outside the drop collision", () => {
-    const result = moveWidgetAndReflow([
-      widget("first", { x: 0, y: 0, w: 2, h: 2 }),
-      widget("moving", { x: 0, y: 4, w: 2, h: 2 }),
+      widget("second", { x: 2, y: 0, w: 2, h: 2 }),
       widget("third", { x: 4, y: 0, w: 2, h: 2 }),
-      widget("independent", { x: 2, y: 7, w: 2, h: 2 }),
+      widget("fourth", { x: 0, y: 2, w: 2, h: 2 }),
     ], "moving", { x: 4, y: 0, w: 2, h: 2 }, 6);
 
-    expect(result.find((item) => item.id === "first")?.layout).toEqual({ x: 0, y: 0, w: 2, h: 2 });
-    expect(result.find((item) => item.id === "moving")?.layout).toEqual({ x: 4, y: 0, w: 2, h: 2 });
-    expect(result.find((item) => item.id === "third")?.layout).toEqual({ x: 0, y: 4, w: 2, h: 2 });
-    expect(result.find((item) => item.id === "independent")?.layout).toEqual({ x: 2, y: 7, w: 2, h: 2 });
+    expect(result.map((item) => item.id)).toEqual(["second", "third", "moving", "fourth"]);
+    expect(result.map((item) => item.layout)).toEqual([
+      { x: 0, y: 0, w: 2, h: 2 },
+      { x: 2, y: 0, w: 2, h: 2 },
+      { x: 4, y: 0, w: 2, h: 2 },
+      { x: 0, y: 2, w: 2, h: 2 },
+    ]);
   });
 
-  it("moves only collided cards and fills their destinations in row-major order", () => {
+  it("inserts a later card into the requested order instead of swapping two cards", () => {
     const result = moveWidgetAndReflow([
-      widget("stable-before", { x: 0, y: 0, w: 2, h: 2 }),
-      widget("wide-moving", { x: 0, y: 4, w: 4, h: 2 }),
-      widget("target-a", { x: 2, y: 0, w: 2, h: 2 }),
-      widget("target-b", { x: 4, y: 0, w: 2, h: 2 }),
-      widget("stable-after", { x: 4, y: 4, w: 2, h: 2 }),
-    ], "wide-moving", { x: 2, y: 0, w: 4, h: 2 }, 6);
+      widget("first", { x: 0, y: 0, w: 2, h: 2 }),
+      widget("second", { x: 2, y: 0, w: 2, h: 2 }),
+      widget("third", { x: 4, y: 0, w: 2, h: 2 }),
+      widget("moving", { x: 0, y: 2, w: 2, h: 2 }),
+    ], "moving", { x: 2, y: 0, w: 2, h: 2 }, 6);
 
-    expect(result.find((item) => item.id === "stable-before")?.layout).toEqual({ x: 0, y: 0, w: 2, h: 2 });
-    expect(result.find((item) => item.id === "wide-moving")?.layout).toEqual({ x: 2, y: 0, w: 4, h: 2 });
-    expect(result.find((item) => item.id === "target-a")?.layout).toEqual({ x: 0, y: 4, w: 2, h: 2 });
-    expect(result.find((item) => item.id === "target-b")?.layout).toEqual({ x: 0, y: 2, w: 2, h: 2 });
-    expect(result.find((item) => item.id === "stable-after")?.layout).toEqual({ x: 4, y: 4, w: 2, h: 2 });
+    expect(result.map((item) => item.id)).toEqual(["first", "moving", "second", "third"]);
+    expect(result.map((item) => item.layout)).toEqual([
+      { x: 0, y: 0, w: 2, h: 2 },
+      { x: 2, y: 0, w: 2, h: 2 },
+      { x: 4, y: 0, w: 2, h: 2 },
+      { x: 0, y: 2, w: 2, h: 2 },
+    ]);
+  });
+
+  it("packs mixed card sizes from the array order instead of their stale coordinates", () => {
+    const result = compactDashboardWidgets([
+      widget("wide", { x: 2, y: 8, w: 4, h: 2 }),
+      widget("small", { x: 0, y: 0, w: 2, h: 2 }),
+      widget("lower-left", { x: 3, y: 3, w: 3, h: 2 }),
+      widget("lower-right", { x: 0, y: 3, w: 3, h: 2 }),
+    ], 6);
+
+    expect(result.map((item) => item.id)).toEqual(["wide", "small", "lower-left", "lower-right"]);
+    expect(result.map((item) => item.layout)).toEqual([
+      { x: 0, y: 0, w: 4, h: 2 },
+      { x: 4, y: 0, w: 2, h: 2 },
+      { x: 0, y: 2, w: 3, h: 2 },
+      { x: 3, y: 2, w: 3, h: 2 },
+    ]);
   });
 
   it("keeps every widget in bounds and collision-free after adaptive reflow", () => {
@@ -82,6 +97,21 @@ describe("dashboard adaptive layout", () => {
         expect(overlaps(result[left].layout, result[right].layout)).toBe(false);
       }
     }
+  });
+
+  it("keeps the established order while a resized card triggers a fresh packing pass", () => {
+    const result = resizeWidgetAndReflow([
+      widget("first", { x: 0, y: 0, w: 2, h: 2 }),
+      widget("resized", { x: 2, y: 0, w: 2, h: 2 }),
+      widget("third", { x: 4, y: 0, w: 2, h: 2 }),
+    ], "resized", { x: 2, y: 0, w: 4, h: 2 }, 6);
+
+    expect(result.map((item) => item.id)).toEqual(["first", "resized", "third"]);
+    expect(result.map((item) => item.layout)).toEqual([
+      { x: 0, y: 0, w: 2, h: 2 },
+      { x: 2, y: 0, w: 4, h: 2 },
+      { x: 0, y: 2, w: 2, h: 2 },
+    ]);
   });
 
   it("projects a dashboard to fewer columns without overlaps", () => {

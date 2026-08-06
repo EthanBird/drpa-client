@@ -36,9 +36,11 @@ import {
   compactDashboardWidgets,
   findFirstOpenLayout,
   moveWidgetAndReflow,
+  normalizeDashboardWidgetOrder,
   projectDashboardWidgetLayout,
   projectResponsiveLayouts,
   reflowDashboardColumns,
+  resizeWidgetAndReflow,
   translateResponsiveDrag,
 } from "../features/dashboard/dashboardLayout";
 import { dashboardRuntime } from "../features/dashboard/dashboardRuntime";
@@ -75,15 +77,19 @@ interface DragSession {
   startClientY: number;
   initialLayout: DashboardWidget["layout"];
   visibleOriginLayout: DashboardWidget["layout"];
-  targetX: number;
-  targetY: number;
+  originalOrderKey: string;
+  previewOrderKey: string;
+  previewWidgets: DashboardWidget[];
 }
 
 interface DragPreview {
   widgetId: string;
   translateX: number;
   translateY: number;
-  visibleTargetLayout: DashboardWidget["layout"];
+  visibleOriginLayout: DashboardWidget["layout"];
+  dropLayout: DashboardWidget["layout"];
+  layouts: Record<string, DashboardWidget["layout"]>;
+  orderKey: string;
 }
 
 interface ResizePreview {
@@ -284,7 +290,7 @@ export function OverviewPage() {
         { transform: "translate(0, 0)" },
       ], { duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" });
     }
-  }, [activeDashboard?.widgets, draggingId]);
+  }, [activeDashboard?.widgets, draggingId, dragPreview?.orderKey]);
 
   const applyDragPoint = useCallback((clientX: number, clientY: number) => {
     const session = dragRef.current;
@@ -304,15 +310,30 @@ export function OverviewPage() {
       session.dashboardColumns,
       session.visibleColumns,
     );
-    session.targetX = targetLayout.x;
-    session.targetY = targetLayout.y;
+    const current = documentRef.current;
+    const dashboard = current?.dashboards.find((item) => item.id === current.activeDashboardId);
+    if (!dashboard) return;
+    const previewWidgets = moveWidgetAndReflow(
+      dashboard.widgets,
+      session.widgetId,
+      { ...session.initialLayout, x: targetLayout.x, y: targetLayout.y },
+      session.dashboardColumns,
+    );
+    const orderKey = previewWidgets.map((widget) => widget.id).join("|");
+    if (orderKey !== session.previewOrderKey) captureWidgetRects();
+    session.previewOrderKey = orderKey;
+    session.previewWidgets = previewWidgets;
+    const layouts = projectResponsiveLayouts(previewWidgets, session.dashboardColumns, session.visibleColumns);
     setDragPreview({
       widgetId: session.widgetId,
       translateX: clientX - session.startClientX,
       translateY: clientY - session.startClientY,
-      visibleTargetLayout: { ...session.visibleOriginLayout, x: visibleX, y: visibleY },
+      visibleOriginLayout: session.visibleOriginLayout,
+      dropLayout: layouts[session.widgetId] ?? { ...session.visibleOriginLayout, x: visibleX, y: visibleY },
+      layouts,
+      orderKey,
     });
-  }, []);
+  }, [captureWidgetRects]);
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
@@ -342,7 +363,7 @@ export function OverviewPage() {
       if (!dashboard) return;
       captureWidgetRects();
       replaceActiveWidgets(
-        moveWidgetAndReflow(dashboard.widgets, session.widgetId, session.targetLayout, session.dashboardColumns),
+        resizeWidgetAndReflow(dashboard.widgets, session.widgetId, session.targetLayout, session.dashboardColumns),
         true,
       );
     };
@@ -392,17 +413,10 @@ export function OverviewPage() {
       pendingDragPointRef.current = null;
       if (commit && finalPoint) applyDragPoint(finalPoint.x, finalPoint.y);
       if (commit) {
-        const current = documentRef.current;
-        const dashboard = current?.dashboards.find((item) => item.id === current.activeDashboardId);
-        const moved = session.targetX !== session.initialLayout.x || session.targetY !== session.initialLayout.y;
-        if (dashboard && moved) {
+        const reordered = session.previewOrderKey !== session.originalOrderKey;
+        if (reordered) {
           captureWidgetRects();
-          replaceActiveWidgets(moveWidgetAndReflow(
-            dashboard.widgets,
-            session.widgetId,
-            { ...session.initialLayout, x: session.targetX, y: session.targetY },
-            session.dashboardColumns,
-          ), true);
+          replaceActiveWidgets(session.previewWidgets, true);
         }
       }
       dragRef.current = null;
@@ -444,7 +458,13 @@ export function OverviewPage() {
 
   const addWidget = (kind: DashboardWidgetKind) => {
     const widget = createWidget(kind, activeDashboard);
-    mutateActiveDashboard((dashboard) => ({ ...dashboard, widgets: [...dashboard.widgets, widget] }));
+    mutateActiveDashboard((dashboard) => ({
+      ...dashboard,
+      widgets: compactDashboardWidgets([
+        ...normalizeDashboardWidgetOrder(dashboard.widgets, dashboard.columns),
+        widget,
+      ], dashboard.columns),
+    }));
     setSelectedWidgetId(widget.id);
     setInspectorOpen(true);
   };
@@ -482,6 +502,8 @@ export function OverviewPage() {
     if (!editMode || !canvasRef.current || !documentRef.current) return;
     event.preventDefault();
     const metrics = canvasGridMetrics(canvasRef.current, visibleColumns, activeDashboard.rowHeight);
+    const orderedWidgets = normalizeDashboardWidgetOrder(activeDashboard.widgets, activeDashboard.columns);
+    const orderKey = orderedWidgets.map((item) => item.id).join("|");
     dragRef.current = {
       widgetId: widget.id,
       pointerId: event.pointerId,
@@ -494,8 +516,9 @@ export function OverviewPage() {
       startClientY: event.clientY,
       initialLayout: { ...widget.layout },
       visibleOriginLayout: { ...visibleLayout },
-      targetX: widget.layout.x,
-      targetY: widget.layout.y,
+      originalOrderKey: orderKey,
+      previewOrderKey: orderKey,
+      previewWidgets: compactDashboardWidgets(orderedWidgets, activeDashboard.columns),
     };
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -507,7 +530,10 @@ export function OverviewPage() {
       widgetId: widget.id,
       translateX: 0,
       translateY: 0,
-      visibleTargetLayout: { ...visibleLayout },
+      visibleOriginLayout: { ...visibleLayout },
+      dropLayout: { ...visibleLayout },
+      layouts: projectedLayouts,
+      orderKey,
     });
     setSelectedWidgetId(widget.id);
     setInspectorOpen(true);
@@ -550,16 +576,18 @@ export function OverviewPage() {
         >
           {!activeDashboard.widgets.length && <div className="bi-empty-canvas"><LayoutDashboard size={34} /><h2>这是一个空白仪表盘</h2><p>进入编辑模式，然后添加指标、图表、表格或 Markdown 描述。</p>{!editMode && <button className="button primary" type="button" onClick={() => { setEditMode(true); setInspectorOpen(true); }}>开始设计</button>}</div>}
           {dragPreview && (() => {
-            const layout = dragPreview.visibleTargetLayout;
+            const layout = dragPreview.dropLayout;
             return <div className="bi-drop-placeholder" aria-hidden="true" style={{ gridColumn: `${layout.x + 1} / span ${layout.w}`, gridRow: `${layout.y + 1} / span ${layout.h}` }} />;
           })()}
           {activeDashboard.widgets.map((widget) => {
             const previewLayout = resizePreview?.widgetId === widget.id ? resizePreview.targetLayout : null;
-            const layout = previewLayout
-              ? projectDashboardWidgetLayout({ ...widget, layout: previewLayout }, activeDashboard.columns, visibleColumns)
-              : projectedLayouts[widget.id] ?? widget.layout;
-            const result = widgetResults[widget.id];
             const movingPreview = dragPreview?.widgetId === widget.id ? dragPreview : null;
+            const layout = movingPreview
+              ? movingPreview.visibleOriginLayout
+              : previewLayout
+              ? projectDashboardWidgetLayout({ ...widget, layout: previewLayout }, activeDashboard.columns, visibleColumns)
+              : dragPreview?.layouts[widget.id] ?? projectedLayouts[widget.id] ?? widget.layout;
+            const result = widgetResults[widget.id];
             return (
               <section
                 className={`bi-widget kind-${widget.kind} ${editMode ? "editable" : ""} ${selectedWidgetId === widget.id ? "selected" : ""} ${draggingId === widget.id ? "dragging" : ""} ${previewLayout ? "resizing" : ""}`}
@@ -639,7 +667,8 @@ export function OverviewPage() {
               mutateActiveDashboard((dashboard) => ({
                 ...dashboard,
                 widgets: compactDashboardWidgets(
-                  dashboard.widgets.filter((widget) => widget.id !== selectedWidget.id),
+                  normalizeDashboardWidgetOrder(dashboard.widgets, dashboard.columns)
+                    .filter((widget) => widget.id !== selectedWidget.id),
                   dashboard.columns,
                 ),
               }));
