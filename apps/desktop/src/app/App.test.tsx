@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parsePythonSignature, StudioPage } from "../pages/StudioPage";
@@ -112,6 +112,16 @@ describe("DRPA Next desktop shell", () => {
     await waitFor(() => expect(reportUiReady).toHaveBeenCalledOnce());
   });
 
+  it("limits the native drag region to the empty title-bar surface", async () => {
+    const { container } = render(<App />);
+    await screen.findByRole("heading", { name: "月度结算", level: 1 });
+
+    const titlebar = container.querySelector(".titlebar");
+    const dragSurface = container.querySelector(".titlebar-spacer");
+    expect(titlebar).not.toHaveAttribute("data-tauri-drag-region");
+    expect(dragSurface).toHaveAttribute("data-tauri-drag-region");
+  });
+
   it("renders localized RPAZ parameter labels while retaining stable ids", async () => {
     const snapshot = await desktopGateway.getWorkspaceSnapshot();
     snapshot.packages[0].parameters = [{
@@ -177,11 +187,11 @@ describe("DRPA Next desktop shell", () => {
   });
 
   it("navigates to the library without recreating host state", async () => {
-    render(<App />);
+    const { container } = render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "RPAZ 包" }));
 
     expect(await screen.findByRole("heading", { name: "RPAZ 包" })).toBeVisible();
-    expect(screen.getByText("发票中心")).toBeVisible();
+    expect(within(container.querySelector('[data-navigation-page="library"]')!).getByRole("heading", { name: "发票中心" })).toBeVisible();
   });
 
   it("parses nested Python signatures for Monaco parameter hints", () => {
@@ -390,6 +400,8 @@ describe("DRPA Next desktop shell", () => {
     render(<App />);
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    expect(await screen.findByRole("heading", { name: "关于 DRPA Next" })).toBeVisible();
+    expect(screen.getByText("v2.0.3")).toBeVisible();
     const darkTheme = await screen.findByRole("radio", { name: "暗色" });
     fireEvent.click(darkTheme);
 
@@ -922,6 +934,27 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByRole("tab", { name: "main.py" })).toHaveAttribute("aria-selected", "true");
   });
 
+  it("keeps an unsaved Studio editor mounted while navigating to another workspace", async () => {
+    const project = { id: "project-navigation-state", name: "状态保留项目", files: ["main.py"] };
+    useAppStore.setState({ activeNavigation: "studio" });
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
+    const readFile = vi.spyOn(desktopGateway, "readProjectFile").mockResolvedValue("def main():\n    return 1\n");
+    const writeFile = vi.spyOn(desktopGateway, "writeProjectFile").mockResolvedValue();
+    render(<App />);
+
+    const editor = await screen.findByLabelText("mock-editor");
+    fireEvent.change(editor, { target: { value: "def main():\n    return 99\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "知识文档" }));
+    expect(await screen.findByRole("heading", { name: "知识文档" })).toBeVisible();
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    await act(async () => Promise.resolve());
+    expect(writeFile).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "开发工作室" }));
+    expect(await screen.findByLabelText("mock-editor")).toHaveValue("def main():\n    return 99\n");
+    expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
   it("initializes the local vault with a TOTP QR code and presents the recovery code once", async () => {
     const lockedStatus = {
       initialized: false,
@@ -947,6 +980,7 @@ describe("DRPA Next desktop shell", () => {
       recoveryCode: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567",
     });
     vi.spyOn(desktopGateway, "listVaultCredentials").mockResolvedValue([]);
+    useAppStore.setState({ activeNavigation: "secrets" });
     render(<SecretsPage />);
 
     expect(await screen.findByRole("heading", { name: "开发凭据保险箱" })).toBeVisible();
@@ -975,6 +1009,7 @@ describe("DRPA Next desktop shell", () => {
     vi.spyOn(desktopGateway, "listVaultCredentials").mockResolvedValue([]);
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
+    useAppStore.setState({ activeNavigation: "secrets" });
     render(<SecretsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "新增凭据" }));
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "生产环境 API" } });

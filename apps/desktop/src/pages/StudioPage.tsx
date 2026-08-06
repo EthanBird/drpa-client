@@ -34,6 +34,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { useAppStore } from "../app/store";
+import { useNavigationSurfaceActive } from "../app/NavigationSurface";
 import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
 import type { StudioProject, StudioVariable } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
@@ -293,6 +294,7 @@ interface PendingClose {
 }
 
 export function StudioPage() {
+  const pageActive = useNavigationSurfaceActive();
   const projectsCollapsed = useSidebarCollapsed("studio-projects");
   const filesCollapsed = useSidebarCollapsed("studio-files");
   const snapshot = useAppStore((state) => state.snapshot);
@@ -475,6 +477,7 @@ export function StudioPage() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!pageActive) return;
       if (!(event.ctrlKey || event.metaKey)) return;
       const key = event.key.toLowerCase();
       if (key === "s") {
@@ -497,7 +500,7 @@ export function StudioPage() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activateFile, closeDocument, projectDocuments, save, saveProjectDocuments, selectedFile, selectedId]);
+  }, [pageActive, activateFile, closeDocument, projectDocuments, save, saveProjectDocuments, selectedFile, selectedId]);
 
   const startCreate = (kind: "file" | "folder") => {
     if (!selectedId) return;

@@ -34,6 +34,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../app/store";
+import { useNavigationSurfaceActive } from "../app/NavigationSurface";
 import type { AutomationSummary, PackageSummary } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 import "../styles/automations.css";
@@ -203,6 +204,7 @@ const templates: Array<{
 
 export function AutomationsPage() {
   const snapshot = useAppStore((state) => state.snapshot);
+  const pageActive = useNavigationSurfaceActive();
   const packages = snapshot?.packages ?? [];
   const [plans, setPlans] = useState<AutomationPlan[]>([]);
   const [runs, setRuns] = useState<AutomationRun[]>([]);
@@ -266,12 +268,12 @@ export function AutomationsPage() {
 
   const hasActiveRun = runs.some((run) => run.status === "queued" || run.status === "running");
   useEffect(() => {
-    if (!backendAvailable || !hasActiveRun) return;
+    if (!pageActive || !backendAvailable || !hasActiveRun) return;
     const timer = window.setInterval(() => {
       void automationGateway.listAutomationRuns(undefined, 200).then(setRuns).catch(() => undefined);
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [backendAvailable, hasActiveRun]);
+  }, [pageActive, backendAvailable, hasActiveRun]);
 
   const selectedPlan = plans.find((plan) => plan.id === selectedId) ?? null;
   const selectedRuns = runs.filter((run) => run.planId === selectedId);

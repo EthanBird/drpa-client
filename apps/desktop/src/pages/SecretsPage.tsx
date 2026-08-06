@@ -23,6 +23,7 @@ import {
 import QRCode from "qrcode";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useNavigationSurfaceActive } from "../app/NavigationSurface";
 import type {
   VaultCredential,
   VaultCredentialInput,
@@ -79,6 +80,7 @@ function downloadTextFile(name: string, content: string) {
 }
 
 export function SecretsPage() {
+  const pageActive = useNavigationSurfaceActive();
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [setup, setSetup] = useState<VaultSetup | null>(null);
   const [qrCode, setQrCode] = useState("");
@@ -132,10 +134,11 @@ export function SecretsPage() {
   }, [loadCredentials]);
 
   useEffect(() => {
+    if (!pageActive) return;
     void loadStatus();
     const timer = window.setInterval(() => { void loadStatus(); }, 30_000);
     return () => window.clearInterval(timer);
-  }, [loadStatus]);
+  }, [pageActive, loadStatus]);
 
   useEffect(() => {
     if (!setup) {

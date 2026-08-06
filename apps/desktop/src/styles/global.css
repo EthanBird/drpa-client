@@ -53,7 +53,7 @@ button:disabled { cursor: not-allowed; opacity: 0.58; }
 .workspace-create input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .workspace-create > button { justify-self: start; padding: 0; border: 0; background: transparent; color: var(--text-3); cursor: pointer; font-size: calc(8px * var(--font-scale)); }
 .workspace-error { margin: 0; padding: 7px 10px; border-top: 1px solid color-mix(in srgb, var(--danger) 24%, var(--border-subtle)); background: color-mix(in srgb, var(--surface-1) 92%, var(--danger)); color: var(--danger); font-size: calc(8px * var(--font-scale)); line-height: 1.4; }
-.titlebar-spacer { flex: 1; }
+.titlebar-spacer { align-self: stretch; flex: 1; min-width: 36px; }
 .sync-state { margin-right: 10px; padding: 6px 9px; }
 .pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
 .window-controls { display: flex; align-self: stretch; }
@@ -102,6 +102,8 @@ nav { margin-top: 14px; }
 .account-card > svg { color: var(--text-3); }
 
 .main-content { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; overflow: hidden; background: var(--canvas); }
+.navigation-page { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.navigation-page[hidden] { display: none; }
 .navigation-rail { align-items: center; width: 54px; padding: 8px 6px 7px; }
 .navigation-rail > .sidebar-restore-button { position: static; width: 38px; min-width: 38px; height: 31px; min-height: 31px; margin: 0 0 5px; padding: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
 .navigation-rail > .sidebar-restore-button span { display: none; }

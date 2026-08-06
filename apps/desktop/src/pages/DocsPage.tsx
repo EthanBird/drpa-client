@@ -25,6 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { useNavigationSurfaceActive } from "../app/NavigationSurface";
 import type { KnowledgeEntry } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
@@ -48,6 +49,7 @@ type InlineDraft =
   | { mode: "rename"; source: KnowledgeEntry; parent: string; value: string };
 
 export function DocsPage() {
+  const pageActive = useNavigationSurfaceActive();
   const sidebarCollapsed = useSidebarCollapsed("knowledge-library");
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
@@ -134,6 +136,7 @@ export function DocsPage() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (!pageActive) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         if (dirty) void persist(selectedPath, content).catch((error: unknown) => setNotice(`保存失败：${String(error)}`));
@@ -141,7 +144,7 @@ export function DocsPage() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [content, dirty, persist, selectedPath]);
+  }, [pageActive, content, dirty, persist, selectedPath]);
 
   useEffect(() => {
     if (draft) window.setTimeout(() => inputRef.current?.select(), 0);

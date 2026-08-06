@@ -13,35 +13,69 @@ export function moveWidgetAndReflow(
 
   const normalizedTarget = normalizeLayout(target, columns);
   const movingOriginal = normalizeLayout(moving.layout, columns);
-  const collidedIds = new Set(
-    widgets
-      .filter((widget) => widget.id !== movingId && overlaps(normalizedTarget, normalizeLayout(widget.layout, columns)))
-      .map((widget) => widget.id),
-  );
-  const placed: DashboardWidget[] = [{ ...moving, layout: normalizedTarget }];
-  const others = widgets
-    .filter((widget) => widget.id !== movingId)
-    .sort((left, right) => {
-      const collisionOrder = Number(collidedIds.has(right.id)) - Number(collidedIds.has(left.id));
-      return collisionOrder || left.layout.y - right.layout.y || left.layout.x - right.layout.x;
-    });
+  const normalized = widgets.map((widget) => ({ ...widget, layout: normalizeLayout(widget.layout, columns) }));
+  const collided = normalized
+    .filter((widget) => widget.id !== movingId && overlaps(normalizedTarget, widget.layout))
+    .sort(compareRowMajor);
+  const collidedIds = new Set(collided.map((widget) => widget.id));
 
-  for (const widget of others) {
-    const desired = normalizeLayout(widget.layout, columns);
-    const vacatedSlot = collidedIds.has(widget.id)
-      ? normalizeLayout({ ...desired, x: movingOriginal.x, y: movingOriginal.y }, columns)
-      : null;
-    const layout = vacatedSlot && isOpen(vacatedSlot, placed)
+  // A drag is a local launcher-style exchange. Widgets outside the actual
+  // collision remain exact anchors; only the cards covered by the drop are
+  // relocated. This deliberately avoids the old global vertical compaction.
+  const placed = normalized.filter((widget) => widget.id !== movingId && !collidedIds.has(widget.id));
+  placed.push({ ...moving, layout: normalizedTarget });
+
+  for (const widget of collided) {
+    const vacatedSlot = normalizeLayout({ ...widget.layout, x: movingOriginal.x, y: movingOriginal.y }, columns);
+    const layout = isOpen(vacatedSlot, placed)
       ? vacatedSlot
-      : isOpen(desired, placed)
-        ? desired
-        : findNearestOpenLayout(desired, placed, columns);
+      : findFirstOpenLayout(widget.layout, placed, columns);
     placed.push({ ...widget, layout });
   }
 
-  const compacted = compactVertically(placed, columns, movingId);
-  const byId = new Map(compacted.map((widget) => [widget.id, widget]));
+  const byId = new Map(placed.map((widget) => [widget.id, widget]));
   return widgets.map((widget) => byId.get(widget.id) ?? widget);
+}
+
+export function projectDashboardLayout(
+  layout: DashboardLayout,
+  baseColumns: number,
+  visibleColumns: number,
+): DashboardLayout {
+  const source = normalizeLayout(layout, Math.max(1, baseColumns));
+  const scale = visibleColumns / Math.max(1, baseColumns);
+  // Project shared edges instead of independently rounding x and width. Two
+  // adjacent cards therefore keep the exact same boundary at every breakpoint.
+  const x = clamp(Math.round(source.x * scale), 0, Math.max(0, visibleColumns - 1));
+  const right = clamp(Math.round((source.x + source.w) * scale), x + 1, visibleColumns);
+  return normalizeLayout({ ...source, x, w: right - x }, visibleColumns);
+}
+
+export function projectDashboardWidgetLayout(
+  widget: DashboardWidget,
+  baseColumns: number,
+  visibleColumns: number,
+): DashboardLayout {
+  const projected = projectDashboardLayout(widget.layout, baseColumns, visibleColumns);
+  const minimumWidth = minimumReadableWidth(widget.kind, visibleColumns);
+  if (projected.w >= minimumWidth) return projected;
+  const width = Math.min(visibleColumns, minimumWidth);
+  const center = projected.x + projected.w / 2;
+  const x = clamp(Math.round(center - width / 2), 0, visibleColumns - width);
+  return { ...projected, x, w: width };
+}
+
+export function translateResponsiveDrag(
+  savedLayout: DashboardLayout,
+  visibleOrigin: Pick<DashboardLayout, "x" | "y">,
+  visibleTarget: Pick<DashboardLayout, "x" | "y">,
+  baseColumns: number,
+  visibleColumns: number,
+): DashboardLayout {
+  const saved = normalizeLayout(savedLayout, baseColumns);
+  const deltaX = Math.round((visibleTarget.x - visibleOrigin.x) * baseColumns / Math.max(1, visibleColumns));
+  const deltaY = visibleTarget.y - visibleOrigin.y;
+  return normalizeLayout({ ...saved, x: saved.x + deltaX, y: saved.y + deltaY }, baseColumns);
 }
 
 export function projectResponsiveLayouts(
@@ -49,40 +83,36 @@ export function projectResponsiveLayouts(
   baseColumns: number,
   visibleColumns: number,
 ): Record<string, DashboardLayout> {
-  const scale = visibleColumns / Math.max(1, baseColumns);
   const placed: DashboardWidget[] = [];
   const result: Record<string, DashboardLayout> = {};
-  const ordered = [...widgets].sort((left, right) => left.layout.y - right.layout.y || left.layout.x - right.layout.x);
+  const ordered = [...widgets].sort(compareRowMajor);
   for (const widget of ordered) {
-    const width = clamp(Math.round(widget.layout.w * scale), 1, visibleColumns);
-    const desired = normalizeLayout({
-      ...widget.layout,
-      x: Math.round(widget.layout.x * scale),
-      w: width,
-    }, visibleColumns);
-    const layout = isOpen(desired, placed) ? desired : findNearestOpenLayout(desired, placed, visibleColumns);
+    const desired = projectDashboardWidgetLayout(widget, baseColumns, visibleColumns);
+    const layout = isOpen(desired, placed) ? desired : findFirstOpenLayout(desired, placed, visibleColumns);
     result[widget.id] = layout;
     placed.push({ ...widget, layout });
   }
-  return Object.fromEntries(compactVertically(placed, visibleColumns).map((widget) => [widget.id, widget.layout]));
+  return result;
 }
 
 export function reflowDashboardColumns(dashboard: DashboardDefinition, columns: number): DashboardDefinition {
-  const ratio = columns / Math.max(1, dashboard.columns);
   const placed: DashboardWidget[] = [];
-  for (const widget of [...dashboard.widgets].sort((left, right) => left.layout.y - right.layout.y || left.layout.x - right.layout.x)) {
-    const width = clamp(Math.round(widget.layout.w * ratio), 1, columns);
-    const desired = normalizeLayout({ ...widget.layout, x: Math.round(widget.layout.x * ratio), w: width }, columns);
-    const layout = isOpen(desired, placed) ? desired : findNearestOpenLayout(desired, placed, columns);
+  for (const widget of [...dashboard.widgets].sort(compareRowMajor)) {
+    const desired = projectDashboardLayout(widget.layout, dashboard.columns, columns);
+    const layout = isOpen(desired, placed) ? desired : findFirstOpenLayout(desired, placed, columns);
     placed.push({ ...widget, layout });
   }
-  const compacted = compactVertically(placed, columns);
-  const byId = new Map(compacted.map((widget) => [widget.id, widget]));
+  const byId = new Map(placed.map((widget) => [widget.id, widget]));
   return { ...dashboard, columns, widgets: dashboard.widgets.map((widget) => byId.get(widget.id) ?? widget) };
 }
 
 export function compactDashboardWidgets(widgets: DashboardWidget[], columns: number): DashboardWidget[] {
-  return compactVertically(widgets, columns);
+  const placed: DashboardWidget[] = [];
+  for (const widget of [...widgets].sort(compareRowMajor)) {
+    placed.push({ ...widget, layout: findFirstOpenLayout(widget.layout, placed, columns) });
+  }
+  const byId = new Map(placed.map((widget) => [widget.id, widget]));
+  return widgets.map((widget) => byId.get(widget.id) ?? widget);
 }
 
 export function findFirstOpenLayout(layout: DashboardLayout, others: DashboardWidget[], columns: number): DashboardLayout {
@@ -124,34 +154,18 @@ export function overlaps(left: DashboardLayout, right: DashboardLayout): boolean
     && left.y + left.h > right.y;
 }
 
-function compactVertically(widgets: DashboardWidget[], columns: number, pinnedId = ""): DashboardWidget[] {
-  const layouts = new Map(widgets.map((widget) => [widget.id, normalizeLayout(widget.layout, columns)]));
-  const ordered = [...widgets].sort((left, right) => {
-    if (left.id === pinnedId) return -1;
-    if (right.id === pinnedId) return 1;
-    const leftLayout = layouts.get(left.id)!;
-    const rightLayout = layouts.get(right.id)!;
-    return leftLayout.y - rightLayout.y || leftLayout.x - rightLayout.x;
-  });
-
-  for (const widget of ordered) {
-    if (widget.id === pinnedId) continue;
-    const current = layouts.get(widget.id)!;
-    let candidate = current;
-    while (candidate.y > 0) {
-      const above = { ...candidate, y: candidate.y - 1 };
-      const blocked = widgets.some((other) => other.id !== widget.id && overlaps(above, layouts.get(other.id)!));
-      if (blocked) break;
-      candidate = above;
-    }
-    layouts.set(widget.id, candidate);
-  }
-
-  return widgets.map((widget) => ({ ...widget, layout: layouts.get(widget.id)! }));
-}
-
 function isOpen(layout: DashboardLayout, others: DashboardWidget[]): boolean {
   return !others.some((widget) => overlaps(layout, widget.layout));
+}
+
+function compareRowMajor(left: DashboardWidget, right: DashboardWidget): number {
+  return left.layout.y - right.layout.y || left.layout.x - right.layout.x;
+}
+
+function minimumReadableWidth(kind: DashboardWidget["kind"], visibleColumns: number): number {
+  if (visibleColumns > 4) return 1;
+  if (kind === "line" || kind === "bar" || kind === "table") return visibleColumns;
+  return Math.min(2, visibleColumns);
 }
 
 function normalizeLayout(layout: DashboardLayout, columns: number): DashboardLayout {

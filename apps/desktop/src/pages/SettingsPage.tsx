@@ -7,6 +7,7 @@ import {
   Download,
   FileText,
   FolderOpen,
+  Info,
   KeyRound,
   Languages,
   Link2,
@@ -22,6 +23,7 @@ import { useAppStore } from "../app/store";
 import type { AgentWorkspaceConfig, PlatformCapabilities } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 import { useI18n } from "../i18n";
+import appPackage from "../../package.json";
 
 const SkillWorkspace = lazy(() => import("../components/SkillWorkspace").then((module) => ({ default: module.SkillWorkspace })));
 
@@ -169,6 +171,14 @@ export function SettingsPage() {
         <div><div className="eyebrow">{t("settings.eyebrow")}</div><h1>{t("settings.title")}</h1><p>{t("settings.description")}</p></div>
       </header>
       <div className="settings-grid">
+        <section className="settings-card settings-about-card">
+          <header><Info size={18} /><div><h2>{t("settings.about")}</h2><p>{t("settings.aboutDescription")}</p></div></header>
+          <div className="setting-row">
+            <div><strong>DRPA Next <code>v{appPackage.version}</code></strong><span>{t("settings.aboutEdition")}</span></div>
+            <div className="settings-about-platform"><small>{t("settings.aboutRuntime")}</small><strong>{platform?.displayName ?? "…"}</strong><code>{platform?.runtimeTarget ?? "detecting"}</code></div>
+          </div>
+        </section>
+
         <section className="settings-card">
           <header><Languages size={18} /><div><h2>{t("settings.language")}</h2><p>{t("settings.languageDescription")}</p></div></header>
           <div className="setting-row"><div><strong>{t("settings.displayLanguage")}</strong><span>{t("settings.languageReady")}</span></div><select className="settings-select" aria-label={t("settings.displayLanguage")} value={language} onChange={(event) => setLanguage(event.target.value as "zh-CN" | "en-US")}><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></div>

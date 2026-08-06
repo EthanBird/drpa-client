@@ -28,7 +28,7 @@ import {
   Zap,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type PropsWithChildren } from "react";
+import { useEffect, useRef, useState, type FormEvent, type PropsWithChildren } from "react";
 
 import type { NavigationId, WorkspaceInfo } from "../domain/models";
 import { useAppStore } from "../app/store";
@@ -105,7 +105,21 @@ export function AppShell({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!inDesktopHost) return;
-    void getCurrentWindow().isMaximized().then(setMaximized).catch(() => setMaximized(false));
+    const appWindow = getCurrentWindow();
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const syncMaximized = () => {
+      void appWindow.isMaximized().then((value) => { if (!disposed) setMaximized(value); }).catch(() => undefined);
+    };
+    syncMaximized();
+    void appWindow.onResized(syncMaximized).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [inDesktopHost]);
 
   useEffect(() => {
@@ -212,17 +226,10 @@ export function AppShell({ children }: PropsWithChildren) {
     if (action === "close") await appWindow.close();
   };
 
-  const startWindowDrag = (event: MouseEvent<HTMLElement>) => {
-    if (!inDesktopHost || event.button !== 0 || event.detail !== 1) return;
-    const target = event.target as HTMLElement;
-    if (target.closest("button, input, select, textarea, summary, a")) return;
-    void getCurrentWindow().startDragging();
-  };
-
   return (
     <div className={navigationCollapsed ? "shell navigation-collapsed" : "shell"}>
-      <header className="titlebar" data-tauri-drag-region onMouseDown={startWindowDrag} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, select, textarea, summary, a")) void controlWindow("maximize"); }}>
-        <div className="brand-lockup" data-tauri-drag-region>
+      <header className="titlebar">
+        <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
             <Bot size={17} strokeWidth={2.1} />
           </div>
@@ -294,7 +301,11 @@ export function AppShell({ children }: PropsWithChildren) {
             </section>
           )}
         </div>
-        <div className="titlebar-spacer" data-tauri-drag-region />
+        <div
+          className="titlebar-spacer"
+          data-tauri-drag-region
+          onDoubleClick={() => void controlWindow("maximize")}
+        />
         <button className="sync-state" type="button" aria-label="Host 状态" onClick={() => setActiveNavigation("runtimes")}>
           <span className="pulse-dot" />
           {t("status.hostConnected")}

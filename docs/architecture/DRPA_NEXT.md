@@ -41,6 +41,8 @@ Tauri is chosen over Electron because DRPA needs a native host control plane and
 - CSS custom properties as the canonical design-token format.
 - Lucide icons, with icons always paired with accessible labels or tooltips where meaning is not obvious.
 - Zustand for small client-side interaction state. Server/host state remains behind typed gateway functions.
+- Visited workspace pages stay mounted behind hidden, inert navigation surfaces. Switching modules therefore preserves unsaved editor buffers, open tabs, selected Markdown documents and scroll positions instead of recreating the page tree. Global shortcuts are scoped to the active module, while background polling is paused for inactive BI, automation, plugin and vault pages.
+- The custom title bar has one native drag surface only: the central empty area. Interactive controls and the brand/workspace regions never start a manual drag; double-clicking the drag surface toggles maximize/restore.
 - TanStack Virtual for long log streams and large package/run lists.
 - Vitest and Testing Library for deterministic component tests.
 

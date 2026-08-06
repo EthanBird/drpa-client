@@ -3,7 +3,9 @@ import { lazy, Suspense, useEffect, useRef } from "react";
 import { desktopGateway } from "../infra/gateway";
 import { AppShell } from "../components/AppShell";
 import { CommandPalette } from "../components/CommandPalette";
+import type { NavigationId } from "../domain/models";
 import { OverviewPage } from "../pages/OverviewPage";
+import { NavigationSurface } from "./NavigationSurface";
 import { useAppStore } from "./store";
 
 const AgentPage = lazy(() => import("../pages/AgentPage").then((module) => ({ default: module.AgentPage })));
@@ -49,6 +51,8 @@ function waitForTwoPaints(): Promise<void> {
 export function App() {
   const inputSmokeArmed = useRef(false);
   const activeNavigation = useAppStore((state) => state.activeNavigation);
+  const visitedNavigations = useRef<Set<NavigationId>>(new Set([activeNavigation]));
+  visitedNavigations.current.add(activeNavigation);
   const commandOpen = useAppStore((state) => state.commandOpen);
   const theme = useAppStore((state) => state.theme);
   const fontScale = useAppStore((state) => state.fontScale);
@@ -207,22 +211,22 @@ export function App() {
   return (
     <div className="app">
       <AppShell>
-        {activeNavigation === "overview" && <OverviewPage />}
-        {activeNavigation === "library" && <Suspense fallback={<PageFallback />}><LibraryPage /></Suspense>}
-        {activeNavigation === "studio" && <Suspense fallback={<PageFallback />}><StudioPage /></Suspense>}
-        {activeNavigation === "data" && <Suspense fallback={<PageFallback />}><DataPage /></Suspense>}
-        {activeNavigation === "workbench" && <Suspense fallback={<PageFallback />}><WorkbenchPage /></Suspense>}
-        {activeNavigation === "runs" && <Suspense fallback={<PageFallback />}><RunsPage /></Suspense>}
-        {activeNavigation === "automations" && <Suspense fallback={<PageFallback />}><AutomationsPage /></Suspense>}
-        {activeNavigation === "localDify" && <Suspense fallback={<PageFallback />}><LocalDifyPage /></Suspense>}
-        {activeNavigation === "agent" && <Suspense fallback={<PageFallback />}><AgentPage /></Suspense>}
-        {activeNavigation === "extensionTools" && <Suspense fallback={<PageFallback />}><ExtensionToolsPage /></Suspense>}
-        {activeNavigation === "plugins" && <Suspense fallback={<PageFallback />}><PluginsPage /></Suspense>}
-        {activeNavigation === "docs" && <Suspense fallback={<PageFallback />}><DocsPage /></Suspense>}
-        {activeNavigation === "knowledgeBase" && <Suspense fallback={<PageFallback />}><KnowledgeBasePage /></Suspense>}
-        {activeNavigation === "runtimes" && <Suspense fallback={<PageFallback />}><RuntimePage /></Suspense>}
-        {activeNavigation === "secrets" && <Suspense fallback={<PageFallback />}><SecretsPage /></Suspense>}
-        {activeNavigation === "settings" && <Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>}
+        {visitedNavigations.current.has("overview") && <NavigationSurface id="overview" activeId={activeNavigation}><OverviewPage /></NavigationSurface>}
+        {visitedNavigations.current.has("library") && <NavigationSurface id="library" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><LibraryPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("studio") && <NavigationSurface id="studio" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><StudioPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("data") && <NavigationSurface id="data" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><DataPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("workbench") && <NavigationSurface id="workbench" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><WorkbenchPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("runs") && <NavigationSurface id="runs" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><RunsPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("automations") && <NavigationSurface id="automations" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><AutomationsPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("localDify") && <NavigationSurface id="localDify" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><LocalDifyPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("agent") && <NavigationSurface id="agent" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><AgentPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("extensionTools") && <NavigationSurface id="extensionTools" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><ExtensionToolsPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("plugins") && <NavigationSurface id="plugins" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><PluginsPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("docs") && <NavigationSurface id="docs" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><DocsPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("knowledgeBase") && <NavigationSurface id="knowledgeBase" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><KnowledgeBasePage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("runtimes") && <NavigationSurface id="runtimes" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><RuntimePage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("secrets") && <NavigationSurface id="secrets" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><SecretsPage /></Suspense></NavigationSurface>}
+        {visitedNavigations.current.has("settings") && <NavigationSurface id="settings" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><SettingsPage /></Suspense></NavigationSurface>}
       </AppShell>
       {dragActive && <div className="drop-overlay"><div><strong>{activeNavigation === "docs" ? "释放以导入 Markdown" : activeNavigation === "knowledgeBase" ? "释放以索引到向量知识库" : activeNavigation === "agent" ? "释放以附加到当前对话" : activeNavigation === "studio" ? "释放以添加项目文件" : activeNavigation === "data" ? "释放以创建文件数据源" : "释放以安装 RPAZ"}</strong><span>{activeNavigation === "docs" ? "支持同时导入多个 `.md` / `.markdown` 文档" : activeNavigation === "knowledgeBase" ? "支持 PDF、Word、Excel、PowerPoint 与文本资料" : activeNavigation === "agent" ? "支持 PDF、DOCX、XLSX 与 PPTX" : activeNavigation === "studio" ? "文件将添加到当前项目目录" : activeNavigation === "data" ? "支持 SQLite、XLS、XLSX、XLSB 与 ODS" : "支持同时拖入多个 `.rpaz` RPAZ 包"}</span></div></div>}
       {operationNotice && <button className="global-notice" type="button" onClick={() => setOperationNotice("")}>{operationNotice}<span>×</span></button>}

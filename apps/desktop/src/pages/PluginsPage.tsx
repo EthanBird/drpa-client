@@ -31,6 +31,7 @@ import {
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import { useAppStore } from "../app/store";
+import { useNavigationSurfaceActive } from "../app/NavigationSurface";
 import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
 import { desktopGateway } from "../infra/gateway";
 import "../styles/plugins.css";
@@ -293,6 +294,7 @@ type WorkbenchTab =
 
 export function PluginsPage() {
   const catalogCollapsed = useSidebarCollapsed("plugins-catalog");
+  const pageActive = useNavigationSurfaceActive();
   const setActiveNavigation = useAppStore((state) => state.setActiveNavigation);
   const setAgentBaseUrl = useAppStore((state) => state.setAgentBaseUrl);
   const setAgentModel = useAppStore((state) => state.setAgentModel);
@@ -386,7 +388,7 @@ export function PluginsPage() {
   }, []);
 
   useEffect(() => {
-    if (!selected) return;
+    if (!pageActive || !selected) return;
     let disposed = false;
     let inFlight = false;
     const timer = window.setInterval(() => {
@@ -411,7 +413,7 @@ export function PluginsPage() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [capabilities, selected?.id]);
+  }, [pageActive, capabilities, selected?.id]);
 
   const showNotice = (message: string, tone: "neutral" | "success" | "error" = "neutral") => {
     setNotice(message);

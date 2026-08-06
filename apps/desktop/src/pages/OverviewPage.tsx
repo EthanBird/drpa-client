@@ -22,6 +22,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import { useAppStore } from "../app/store";
+import { useNavigationSurfaceActive } from "../app/NavigationSurface";
 import type {
   DashboardDataset,
   DashboardDefinition,
@@ -35,8 +36,10 @@ import {
   compactDashboardWidgets,
   findFirstOpenLayout,
   moveWidgetAndReflow,
+  projectDashboardWidgetLayout,
   projectResponsiveLayouts,
   reflowDashboardColumns,
+  translateResponsiveDrag,
 } from "../features/dashboard/dashboardLayout";
 import { dashboardRuntime } from "../features/dashboard/dashboardRuntime";
 import { desktopGateway } from "../infra/gateway";
@@ -49,14 +52,15 @@ interface WidgetResult {
 
 interface ResizeSession {
   widgetId: string;
+  pointerId: number;
   startX: number;
   startY: number;
-  startWidth: number;
-  startHeight: number;
+  initialLayout: DashboardWidget["layout"];
+  targetLayout: DashboardWidget["layout"];
   dashboardColumns: number;
   visibleColumns: number;
-  canvasWidth: number;
-  rowHeight: number;
+  columnPitch: number;
+  rowPitch: number;
 }
 
 interface DragSession {
@@ -67,13 +71,29 @@ interface DragSession {
   dashboardColumns: number;
   visibleColumns: number;
   rowHeight: number;
-  lastX: number;
-  lastY: number;
-  initialDocument: DashboardDocument;
+  startClientX: number;
+  startClientY: number;
+  initialLayout: DashboardWidget["layout"];
+  visibleOriginLayout: DashboardWidget["layout"];
+  targetX: number;
+  targetY: number;
+}
+
+interface DragPreview {
+  widgetId: string;
+  translateX: number;
+  translateY: number;
+  visibleTargetLayout: DashboardWidget["layout"];
+}
+
+interface ResizePreview {
+  widgetId: string;
+  targetLayout: DashboardWidget["layout"];
 }
 
 export function OverviewPage() {
   const snapshot = useAppStore((state) => state.snapshot);
+  const pageActive = useNavigationSurfaceActive();
   const [document, setDocument] = useState<DashboardDocument | null>(null);
   const documentRef = useRef<DashboardDocument | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -87,6 +107,8 @@ export function OverviewPage() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [visibleColumns, setVisibleColumns] = useState(12);
   const [draggingId, setDraggingId] = useState("");
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+  const [resizePreview, setResizePreview] = useState<ResizePreview | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -154,7 +176,7 @@ export function OverviewPage() {
   );
 
   useEffect(() => {
-    if (!snapshot || !activeDashboard) return;
+    if (!pageActive || !snapshot || !activeDashboard) return;
     let disposed = false;
     const dataWidgets = activeDashboard.widgets.filter((widget) => widget.kind !== "markdown");
     setWidgetResults((current) => Object.fromEntries(dataWidgets.map((widget) => [widget.id, { ...current[widget.id], loading: true }])));
@@ -169,15 +191,15 @@ export function OverviewPage() {
       }));
     }, 240);
     return () => { disposed = true; window.clearTimeout(timer); };
-  }, [snapshot, activeDashboard?.id, querySignature, passwordSignature, refreshTick]);
+  }, [pageActive, snapshot, activeDashboard?.id, querySignature, passwordSignature, refreshTick]);
 
   useEffect(() => {
-    if (!activeDashboard) return;
+    if (!pageActive || !activeDashboard) return;
     const intervals = activeDashboard.widgets.map((widget) => widget.options.refreshSeconds).filter((seconds) => seconds > 0);
     if (!intervals.length) return;
     const timer = window.setInterval(() => setRefreshTick((value) => value + 1), Math.max(5, Math.min(...intervals)) * 1_000);
     return () => window.clearInterval(timer);
-  }, [activeDashboard?.id, refreshSignature]);
+  }, [pageActive, activeDashboard?.id, refreshSignature]);
 
   const commitDocument = useCallback((next: DashboardDocument) => {
     documentRef.current = next;
@@ -267,61 +289,83 @@ export function OverviewPage() {
   const applyDragPoint = useCallback((clientX: number, clientY: number) => {
     const session = dragRef.current;
     const canvas = canvasRef.current;
-    const current = documentRef.current;
-    if (!session || !canvas || !current) return;
-    const dashboard = current.dashboards.find((item) => item.id === current.activeDashboardId);
-    const widget = dashboard?.widgets.find((item) => item.id === session.widgetId);
-    if (!dashboard || !widget) return;
+    if (!session || !canvas) return;
     const metrics = canvasGridMetrics(canvas, session.visibleColumns, session.rowHeight);
-    const visibleX = clamp(Math.round((clientX - session.grabOffsetX - metrics.left) / metrics.columnPitch), 0, session.visibleColumns - 1);
-    const baseX = Math.round(visibleX * session.dashboardColumns / session.visibleColumns);
-    const y = Math.max(0, Math.round((clientY - session.grabOffsetY - metrics.top) / metrics.rowPitch));
-    const targetX = clamp(baseX, 0, session.dashboardColumns - widget.layout.w);
-    if (targetX === session.lastX && y === session.lastY) return;
-    session.lastX = targetX;
-    session.lastY = y;
-    captureWidgetRects();
-    replaceActiveWidgets(moveWidgetAndReflow(
-      dashboard.widgets,
-      session.widgetId,
-      { ...widget.layout, x: targetX, y },
+    const visibleX = clamp(
+      Math.round((clientX - session.grabOffsetX - metrics.left) / metrics.columnPitch),
+      0,
+      session.visibleColumns - session.visibleOriginLayout.w,
+    );
+    const visibleY = Math.max(0, Math.round((clientY - session.grabOffsetY - metrics.top) / metrics.rowPitch));
+    const targetLayout = translateResponsiveDrag(
+      session.initialLayout,
+      session.visibleOriginLayout,
+      { x: visibleX, y: visibleY },
       session.dashboardColumns,
-    ), false);
-  }, [captureWidgetRects, replaceActiveWidgets]);
+      session.visibleColumns,
+    );
+    session.targetX = targetLayout.x;
+    session.targetY = targetLayout.y;
+    setDragPreview({
+      widgetId: session.widgetId,
+      translateX: clientX - session.startClientX,
+      translateY: clientY - session.startClientY,
+      visibleTargetLayout: { ...session.visibleOriginLayout, x: visibleX, y: visibleY },
+    });
+  }, []);
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
       const session = resizeRef.current;
-      if (!session) return;
-      const columnWidth = session.canvasWidth / session.visibleColumns;
-      const visibleDeltaColumns = Math.round((event.clientX - session.startX) / Math.max(1, columnWidth));
+      if (!session || event.pointerId !== session.pointerId) return;
+      event.preventDefault();
+      const visibleDeltaColumns = Math.round((event.clientX - session.startX) / session.columnPitch);
       const deltaColumns = Math.round(visibleDeltaColumns * session.dashboardColumns / session.visibleColumns);
-      const deltaRows = Math.round((event.clientY - session.startY) / Math.max(1, session.rowHeight + 10));
+      const deltaRows = Math.round((event.clientY - session.startY) / session.rowPitch);
+      const target = {
+        ...session.initialLayout,
+        w: clamp(session.initialLayout.w + deltaColumns, 1, session.dashboardColumns - session.initialLayout.x),
+        h: clamp(session.initialLayout.h + deltaRows, 1, 24),
+      };
+      if (target.w === session.targetLayout.w && target.h === session.targetLayout.h) return;
+      session.targetLayout = target;
+      setResizePreview({ widgetId: session.widgetId, targetLayout: target });
+    };
+    const finishResize = (commit: boolean) => {
+      const session = resizeRef.current;
+      if (!session) return;
+      resizeRef.current = null;
+      setResizePreview(null);
+      if (!commit) return;
       const current = documentRef.current;
       const dashboard = current?.dashboards.find((item) => item.id === current.activeDashboardId);
-      const widget = dashboard?.widgets.find((item) => item.id === session.widgetId);
-      if (!dashboard || !widget) return;
-      const target = {
-        ...widget.layout,
-        w: clamp(session.startWidth + deltaColumns, 1, session.dashboardColumns - widget.layout.x),
-        h: clamp(session.startHeight + deltaRows, 1, 24),
-      };
-      if (target.w === widget.layout.w && target.h === widget.layout.h) return;
+      if (!dashboard) return;
       captureWidgetRects();
-      replaceActiveWidgets(moveWidgetAndReflow(dashboard.widgets, session.widgetId, target, session.dashboardColumns), false);
+      replaceActiveWidgets(
+        moveWidgetAndReflow(dashboard.widgets, session.widgetId, session.targetLayout, session.dashboardColumns),
+        true,
+      );
     };
-    const onPointerUp = () => {
-      if (!resizeRef.current) return;
-      resizeRef.current = null;
-      if (documentRef.current) commitDocument(documentRef.current);
+    const onPointerUp = (event: PointerEvent) => {
+      if (resizeRef.current?.pointerId === event.pointerId) finishResize(true);
     };
-    window.addEventListener("pointermove", onPointerMove);
+    const onPointerCancel = (event: PointerEvent) => {
+      if (resizeRef.current?.pointerId === event.pointerId) finishResize(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && resizeRef.current) finishResize(false);
+    };
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
     window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("keydown", onKeyDown);
     };
-  }, [captureWidgetRects, commitDocument, replaceActiveWidgets]);
+  }, [captureWidgetRects, replaceActiveWidgets]);
 
   useEffect(() => {
     const flushPendingDrag = () => {
@@ -347,14 +391,23 @@ export function OverviewPage() {
       const finalPoint = point ?? pendingDragPointRef.current;
       pendingDragPointRef.current = null;
       if (commit && finalPoint) applyDragPoint(finalPoint.x, finalPoint.y);
+      if (commit) {
+        const current = documentRef.current;
+        const dashboard = current?.dashboards.find((item) => item.id === current.activeDashboardId);
+        const moved = session.targetX !== session.initialLayout.x || session.targetY !== session.initialLayout.y;
+        if (dashboard && moved) {
+          captureWidgetRects();
+          replaceActiveWidgets(moveWidgetAndReflow(
+            dashboard.widgets,
+            session.widgetId,
+            { ...session.initialLayout, x: session.targetX, y: session.targetY },
+            session.dashboardColumns,
+          ), true);
+        }
+      }
       dragRef.current = null;
       setDraggingId("");
-      if (commit) {
-        if (documentRef.current) commitDocument(documentRef.current);
-      } else {
-        documentRef.current = session.initialDocument;
-        setDocument(session.initialDocument);
-      }
+      setDragPreview(null);
     };
     const onPointerUp = (event: PointerEvent) => {
       const session = dragRef.current;
@@ -377,7 +430,7 @@ export function OverviewPage() {
       window.removeEventListener("pointercancel", onPointerCancel);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [applyDragPoint, commitDocument]);
+  }, [applyDragPoint, captureWidgetRects, replaceActiveWidgets]);
 
   if (loadError) return <div className="page bi-page"><div className="bi-load-error"><LayoutDashboard size={34} /><h1>BI 主页配置读取失败</h1><p>{loadError}</p><button className="button primary" type="button" onClick={() => {
     setLoadError("");
@@ -437,9 +490,12 @@ export function OverviewPage() {
       dashboardColumns: activeDashboard.columns,
       visibleColumns,
       rowHeight: activeDashboard.rowHeight,
-      lastX: widget.layout.x,
-      lastY: widget.layout.y,
-      initialDocument: documentRef.current,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      initialLayout: { ...widget.layout },
+      visibleOriginLayout: { ...visibleLayout },
+      targetX: widget.layout.x,
+      targetY: widget.layout.y,
     };
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -447,6 +503,12 @@ export function OverviewPage() {
       // Window-level pointer listeners still keep the drag session active.
     }
     setDraggingId(widget.id);
+    setDragPreview({
+      widgetId: widget.id,
+      translateX: 0,
+      translateY: 0,
+      visibleTargetLayout: { ...visibleLayout },
+    });
     setSelectedWidgetId(widget.id);
     setInspectorOpen(true);
   };
@@ -487,15 +549,27 @@ export function OverviewPage() {
           style={{ "--bi-columns": visibleColumns, "--bi-row-height": `${activeDashboard.rowHeight}px` } as CSSProperties}
         >
           {!activeDashboard.widgets.length && <div className="bi-empty-canvas"><LayoutDashboard size={34} /><h2>这是一个空白仪表盘</h2><p>进入编辑模式，然后添加指标、图表、表格或 Markdown 描述。</p>{!editMode && <button className="button primary" type="button" onClick={() => { setEditMode(true); setInspectorOpen(true); }}>开始设计</button>}</div>}
+          {dragPreview && (() => {
+            const layout = dragPreview.visibleTargetLayout;
+            return <div className="bi-drop-placeholder" aria-hidden="true" style={{ gridColumn: `${layout.x + 1} / span ${layout.w}`, gridRow: `${layout.y + 1} / span ${layout.h}` }} />;
+          })()}
           {activeDashboard.widgets.map((widget) => {
-            const layout = projectedLayouts[widget.id] ?? widget.layout;
+            const previewLayout = resizePreview?.widgetId === widget.id ? resizePreview.targetLayout : null;
+            const layout = previewLayout
+              ? projectDashboardWidgetLayout({ ...widget, layout: previewLayout }, activeDashboard.columns, visibleColumns)
+              : projectedLayouts[widget.id] ?? widget.layout;
             const result = widgetResults[widget.id];
+            const movingPreview = dragPreview?.widgetId === widget.id ? dragPreview : null;
             return (
               <section
-                className={`bi-widget kind-${widget.kind} ${editMode ? "editable" : ""} ${selectedWidgetId === widget.id ? "selected" : ""} ${draggingId === widget.id ? "dragging" : ""}`}
+                className={`bi-widget kind-${widget.kind} ${editMode ? "editable" : ""} ${selectedWidgetId === widget.id ? "selected" : ""} ${draggingId === widget.id ? "dragging" : ""} ${previewLayout ? "resizing" : ""}`}
                 data-bi-widget-id={widget.id}
                 key={widget.id}
-                style={{ gridColumn: `${layout.x + 1} / span ${layout.w}`, gridRow: `${layout.y + 1} / span ${layout.h}` }}
+                style={{
+                  gridColumn: `${layout.x + 1} / span ${layout.w}`,
+                  gridRow: `${layout.y + 1} / span ${layout.h}`,
+                  ...(movingPreview ? { transform: `translate3d(${movingPreview.translateX}px, ${movingPreview.translateY}px, 0) scale(1.012)`, transition: "none" } : {}),
+                }}
                 onClick={() => { if (editMode) { setSelectedWidgetId(widget.id); setInspectorOpen(true); } }}
               >
                 <header
@@ -513,17 +587,27 @@ export function OverviewPage() {
                   onPointerDown={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
+                    if (!canvasRef.current) return;
+                    const metrics = canvasGridMetrics(canvasRef.current, visibleColumns, activeDashboard.rowHeight);
                     resizeRef.current = {
                       widgetId: widget.id,
+                      pointerId: event.pointerId,
                       startX: event.clientX,
                       startY: event.clientY,
-                      startWidth: widget.layout.w,
-                      startHeight: widget.layout.h,
+                      initialLayout: { ...widget.layout },
+                      targetLayout: { ...widget.layout },
                       dashboardColumns: activeDashboard.columns,
                       visibleColumns,
-                      canvasWidth: canvasRef.current?.clientWidth ?? 1,
-                      rowHeight: activeDashboard.rowHeight,
+                      columnPitch: metrics.columnPitch,
+                      rowPitch: metrics.rowPitch,
                     };
+                    setResizePreview({ widgetId: widget.id, targetLayout: { ...widget.layout } });
+                    setSelectedWidgetId(widget.id);
+                    try {
+                      event.currentTarget.setPointerCapture?.(event.pointerId);
+                    } catch {
+                      // Window-level listeners retain the resize session.
+                    }
                   }}
                 ><span /></button>}
               </section>
