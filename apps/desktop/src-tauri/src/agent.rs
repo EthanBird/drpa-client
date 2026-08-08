@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{
@@ -22,8 +22,9 @@ use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
 use crate::{
-    AppPaths, RunProcessManager, agent_config, agent_documents, agent_extensions, credential_vault,
-    database, dispatch_run_background, knowledge, knowledge_base, plugins,
+    AppPaths, RunProcessManager, agent_browser::AgentBrowserSession, agent_config, agent_documents,
+    agent_extensions, agent_runtime::AgentRunControl, credential_vault, database,
+    dispatch_run_background, knowledge, knowledge_base, plugins,
 };
 use drpa_host::HostState;
 
@@ -78,6 +79,10 @@ pub(crate) struct AgentTurnRequest {
     pub temperature: f32,
     #[serde(default = "default_python_timeout_seconds")]
     pub python_timeout_seconds: u64,
+    #[serde(default = "default_max_tool_calls")]
+    pub max_tool_calls: usize,
+    #[serde(default = "default_max_wall_time_seconds")]
+    pub max_wall_time_seconds: u64,
     #[serde(default)]
     pub selected_skill_ids: Vec<String>,
     #[serde(default)]
@@ -107,6 +112,11 @@ pub(crate) struct AgentToolPolicy {
     pub python: bool,
     pub workspace_write: bool,
     pub extensions: bool,
+    pub browser: bool,
+    pub rpaz_runs: bool,
+    pub run_records: bool,
+    pub vault_read: bool,
+    pub vault_write: bool,
 }
 
 impl Default for AgentToolPolicy {
@@ -124,6 +134,11 @@ impl Default for AgentToolPolicy {
             python: true,
             workspace_write: true,
             extensions: true,
+            browser: true,
+            rpaz_runs: true,
+            run_records: true,
+            vault_read: true,
+            vault_write: true,
         }
     }
 }
@@ -141,10 +156,41 @@ pub(crate) struct AgentToolEvent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(crate) enum AgentStreamEvent {
-    RoundStarted { round: usize },
-    Delta { content: String },
-    ContentReplace { content: String },
-    Tool { tool: AgentToolEvent },
+    Started {
+        run_id: String,
+        session_id: String,
+    },
+    RoundStarted {
+        round: usize,
+    },
+    ContextAssembled {
+        round: usize,
+        estimated_tokens: u64,
+        omitted_messages: usize,
+        omitted_tools: usize,
+    },
+    Delta {
+        content: String,
+    },
+    ContentReplace {
+        content: String,
+    },
+    Tool {
+        tool: AgentToolEvent,
+    },
+    Completed {
+        run_id: String,
+        usage: AgentUsage,
+        duration_ms: u64,
+        stop_reason: String,
+    },
+    Failed {
+        run_id: String,
+        error: String,
+    },
+    Cancelled {
+        run_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -161,6 +207,9 @@ pub(crate) struct AgentTurnResult {
     pub tools: Vec<AgentToolEvent>,
     pub usage: AgentUsage,
     pub duration_ms: u64,
+    pub stop_reason: String,
+    pub rounds: usize,
+    pub tool_calls: usize,
 }
 
 #[derive(Clone)]
@@ -169,11 +218,13 @@ struct AgentContext {
     project_root: Option<PathBuf>,
     python: PathBuf,
     browser: Option<PathBuf>,
+    browser_session: Option<AgentBrowserSession>,
     host: Option<AgentHostContext>,
     session_id: String,
     python_timeout: Duration,
     selected_skill_ids: Vec<String>,
     tool_policy: AgentToolPolicy,
+    control: AgentRunControl,
 }
 
 #[derive(Clone)]
@@ -182,6 +233,14 @@ pub(crate) struct AgentHostContext {
     paths: AppPaths,
     processes: RunProcessManager,
     vault: credential_vault::CredentialVaultManager,
+    agent_scope: Option<AgentHostScope>,
+}
+
+#[derive(Clone)]
+struct AgentHostScope {
+    session_id: String,
+    python: PathBuf,
+    control: AgentRunControl,
 }
 
 impl AgentHostContext {
@@ -196,7 +255,22 @@ impl AgentHostContext {
             paths,
             processes,
             vault,
+            agent_scope: None,
         }
+    }
+
+    pub(crate) fn with_agent_scope(
+        mut self,
+        session_id: &str,
+        python: &Path,
+        control: AgentRunControl,
+    ) -> Self {
+        self.agent_scope = Some(AgentHostScope {
+            session_id: session_id.to_owned(),
+            python: python.to_path_buf(),
+            control,
+        });
+        self
     }
 
     pub(crate) fn execute(&self, name: &str, arguments: &Value) -> Result<Value, String> {
@@ -304,6 +378,59 @@ impl AgentHostContext {
                     json!({"ok": true, "id": item.id, "name": item.name, "updatedAt": item.updated_at}),
                 )
             }
+            "document_read" => {
+                let scope = self
+                    .agent_scope
+                    .as_ref()
+                    .ok_or_else(|| "文档工具缺少 Agent 会话上下文".to_owned())?;
+                let document = agent_documents::read_document(
+                    &self.paths.workspace_root,
+                    &scope.python,
+                    &scope.session_id,
+                    argument_string(arguments, "documentId")?,
+                    &scope.control,
+                )?;
+                serde_json::to_value(document)
+                    .map_err(|error| format!("序列化文档读取结果失败：{error}"))
+            }
+            "document_create" => {
+                let scope = self
+                    .agent_scope
+                    .as_ref()
+                    .ok_or_else(|| "文档工具缺少 Agent 会话上下文".to_owned())?;
+                let artifact = agent_documents::create_document(
+                    &self.paths.workspace_root,
+                    &scope.python,
+                    &scope.session_id,
+                    argument_string(arguments, "format")?,
+                    argument_string(arguments, "title")?,
+                    arguments
+                        .get("content")
+                        .ok_or_else(|| "文档工具缺少 content".to_owned())?,
+                    arguments.get("fileName").and_then(Value::as_str),
+                    &scope.control,
+                )?;
+                serde_json::to_value(artifact)
+                    .map_err(|error| format!("序列化文档产物失败：{error}"))
+            }
+            "document_convert" => {
+                let scope = self
+                    .agent_scope
+                    .as_ref()
+                    .ok_or_else(|| "文档工具缺少 Agent 会话上下文".to_owned())?;
+                let artifact = agent_documents::convert_document(
+                    &self.paths.workspace_root,
+                    &scope.python,
+                    &scope.session_id,
+                    argument_string(arguments, "documentId")?,
+                    argument_string(arguments, "targetFormat")?,
+                    arguments.get("title").and_then(Value::as_str),
+                    arguments.get("fileName").and_then(Value::as_str),
+                    &scope.control,
+                )?;
+                serde_json::to_value(artifact)
+                    .map_err(|error| format!("序列化文档转换结果失败：{error}"))
+            }
             _ => Err(format!("未知 DRPA Host 工具：{name}")),
         }
     }
@@ -317,29 +444,52 @@ struct ToolResult {
 struct ToolRegistry<'a> {
     context: &'a AgentContext,
     definitions: Vec<Value>,
+    descriptors: HashMap<String, crate::agent_tools::ToolCapabilityDescriptor>,
 }
 
 impl<'a> ToolRegistry<'a> {
     fn discover(context: &'a AgentContext) -> Result<Self, String> {
+        let definitions = agent_tool_definitions(
+            &context.workspace_root,
+            context.project_root.is_some(),
+            context
+                .project_root
+                .as_ref()
+                .is_some_and(|root| root.join("manifest.yaml").is_file()),
+            &context.selected_skill_ids,
+            context.python_timeout.as_secs(),
+            &context.tool_policy,
+        )?;
+        let descriptors = definitions
+            .iter()
+            .map(crate::agent_tools::ToolCapabilityDescriptor::from_openai_definition)
+            .map(|result| result.map(|descriptor| (descriptor.name.clone(), descriptor)))
+            .collect::<Result<HashMap<_, _>, _>>()?;
         Ok(Self {
             context,
-            definitions: agent_tool_definitions(
-                &context.workspace_root,
-                context.project_root.is_some(),
-                context
-                    .project_root
-                    .as_ref()
-                    .is_some_and(|root| root.join("manifest.yaml").is_file()),
-                &context.selected_skill_ids,
-                context.python_timeout.as_secs(),
-                &context.tool_policy,
-            )?,
+            definitions,
+            descriptors,
         })
     }
 
     fn execute(&self, name: &str, arguments: &Value) -> Result<ToolResult, String> {
-        ensure_tool_allowed(&self.context.tool_policy, name)?;
-        execute_tool(self.context, name, arguments)
+        self.context.control.check()?;
+        let descriptor = self
+            .descriptors
+            .get(name)
+            .ok_or_else(|| format!("工具 {name} 未在当前 Run 中注册"))?;
+        crate::agent_tools::CapabilityAuthority::new(&self.context.tool_policy)
+            .authorize(descriptor)?;
+        descriptor.validate_arguments(arguments)?;
+        let result = execute_tool(self.context, name, arguments);
+        self.context.control.check()?;
+        result
+    }
+
+    fn redact_persistent_output(&self, name: &str) -> bool {
+        self.descriptors
+            .get(name)
+            .is_some_and(crate::agent_tools::ToolCapabilityDescriptor::redact_persistent_output)
     }
 }
 
@@ -353,15 +503,15 @@ trait ProviderAdapter {
 }
 
 struct OpenAiCompatibleAdapter {
-    endpoint: String,
-    api_key: String,
+    profile: crate::provider::ProviderProfile,
+    control: AgentRunControl,
 }
 
 impl OpenAiCompatibleAdapter {
-    fn new(base_url: &str, api_key: &str) -> Result<Self, String> {
+    fn new(base_url: &str, api_key: &str, control: AgentRunControl) -> Result<Self, String> {
         Ok(Self {
-            endpoint: chat_completions_endpoint(base_url)?,
-            api_key: api_key.to_owned(),
+            profile: crate::provider::ProviderProfile::openai(base_url, api_key)?,
+            control,
         })
     }
 }
@@ -373,11 +523,13 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
         stream: bool,
         on_delta: &mut dyn FnMut(String),
     ) -> Result<Value, String> {
-        if stream {
-            call_chat_completions_stream(&self.endpoint, &self.api_key, payload, on_delta)
-        } else {
-            call_chat_completions(&self.endpoint, &self.api_key, payload)
-        }
+        crate::provider::complete_cancellable(
+            &self.profile,
+            payload,
+            stream,
+            &self.control,
+            on_delta,
+        )
     }
 }
 
@@ -387,7 +539,9 @@ pub(crate) fn run_agent_turn<F>(
     resource_dir: Option<PathBuf>,
     python: PathBuf,
     browser: Option<PathBuf>,
+    browser_session: Option<AgentBrowserSession>,
     host: AgentHostContext,
+    control: AgentRunControl,
     mut emit: F,
 ) -> Result<AgentTurnResult, String>
 where
@@ -404,6 +558,7 @@ where
         request.api_key = provider.api_key;
     }
     validate_request(&request)?;
+    control.check()?;
     if request.mode == "developer" {
         return crate::jcode::run_turn(
             &request,
@@ -411,12 +566,15 @@ where
             resource_dir.as_deref(),
             &python,
             browser.as_deref(),
+            browser_session.as_ref(),
             host,
+            control,
             emit,
         );
     }
     let started = Instant::now();
-    let provider = OpenAiCompatibleAdapter::new(&request.base_url, &request.api_key)?;
+    let provider =
+        OpenAiCompatibleAdapter::new(&request.base_url, &request.api_key, control.clone())?;
     let sql_mode = request.mode == "sql";
     let project_root = if sql_mode || request.project_id.trim().is_empty() {
         None
@@ -433,11 +591,13 @@ where
         project_root,
         python,
         browser,
+        browser_session,
         host: Some(host),
         session_id: request.session_id.clone(),
         python_timeout: Duration::from_secs(request.python_timeout_seconds),
         selected_skill_ids: request.selected_skill_ids.clone(),
         tool_policy: request.tool_policy.clone(),
+        control: control.clone(),
     };
 
     let tool_registry = if sql_mode || !request.tool_policy.enabled {
@@ -472,22 +632,41 @@ where
 
     let mut events = Vec::new();
     let mut usage = AgentUsage::default();
+    let mut tool_calls_count = 0usize;
+    let mut repeated_calls = HashMap::<String, usize>::new();
+    let mut rounds_completed = 0usize;
+    let mut stop_reason = "round-limit".to_owned();
 
-    for round in 0..request.max_rounds {
+    'rounds: for round in 0..request.max_rounds {
+        control.check()?;
+        rounds_completed = round + 1;
         if request.stream {
             emit(AgentStreamEvent::RoundStarted { round: round + 1 });
         }
+        let assembled = crate::agent_context::assemble_round_context(
+            &messages,
+            &tools,
+            request.context_window,
+            request.max_output_tokens,
+        );
+        emit(AgentStreamEvent::ContextAssembled {
+            round: round + 1,
+            estimated_tokens: assembled.estimated_tokens,
+            omitted_messages: assembled.omitted_messages,
+            omitted_tools: assembled.omitted_tools,
+        });
+        let active_tools = assembled.tools;
         let mut payload = json!({
             "model": request.model.trim(),
-            "messages": messages,
+            "messages": assembled.messages,
             "temperature": request.temperature,
             "max_tokens": request.max_output_tokens,
         });
         if !request.session_id.trim().is_empty() {
             payload["user"] = Value::String(request.session_id.trim().to_owned());
         }
-        if !tools.is_empty() {
-            payload["tools"] = Value::Array(tools.clone());
+        if !active_tools.is_empty() {
+            payload["tools"] = Value::Array(active_tools);
             payload["tool_choice"] = Value::String("auto".to_owned());
         }
         if request.stream {
@@ -496,6 +675,7 @@ where
         let response = provider.complete(&payload, request.stream, &mut |content| {
             emit(AgentStreamEvent::Delta { content });
         })?;
+        control.check()?;
         accumulate_usage(&mut usage, response.get("usage"));
         let assistant = response
             .pointer("/choices/0/message")
@@ -518,10 +698,18 @@ where
                 tools: events,
                 usage,
                 duration_ms: elapsed_ms(started),
+                stop_reason: "completed".to_owned(),
+                rounds: rounds_completed,
+                tool_calls: tool_calls_count,
             });
         }
 
         for call in tool_calls {
+            control.check()?;
+            if tool_calls_count >= request.max_tool_calls {
+                stop_reason = "tool-call-limit".to_owned();
+                break 'rounds;
+            }
             let call_id = call
                 .get("id")
                 .and_then(Value::as_str)
@@ -533,10 +721,18 @@ where
                 .unwrap_or("unknown")
                 .to_owned();
             let arguments = parse_tool_arguments(call.pointer("/function/arguments"))?;
-            let executed = tool_registry
-                .as_ref()
-                .ok_or_else(|| "当前 Agent 模式没有工具注册表".to_owned())?
-                .execute(&name, &arguments);
+            tool_calls_count = tool_calls_count.saturating_add(1);
+            let fingerprint = format!("{name}:{}", arguments);
+            let repeat_count = repeated_calls.entry(fingerprint).or_insert(0);
+            *repeat_count = repeat_count.saturating_add(1);
+            let executed = if *repeat_count > 3 {
+                Err(format!("检测到重复工具调用，已熔断：{name}"))
+            } else {
+                tool_registry
+                    .as_ref()
+                    .ok_or_else(|| "当前 Agent 模式没有工具注册表".to_owned())?
+                    .execute(&name, &arguments)
+            };
             let (status, summary, output) = match executed {
                 Ok(result) => ("completed".to_owned(), result.summary, result.output),
                 Err(error) => (
@@ -546,7 +742,9 @@ where
                 ),
             };
             let output_text = truncate_text(&output.to_string(), MAX_TOOL_OUTPUT_BYTES);
-            let event_output = if (name == "document_read" || name == "vault_get_credential")
+            let event_output = if tool_registry
+                .as_ref()
+                .is_some_and(|registry| registry.redact_persistent_output(&name))
                 && status == "completed"
             {
                 json!({
@@ -581,10 +779,58 @@ where
         }
     }
 
-    Err(format!(
-        "Agent 模型/工具循环达到本次配置上限 {} 轮；可在 Agent 设置中提高上限后继续",
-        request.max_rounds
-    ))
+    control.check()?;
+    messages.push(json!({
+        "role": "system",
+        "content": "工具预算已经结束。请基于已有工具证据直接给出最终答复，不再调用任何工具；说明已完成内容与仍待处理项。"
+    }));
+    let final_round = rounds_completed.saturating_add(1);
+    let assembled = crate::agent_context::assemble_round_context(
+        &messages,
+        &[],
+        request.context_window,
+        request.max_output_tokens,
+    );
+    emit(AgentStreamEvent::ContextAssembled {
+        round: final_round,
+        estimated_tokens: assembled.estimated_tokens,
+        omitted_messages: assembled.omitted_messages,
+        omitted_tools: assembled.omitted_tools,
+    });
+    let mut payload = json!({
+        "model": request.model.trim(),
+        "messages": assembled.messages,
+        "temperature": request.temperature,
+        "max_tokens": request.max_output_tokens,
+    });
+    if !request.session_id.trim().is_empty() {
+        payload["user"] = Value::String(request.session_id.trim().to_owned());
+    }
+    if request.stream {
+        payload["stream"] = Value::Bool(true);
+        emit(AgentStreamEvent::RoundStarted { round: final_round });
+    }
+    let response = provider.complete(&payload, request.stream, &mut |content| {
+        emit(AgentStreamEvent::Delta { content });
+    })?;
+    control.check()?;
+    accumulate_usage(&mut usage, response.get("usage"));
+    let assistant = response
+        .pointer("/choices/0/message")
+        .ok_or_else(|| "模型最终答复缺少 choices[0].message".to_owned())?;
+    let message = message_content(assistant.get("content"));
+    if message.trim().is_empty() {
+        return Err("模型最终答复为空".to_owned());
+    }
+    Ok(AgentTurnResult {
+        message,
+        tools: events,
+        usage,
+        duration_ms: elapsed_ms(started),
+        stop_reason,
+        rounds: rounds_completed.saturating_add(1),
+        tool_calls: tool_calls_count,
+    })
 }
 
 const fn default_context_window() -> u32 {
@@ -613,6 +859,14 @@ const fn default_temperature() -> f32 {
 
 const fn default_python_timeout_seconds() -> u64 {
     DEFAULT_PYTHON_TIMEOUT_SECONDS
+}
+
+const fn default_max_tool_calls() -> usize {
+    128
+}
+
+const fn default_max_wall_time_seconds() -> u64 {
+    900
 }
 
 pub(crate) fn agent_stream_event_name(request_id: &str) -> Result<String, String> {
@@ -661,6 +915,12 @@ fn validate_request(request: &AgentTurnRequest) -> Result<(), String> {
         return Err(format!(
             "Python 超时必须在 1 到 {MAX_PYTHON_TIMEOUT_SECONDS} 秒之间"
         ));
+    }
+    if !(1..=4_096).contains(&request.max_tool_calls) {
+        return Err("Agent 最大工具调用次数必须在 1 到 4096 之间".to_owned());
+    }
+    if !(10..=86_400).contains(&request.max_wall_time_seconds) {
+        return Err("Agent 最大运行时长必须在 10 到 86400 秒之间".to_owned());
     }
     if request.selected_skill_ids.len() > 32
         || request.selected_skill_ids.iter().any(|name| {
@@ -728,230 +988,6 @@ fn estimate_tokens(value: &str) -> usize {
         }
     }
     ascii.div_ceil(4).saturating_add(non_ascii).max(1)
-}
-
-pub(crate) fn chat_completions_endpoint(base_url: &str) -> Result<String, String> {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    if trimmed.len() > 2048
-        || trimmed.contains(char::is_whitespace)
-        || !(trimmed.starts_with("https://") || trimmed.starts_with("http://"))
-    {
-        return Err("OpenAI 兼容 URL 必须是有效的 http(s) 地址".to_owned());
-    }
-    if trimmed.ends_with("/chat/completions") {
-        Ok(trimmed.to_owned())
-    } else if trimmed.ends_with("/v1") {
-        Ok(format!("{trimmed}/chat/completions"))
-    } else {
-        Ok(format!("{trimmed}/v1/chat/completions"))
-    }
-}
-
-fn call_chat_completions(endpoint: &str, api_key: &str, payload: &Value) -> Result<Value, String> {
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(120)))
-        .build();
-    let http = ureq::Agent::new_with_config(config);
-    let mut request = http
-        .post(endpoint)
-        .header("Accept", "application/json")
-        .header("User-Agent", "DRPA-Next-Agent/0.2");
-    if !api_key.trim().is_empty() {
-        let authorization = format!("Bearer {}", api_key.trim());
-        request = request.header("Authorization", &authorization);
-    }
-    let mut response = request
-        .send_json(payload)
-        .map_err(|error| format!("模型接口请求失败：{error}"))?;
-    response
-        .body_mut()
-        .read_json::<Value>()
-        .map_err(|error| format!("模型接口返回的 JSON 无效：{error}"))
-}
-
-#[derive(Default)]
-struct StreamToolCall {
-    id: String,
-    name: String,
-    arguments: String,
-}
-
-#[derive(Default)]
-struct StreamAccumulator {
-    content: String,
-    tool_calls: BTreeMap<usize, StreamToolCall>,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-}
-
-fn call_chat_completions_stream<F>(
-    endpoint: &str,
-    api_key: &str,
-    payload: &Value,
-    on_delta: F,
-) -> Result<Value, String>
-where
-    F: FnMut(String),
-{
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(120)))
-        .build();
-    let http = ureq::Agent::new_with_config(config);
-    let mut request = http
-        .post(endpoint)
-        .header("Accept", "text/event-stream")
-        .header("User-Agent", "DRPA-Next-Agent/0.3");
-    if !api_key.trim().is_empty() {
-        let authorization = format!("Bearer {}", api_key.trim());
-        request = request.header("Authorization", &authorization);
-    }
-    let mut response = request
-        .send_json(payload)
-        .map_err(|error| format!("模型流式接口请求失败：{error}"))?;
-    let reader = BufReader::new(response.body_mut().as_reader());
-    parse_chat_completion_stream(reader, on_delta)
-}
-
-fn parse_chat_completion_stream<R, F>(reader: R, mut on_delta: F) -> Result<Value, String>
-where
-    R: BufRead,
-    F: FnMut(String),
-{
-    let mut accumulator = StreamAccumulator::default();
-    let mut event_data = Vec::<String>::new();
-    let mut raw_json = String::new();
-    let mut saw_sse = false;
-    let mut done = false;
-
-    for line in reader.lines() {
-        let line = line.map_err(|error| format!("读取模型流式响应失败：{error}"))?;
-        let line = line.trim_end_matches('\r');
-        if line.is_empty() {
-            if !event_data.is_empty() {
-                done =
-                    consume_stream_event(&event_data.join("\n"), &mut accumulator, &mut on_delta)?;
-                event_data.clear();
-                if done {
-                    break;
-                }
-            }
-            continue;
-        }
-        if let Some(data) = line.strip_prefix("data:") {
-            saw_sse = true;
-            event_data.push(data.trim_start().to_owned());
-        } else if !line.starts_with(':') && !line.starts_with("event:") && !saw_sse {
-            raw_json.push_str(line);
-            raw_json.push('\n');
-        }
-    }
-    if !done && !event_data.is_empty() {
-        consume_stream_event(&event_data.join("\n"), &mut accumulator, &mut on_delta)?;
-    }
-
-    if !saw_sse {
-        let response: Value = serde_json::from_str(raw_json.trim())
-            .map_err(|error| format!("模型接口既未返回 SSE，也未返回有效 JSON：{error}"))?;
-        let content = message_content(response.pointer("/choices/0/message/content"));
-        if !content.is_empty() {
-            on_delta(content);
-        }
-        return Ok(response);
-    }
-
-    let tool_calls = accumulator
-        .tool_calls
-        .into_iter()
-        .map(|(index, call)| {
-            json!({
-                "id": if call.id.is_empty() { format!("tool-call-{index}") } else { call.id },
-                "type": "function",
-                "function": { "name": call.name, "arguments": call.arguments },
-            })
-        })
-        .collect::<Vec<_>>();
-    let mut assistant = json!({"role": "assistant", "content": accumulator.content});
-    if !tool_calls.is_empty() {
-        assistant["tool_calls"] = Value::Array(tool_calls);
-    }
-    Ok(json!({
-        "choices": [{"message": assistant}],
-        "usage": {
-            "prompt_tokens": accumulator.prompt_tokens,
-            "completion_tokens": accumulator.completion_tokens,
-        }
-    }))
-}
-
-fn consume_stream_event<F>(
-    data: &str,
-    accumulator: &mut StreamAccumulator,
-    on_delta: &mut F,
-) -> Result<bool, String>
-where
-    F: FnMut(String),
-{
-    if data.trim() == "[DONE]" {
-        return Ok(true);
-    }
-    let chunk: Value =
-        serde_json::from_str(data).map_err(|error| format!("模型 SSE 数据无效：{error}"))?;
-    if let Some(error) = chunk.get("error") {
-        return Err(format!("模型流式接口返回错误：{error}"));
-    }
-    if let Some(usage) = chunk.get("usage") {
-        accumulator.prompt_tokens = usage
-            .get("prompt_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(accumulator.prompt_tokens);
-        accumulator.completion_tokens = usage
-            .get("completion_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(accumulator.completion_tokens);
-    }
-    let Some(delta) = chunk
-        .pointer("/choices/0/delta")
-        .or_else(|| chunk.pointer("/choices/0/message"))
-    else {
-        return Ok(false);
-    };
-    let content = message_content(delta.get("content"));
-    if !content.is_empty() {
-        accumulator.content.push_str(&content);
-        on_delta(content);
-    }
-    if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
-        for (position, call) in tool_calls.iter().enumerate() {
-            let index = call
-                .get("index")
-                .and_then(Value::as_u64)
-                .and_then(|value| usize::try_from(value).ok())
-                .unwrap_or(position);
-            let target = accumulator.tool_calls.entry(index).or_default();
-            if let Some(id) = call.get("id").and_then(Value::as_str)
-                && !id.is_empty()
-            {
-                if target.id.is_empty() || id.starts_with(&target.id) {
-                    target.id = id.to_owned();
-                } else if !target.id.ends_with(id) {
-                    target.id.push_str(id);
-                }
-            }
-            if let Some(name) = call.pointer("/function/name").and_then(Value::as_str)
-                && !name.is_empty()
-            {
-                if target.name.is_empty() || name.starts_with(&target.name) {
-                    target.name = name.to_owned();
-                } else {
-                    target.name.push_str(name);
-                }
-            }
-            if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
-                target.arguments.push_str(arguments);
-            }
-        }
-    }
-    Ok(false)
 }
 
 fn message_content(value: Option<&Value>) -> String {
@@ -1154,6 +1190,11 @@ fn agent_tool_definitions(
                 json!({"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}),
             ),
             tool_definition(
+                "agent_remember",
+                "把一条稳定事实、偏好或项目约定追加到结构化记忆事件账本；优先使用该工具，不覆盖整份 MEMORY.md。不要写入密钥。",
+                json!({"type":"object","properties":{"category":{"type":"string","enum":["preference","fact","project","workflow"]},"key":{"type":"string"},"value":{"type":"string"},"source":{"type":"string"}},"required":["category","key","value"],"additionalProperties":false}),
+            ),
+            tool_definition(
                 "knowledge_write_document",
                 "创建或覆盖本地知识库中的 Markdown 文档；父目录会按安全相对路径创建。",
                 json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}),
@@ -1292,6 +1333,13 @@ fn agent_tool_definitions(
         tools.extend(plugins::plugin_tool_definitions(workspace_root)?);
         tools.extend(agent_extensions::tool_definitions(workspace_root)?);
     }
+    let authority = crate::agent_tools::CapabilityAuthority::new(policy);
+    tools.retain(|definition| {
+        definition
+            .pointer("/function/name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| authority.authorize_name(name).is_ok())
+    });
     Ok(tools)
 }
 
@@ -1306,52 +1354,6 @@ fn tool_definition(name: &str, description: &str, parameters: Value) -> Value {
     })
 }
 
-fn ensure_tool_allowed(policy: &AgentToolPolicy, name: &str) -> Result<(), String> {
-    if !policy.enabled {
-        return Err("AI Agent 工具已在设置中关闭".to_owned());
-    }
-    let allowed = match name {
-        "agent_list_skills"
-        | "agent_read_skill"
-        | "agent_read_memory"
-        | "knowledge_list_documents"
-        | "knowledge_read_document"
-        | "rpaz_list_files"
-        | "browser_open"
-        | "browser_snapshot"
-        | "browser_click"
-        | "browser_type"
-        | "browser_wait"
-        | "browser_screenshot"
-        | "browser_status"
-        | "rpaz_list_packages"
-        | "rpaz_run_package"
-        | "run_list"
-        | "run_get_detail"
-        | "vault_list_credentials"
-        | "vault_get_credential"
-        | "vault_upsert_credential" => true,
-        "agent_write_skill" | "agent_write_memory" | "knowledge_write_document" => {
-            policy.workspace_write
-        }
-        "data_list_connections" | "data_get_schema" | "data_query" => policy.database_read,
-        "data_create_connection" => policy.database_connections,
-        "knowledge_base_list" | "knowledge_base_search" => policy.knowledge_base_read,
-        "document_read" => policy.document_read,
-        "document_create" => policy.document_write,
-        "document_convert" => policy.document_convert,
-        "read_file" | "find_files" | "search_text" => policy.arbitrary_file_read,
-        "edit_file" | "rpaz_write_file" | "rpaz_validate" | "rpaz_build" => policy.project_write,
-        "rpaz_python" => policy.python,
-        _ => policy.extensions,
-    };
-    if allowed {
-        Ok(())
-    } else {
-        Err(format!("工具 {name} 已在设置中关闭"))
-    }
-}
-
 fn execute_tool(
     context: &AgentContext,
     name: &str,
@@ -1363,7 +1365,8 @@ fn execute_tool(
             if host_name.starts_with("ext__") {
                 return Err("扩展 hostcall 不能递归调用另一个 QuickJS 扩展".to_owned());
             }
-            ensure_tool_allowed(&host_context.tool_policy, host_name)?;
+            crate::agent_tools::CapabilityAuthority::new(&host_context.tool_policy)
+                .authorize_name(host_name)?;
             execute_tool(&host_context, host_name, host_arguments).map(|result| result.output)
         });
         let context_payload = json!({
@@ -1404,6 +1407,7 @@ fn execute_tool(
         &context.python,
         name,
         arguments,
+        &context.control,
     ) {
         let executed = executed?;
         return Ok(ToolResult {
@@ -1498,6 +1502,23 @@ fn execute_tool(
                 summary: "已更新 Agent 长期记忆".to_owned(),
             });
         }
+        "agent_remember" => {
+            let category = argument_string(arguments, "category")?;
+            let key = argument_string(arguments, "key")?;
+            let value = argument_string(arguments, "value")?;
+            let source = argument_optional_string(arguments, "source");
+            let entry = agent_config::append_memory_entry(
+                &context.workspace_root,
+                category,
+                key,
+                value,
+                source,
+            )?;
+            return Ok(ToolResult {
+                output: entry,
+                summary: format!("已追加结构化记忆 {category}/{key}"),
+            });
+        }
         "knowledge_list_documents" => {
             let entries = knowledge::list_for_agent(&context.workspace_root)?;
             let count = entries.len();
@@ -1571,6 +1592,7 @@ fn execute_tool(
                 &context.python,
                 &context.session_id,
                 document_id,
+                &context.control,
             )?;
             return Ok(ToolResult {
                 output: serde_json::to_value(&read)
@@ -1592,6 +1614,7 @@ fn execute_tool(
                 title,
                 content,
                 arguments.get("fileName").and_then(Value::as_str),
+                &context.control,
             )?;
             let artifact_name = artifact.name.clone();
             return Ok(ToolResult {
@@ -1611,6 +1634,7 @@ fn execute_tool(
                 target_format,
                 arguments.get("title").and_then(Value::as_str),
                 arguments.get("fileName").and_then(Value::as_str),
+                &context.control,
             )?;
             let artifact_name = artifact.name.clone();
             return Ok(ToolResult {
@@ -1829,21 +1853,15 @@ fn execute_browser_tool(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1")
-        .env(
-            "DRPA_BROWSER_PROFILE_ROOT",
-            context.workspace_root.join("browser").join("drissionpage"),
-        )
-        .env("DRPA_BROWSER_PORT", "9222")
-        .env(
-            "DRPA_AGENT_ARTIFACT_ROOT",
-            context
-                .workspace_root
-                .join("agent")
-                .join("sessions")
-                .join(&context.session_id)
-                .join("browser"),
-        );
+        .env("PYTHONUTF8", "1");
+    let browser_session = context
+        .browser_session
+        .as_ref()
+        .ok_or_else(|| "Agent 浏览器会话尚未初始化".to_owned())?;
+    command
+        .env("DRPA_BROWSER_PROFILE_ROOT", &browser_session.profile_root)
+        .env("DRPA_BROWSER_PORT", browser_session.port.to_string())
+        .env("DRPA_AGENT_ARTIFACT_ROOT", &browser_session.artifact_root);
     if let Some(browser) = &context.browser {
         command.env("DRPA_BROWSER_PATH", browser);
     }
@@ -1851,20 +1869,47 @@ fn execute_browser_tool(
     let mut child = command
         .spawn()
         .map_err(|error| format!("启动 DRPA Chrome Bridge 失败：{error}"))?;
+    let started = Instant::now();
+    let mut process_tree = AgentPythonProcessTree::attach(&mut child)?;
     if let Some(mut stdin) = child.stdin.take() {
         serde_json::to_writer(&mut stdin, arguments)
             .map_err(|error| format!("写入 Chrome Bridge 参数失败：{error}"))?;
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("等待 Chrome Bridge 失败：{error}"))?;
-    if !output.status.success() {
+    let output_exceeded = Arc::new(AtomicBool::new(false));
+    let output_bytes = Arc::new(AtomicUsize::new(0));
+    let stdout_reader = capture_python_stream(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| "无法捕获 Chrome Bridge 标准输出".to_owned())?,
+        output_exceeded.clone(),
+        output_bytes.clone(),
+    );
+    let stderr_reader = capture_python_stream(
+        child
+            .stderr
+            .take()
+            .ok_or_else(|| "无法捕获 Chrome Bridge 错误输出".to_owned())?,
+        output_exceeded.clone(),
+        output_bytes,
+    );
+    let captured = wait_for_python_process(
+        &mut child,
+        &mut process_tree,
+        stdout_reader,
+        stderr_reader,
+        output_exceeded,
+        started,
+        context.python_timeout.min(Duration::from_secs(180)),
+        &context.control,
+    )?;
+    if !captured.status.success() {
         return Err(format!(
             "Chrome Bridge 执行失败：{}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            captured.stderr.trim()
         ));
     }
-    let value: Value = serde_json::from_slice(&output.stdout)
+    let value: Value = serde_json::from_str(&captured.stdout)
         .map_err(|error| format!("Chrome Bridge 返回无效 JSON：{error}"))?;
     Ok(ToolResult {
         summary: value
@@ -2339,6 +2384,7 @@ fn run_python(
         output_exceeded,
         started,
         context.python_timeout,
+        &context.control,
     )?;
     let status = captured.status;
     let stdout = captured.stdout;
@@ -2376,8 +2422,14 @@ fn wait_for_python_process(
     output_exceeded: Arc<AtomicBool>,
     started: Instant,
     timeout: Duration,
+    control: &AgentRunControl,
 ) -> Result<CapturedPythonProcess, String> {
     let status = loop {
+        if let Err(error) = control.check() {
+            terminate_python_process_tree(child, process_tree);
+            drain_python_streams(stdout_reader, stderr_reader);
+            return Err(error);
+        }
         if output_exceeded.load(Ordering::Relaxed) {
             terminate_python_process_tree(child, process_tree);
             drain_python_streams(stdout_reader, stderr_reader);
@@ -2731,14 +2783,14 @@ mod tests {
     #[test]
     fn normalizes_openai_compatible_endpoints() {
         assert_eq!(
-            chat_completions_endpoint("http://localhost:11434/v1").unwrap(),
+            crate::provider::chat_completions_endpoint("http://localhost:11434/v1").unwrap(),
             "http://localhost:11434/v1/chat/completions"
         );
         assert_eq!(
-            chat_completions_endpoint("https://gateway.example/api").unwrap(),
+            crate::provider::chat_completions_endpoint("https://gateway.example/api").unwrap(),
             "https://gateway.example/api/v1/chat/completions"
         );
-        assert!(chat_completions_endpoint("file:///tmp/model").is_err());
+        assert!(crate::provider::chat_completions_endpoint("file:///tmp/model").is_err());
         assert_eq!(
             agent_stream_event_name("req-1234").unwrap(),
             "agent-stream-req-1234"
@@ -2838,6 +2890,7 @@ mod tests {
             exceeded,
             started,
             Duration::from_secs(5),
+            &AgentRunControl::for_tests(),
         )
         .unwrap();
 
@@ -2859,6 +2912,7 @@ mod tests {
             exceeded,
             started,
             Duration::from_millis(120),
+            &AgentRunControl::for_tests(),
         )
         .unwrap_err();
 
@@ -2878,6 +2932,7 @@ mod tests {
             exceeded,
             started,
             Duration::from_secs(5),
+            &AgentRunControl::for_tests(),
         )
         .unwrap_err();
 
@@ -2922,11 +2977,13 @@ mod tests {
             project_root: None,
             python: PathBuf::from("python"),
             browser: None,
+            browser_session: None,
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: vec!["data-analysis".to_owned()],
             tool_policy: AgentToolPolicy::default(),
+            control: AgentRunControl::for_tests(),
         };
         let error = execute_tool(&context, "skill_other__run", &json!({}))
             .err()
@@ -2944,11 +3001,11 @@ mod tests {
             "data: [DONE]\n\n",
         );
         let mut deltas = Vec::new();
-        let response =
-            parse_chat_completion_stream(std::io::Cursor::new(source.as_bytes()), |delta| {
-                deltas.push(delta)
-            })
-            .unwrap();
+        let response = crate::provider::parse_chat_completion_stream(
+            std::io::Cursor::new(source.as_bytes()),
+            |delta| deltas.push(delta),
+        )
+        .unwrap();
 
         assert_eq!(deltas, vec!["# 标题\n", "完成"]);
         assert_eq!(
@@ -2995,6 +3052,8 @@ mod tests {
             max_rounds: DEFAULT_MAX_AGENT_ROUNDS,
             temperature: 0.2,
             python_timeout_seconds: DEFAULT_PYTHON_TIMEOUT_SECONDS,
+            max_tool_calls: default_max_tool_calls(),
+            max_wall_time_seconds: default_max_wall_time_seconds(),
             selected_skill_ids: Vec::new(),
             tool_policy: AgentToolPolicy::default(),
             messages: vec![
@@ -3081,11 +3140,13 @@ mod tests {
             project_root: Some(project.clone()),
             python: PathBuf::from("python"),
             browser: None,
+            browser_session: None,
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: Vec::new(),
             tool_policy: AgentToolPolicy::default(),
+            control: AgentRunControl::for_tests(),
         };
 
         assert!(execute_tool(&context, "rpaz_validate", &json!({})).is_ok());
@@ -3174,8 +3235,9 @@ mod tests {
         assert!(names.contains(&"browser_open"));
         assert!(names.contains(&"rpaz_run_package"));
         assert!(names.contains(&"run_get_detail"));
-        assert!(ensure_tool_allowed(&policy, "data_query").is_err());
-        assert!(ensure_tool_allowed(&policy, "rpaz_write_file").is_err());
+        let authority = crate::agent_tools::CapabilityAuthority::new(&policy);
+        assert!(authority.authorize_name("data_query").is_err());
+        assert!(authority.authorize_name("rpaz_write_file").is_err());
         fs::remove_dir_all(workspace).unwrap();
     }
 
@@ -3223,11 +3285,13 @@ mod tests {
             project_root: None,
             python: PathBuf::from("python"),
             browser: None,
+            browser_session: None,
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: Vec::new(),
             tool_policy: AgentToolPolicy::default(),
+            control: AgentRunControl::for_tests(),
         };
 
         let selected = execute_tool(
@@ -3263,11 +3327,13 @@ mod tests {
             project_root: None,
             python: PathBuf::from("python"),
             browser: None,
+            browser_session: None,
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: Vec::new(),
             tool_policy: AgentToolPolicy::default(),
+            control: AgentRunControl::for_tests(),
         };
 
         let sqlite = execute_tool(
@@ -3313,11 +3379,13 @@ mod tests {
             project_root: None,
             python: PathBuf::from("python"),
             browser: None,
+            browser_session: None,
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
             selected_skill_ids: Vec::new(),
             tool_policy: AgentToolPolicy::default(),
+            control: AgentRunControl::for_tests(),
         };
 
         execute_tool(

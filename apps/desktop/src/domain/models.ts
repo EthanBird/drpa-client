@@ -537,6 +537,11 @@ export interface AgentToolPolicy {
   python: boolean;
   workspaceWrite: boolean;
   extensions: boolean;
+  browser: boolean;
+  rpazRuns: boolean;
+  runRecords: boolean;
+  vaultRead: boolean;
+  vaultWrite: boolean;
 }
 
 export interface AgentExtensionToolSummary {
@@ -718,6 +723,8 @@ export interface AgentTurnRequest {
   maxRounds: number;
   temperature: number;
   pythonTimeoutSeconds: number;
+  maxToolCalls?: number;
+  maxWallTimeSeconds?: number;
   selectedSkillIds: string[];
   toolPolicy: AgentToolPolicy;
   messages: AgentMessage[];
@@ -732,16 +739,27 @@ export interface AgentToolEvent {
 }
 
 export type AgentStreamEvent =
+  | { type: "started"; runId: string; sessionId: string }
   | { type: "roundStarted"; round: number }
+  | { type: "contextAssembled"; round: number; estimatedTokens: number; omittedMessages: number; omittedTools: number }
   | { type: "delta"; content: string }
   | { type: "contentReplace"; content: string }
-  | { type: "tool"; tool: AgentToolEvent };
+  | { type: "tool"; tool: AgentToolEvent }
+  | { type: "completed"; runId: string; usage: AgentTurnResult["usage"]; durationMs: number; stopReason: string }
+  | { type: "failed"; runId: string; error: string }
+  | { type: "cancelled"; runId: string };
 
 export interface AgentConversationMessage extends AgentMessage {
   id: string;
   tools?: AgentToolEvent[];
   durationMs?: number;
   tokens?: number;
+  run?: {
+    requestId: string;
+    stopReason: string;
+    rounds: number;
+    toolCalls: number;
+  };
 }
 
 export interface AgentConversationSession {
@@ -750,9 +768,11 @@ export interface AgentConversationSession {
   projectId: string;
   createdAt: number;
   updatedAt: number;
+  revision?: number;
   messages: AgentConversationMessage[];
   selectedSkillIds: string[];
   messageCount?: number;
+  bodyState?: "summary" | "loading" | "ready" | "failed";
 }
 
 export interface AgentConversationSessionSummary {
@@ -761,6 +781,7 @@ export interface AgentConversationSessionSummary {
   projectId: string | null;
   createdAt: number;
   updatedAt: number;
+  revision?: number;
   messageCount: number;
   selectedSkillIds: string[];
 }
@@ -782,6 +803,25 @@ export interface AgentTurnResult {
     completionTokens: number;
   };
   durationMs: number;
+  stopReason: string;
+  rounds: number;
+  toolCalls: number;
+}
+
+export type AgentRunStatus = "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
+
+export interface AgentRunSnapshot {
+  requestId: string;
+  sessionId: string;
+  status: AgentRunStatus;
+  createdAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  stopReason: string;
+  error: string;
+  usage: AgentTurnResult["usage"];
+  durationMs: number;
+  events: Array<{ sequence: number; at: number; event: AgentStreamEvent }>;
 }
 
 export interface AgentSkillSummary {

@@ -11,6 +11,7 @@ import type {
   AgentConversationSession,
   AgentConversationSessionSummary,
   AgentExtensionSummary,
+  AgentRunSnapshot,
   AgentTurnRequest,
   AgentTurnResult,
   AgentStreamEvent,
@@ -173,9 +174,13 @@ export interface DesktopGateway {
   stopLocalDifyService(): Promise<LocalDifyServiceStatus>;
   runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResult>;
   listenAgentStream(requestId: string, onEvent: (event: AgentStreamEvent) => void): Promise<() => void>;
+  cancelAgentRun(requestId: string): Promise<AgentRunSnapshot>;
+  getAgentRun(requestId: string): Promise<AgentRunSnapshot>;
   selectAgentDocumentFiles(): Promise<string[]>;
   selectAgentArtifactExportPath(suggestedName: string): Promise<string | null>;
   importAgentDocument(sourcePath: string, sessionId: string): Promise<AgentDocumentAttachment>;
+  listAgentAttachments(sessionId: string): Promise<AgentDocumentAttachment[]>;
+  deleteAgentAttachment(sessionId: string, attachmentId: string): Promise<void>;
   listAgentArtifacts(sessionId: string): Promise<AgentDocumentArtifact[]>;
   exportAgentArtifact(sessionId: string, artifactId: string, destinationPath: string): Promise<AgentDocumentExport>;
   listAgentProjects(): Promise<AgentConversationProject[]>;
@@ -292,6 +297,7 @@ let mockKnowledgeBaseSources: KnowledgeBaseSource[] = [{
   updatedAt: Date.now(),
 }];
 const mockAgentArtifacts = new Map<string, AgentDocumentArtifact[]>();
+const mockAgentAttachments = new Map<string, AgentDocumentAttachment[]>();
 let mockAgentProjects: AgentConversationProject[] = [];
 let mockAgentSessions: AgentConversationSession[] = [];
 let mockAgentExtensions: AgentExtensionSummary[] = [{
@@ -633,6 +639,7 @@ function mockPlugins(): PluginSummary[] {
   }];
 }
 const mockAgentStreamListeners = new Map<string, (event: AgentStreamEvent) => void>();
+const mockAgentRuns = new Map<string, AgentRunSnapshot>();
 
 function mockAgentWorkspaceConfig(): AgentWorkspaceConfig {
   return {
@@ -1205,6 +1212,20 @@ const mockGateway: DesktopGateway = {
     return structuredClone(mockLocalDifyService);
   },
   async runAgentTurn(request) {
+    const startedAt = Date.now();
+    const run: AgentRunSnapshot = {
+      requestId: request.requestId,
+      sessionId: request.sessionId ?? "",
+      status: "running",
+      createdAt: startedAt,
+      startedAt,
+      stopReason: "",
+      error: "",
+      usage: { promptTokens: 0, completionTokens: 0 },
+      durationMs: 0,
+      events: [],
+    };
+    mockAgentRuns.set(request.requestId, run);
     const prompt = request.messages.at(-1)?.content ?? "";
     const message = request.mode === "sql"
       ? "已根据当前结构生成查询。\n\n```sql\nSELECT id, title, status FROM example_tasks LIMIT 100;\n```"
@@ -1213,24 +1234,63 @@ const mockGateway: DesktopGateway = {
       : `已收到问题：${prompt}\n选择一个开发项目后可启用 RPAZ 工具。`;
     const listener = mockAgentStreamListeners.get(request.requestId);
     if (request.stream && listener) {
+      listener({ type: "started", runId: request.requestId, sessionId: request.sessionId ?? "" });
       listener({ type: "roundStarted", round: 1 });
       for (const chunk of message.match(/.{1,12}/gs) ?? [message]) {
         await new Promise((resolve) => window.setTimeout(resolve, 18));
+        if (mockAgentRuns.get(request.requestId)?.status === "cancelling") {
+          const cancelled = mockAgentRuns.get(request.requestId)!;
+          Object.assign(cancelled, { status: "cancelled", stopReason: "cancelled", finishedAt: Date.now() });
+          listener({ type: "cancelled", runId: request.requestId });
+          throw new Error("Agent 运行已取消");
+        }
         listener({ type: "delta", content: chunk });
       }
     } else {
       await new Promise((resolve) => window.setTimeout(resolve, 220));
     }
-    return {
+    const result: AgentTurnResult = {
       message,
       tools: [],
       usage: { promptTokens: 18, completionTokens: 24 },
       durationMs: 220,
+      stopReason: "completed",
+      rounds: 1,
+      toolCalls: 0,
     };
+    Object.assign(run, {
+      status: "completed",
+      stopReason: result.stopReason,
+      finishedAt: Date.now(),
+      usage: result.usage,
+      durationMs: result.durationMs,
+    });
+    listener?.({
+      type: "completed",
+      runId: request.requestId,
+      usage: result.usage,
+      durationMs: result.durationMs,
+      stopReason: result.stopReason,
+    });
+    return result;
   },
   async listenAgentStream(requestId, onEvent) {
     mockAgentStreamListeners.set(requestId, onEvent);
     return () => { mockAgentStreamListeners.delete(requestId); };
+  },
+  async cancelAgentRun(requestId) {
+    const run = mockAgentRuns.get(requestId);
+    if (!run) throw new Error("Agent Run 不存在");
+    if (run.status === "running" || run.status === "queued") {
+      run.status = "cancelling";
+      run.stopReason = "cancellation-requested";
+    }
+    return structuredClone(run);
+  },
+  async getAgentRun(requestId) {
+    const run = mockAgentRuns.get(requestId);
+    if (!run) throw new Error("Agent Run 不存在");
+    return structuredClone(run);
   },
   async selectAgentDocumentFiles() {
     return [];
@@ -1240,13 +1300,27 @@ const mockGateway: DesktopGateway = {
   },
   async importAgentDocument(sourcePath, sessionId) {
     const name = sourcePath.split(/[\\/]/).at(-1) ?? "document.pdf";
-    return {
+    const attachment = {
       id: `att-${Date.now()}`,
       name,
       format: name.split(".").at(-1)?.toLowerCase() ?? "",
       sizeBytes: 1024,
       importedAt: new Date().toISOString(),
     };
+    mockAgentAttachments.set(sessionId, [
+      ...(mockAgentAttachments.get(sessionId) ?? []),
+      attachment,
+    ]);
+    return attachment;
+  },
+  async listAgentAttachments(sessionId) {
+    return structuredClone(mockAgentAttachments.get(sessionId) ?? []);
+  },
+  async deleteAgentAttachment(sessionId, attachmentId) {
+    mockAgentAttachments.set(
+      sessionId,
+      (mockAgentAttachments.get(sessionId) ?? []).filter((attachment) => attachment.id !== attachmentId),
+    );
   },
   async listAgentArtifacts(sessionId) {
     return structuredClone(mockAgentArtifacts.get(sessionId) ?? []);
@@ -1290,6 +1364,7 @@ const mockGateway: DesktopGateway = {
         projectId: session.projectId || null,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
+        revision: session.revision ?? 1,
         messageCount: session.messages.length,
         selectedSkillIds: session.selectedSkillIds,
       })));
@@ -1302,9 +1377,11 @@ const mockGateway: DesktopGateway = {
       projectId,
       createdAt: now,
       updatedAt: now,
+      revision: 1,
       messages: [],
       selectedSkillIds,
       messageCount: 0,
+      bodyState: "ready",
     };
     mockAgentSessions = [session, ...mockAgentSessions];
     return structuredClone(session);
@@ -1315,11 +1392,20 @@ const mockGateway: DesktopGateway = {
     return structuredClone(session);
   },
   async saveAgentSession(session) {
+    const existing = mockAgentSessions.find((item) => item.id === session.id);
+    if (existing && (session.revision ?? 0) !== (existing.revision ?? 1)) {
+      throw new Error(`Agent 会话版本冲突：客户端 revision=${session.revision ?? 0}，数据库 revision=${existing.revision ?? 1}`);
+    }
+    if (!existing && (session.revision ?? 0) > 0) {
+      throw new Error("Agent 会话已删除，已阻止旧快照重新创建会话");
+    }
     const normalized = {
       ...structuredClone(session),
       projectId: session.projectId ?? "",
       selectedSkillIds: session.selectedSkillIds ?? [],
+      revision: (existing?.revision ?? 0) + 1,
       messageCount: session.messages.length,
+      bodyState: "ready" as const,
     };
     mockAgentSessions = mockAgentSessions.some((item) => item.id === session.id)
       ? mockAgentSessions.map((item) => item.id === session.id ? normalized : item)
@@ -1336,6 +1422,8 @@ const mockGateway: DesktopGateway = {
   },
   async deleteAgentSession(sessionId) {
     mockAgentSessions = mockAgentSessions.filter((session) => session.id !== sessionId);
+    mockAgentAttachments.delete(sessionId);
+    mockAgentArtifacts.delete(sessionId);
   },
   async listAgentExtensions() {
     return structuredClone(mockAgentExtensions);
@@ -1844,6 +1932,8 @@ const tauriGateway: DesktopGateway = {
   stopLocalDifyService: () => invoke<LocalDifyServiceStatus>("stop_local_dify_service"),
   runAgentTurn: (request) => invoke<AgentTurnResult>("run_agent_turn", { request }),
   listenAgentStream: async (requestId, onEvent) => listen<AgentStreamEvent>(`agent-stream-${requestId}`, (event) => onEvent(event.payload)),
+  cancelAgentRun: (requestId) => invoke<AgentRunSnapshot>("cancel_agent_run", { requestId }),
+  getAgentRun: (requestId) => invoke<AgentRunSnapshot>("get_agent_run", { requestId }),
   selectAgentDocumentFiles: async () => {
     const selected = await open({
       multiple: true,
@@ -1862,6 +1952,8 @@ const tauriGateway: DesktopGateway = {
     return selected ?? null;
   },
   importAgentDocument: (sourcePath, sessionId) => invoke<AgentDocumentAttachment>("import_agent_document", { sourcePath, sessionId }),
+  listAgentAttachments: (sessionId) => invoke<AgentDocumentAttachment[]>("list_agent_attachments", { sessionId }),
+  deleteAgentAttachment: (sessionId, attachmentId) => invoke<void>("delete_agent_attachment", { sessionId, attachmentId }),
   listAgentArtifacts: (sessionId) => invoke<AgentDocumentArtifact[]>("list_agent_artifacts", { sessionId }),
   exportAgentArtifact: (sessionId, artifactId, destinationPath) => invoke<AgentDocumentExport>("export_agent_artifact", { sessionId, artifactId, destinationPath }),
   listAgentProjects: () => invoke<AgentConversationProject[]>("list_agent_projects"),
@@ -1874,28 +1966,28 @@ const tauriGateway: DesktopGateway = {
       title,
       selectedSkillIds,
     });
-    return { ...session, projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
   },
   getAgentSession: async (sessionId) => {
     const session = await invoke<AgentConversationSession>("get_agent_session", { sessionId });
-    return { ...session, projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
   },
   saveAgentSession: async (session) => {
     const saved = await invoke<AgentConversationSession>("save_agent_session", {
       session: { ...session, projectId: session.projectId || null },
     });
-    return { ...saved, projectId: saved.projectId ?? "", selectedSkillIds: saved.selectedSkillIds ?? [] };
+    return { ...saved, revision: saved.revision ?? ((session.revision ?? 0) + 1), bodyState: "ready", projectId: saved.projectId ?? "", selectedSkillIds: saved.selectedSkillIds ?? [] };
   },
   renameAgentSession: async (sessionId, title) => {
     const session = await invoke<AgentConversationSession>("rename_agent_session", { sessionId, title });
-    return { ...session, projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
   },
   moveAgentSession: async (sessionId, projectId) => {
     const session = await invoke<AgentConversationSession>("move_agent_session", {
       sessionId,
       projectId: projectId || null,
     });
-    return { ...session, projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
   },
   deleteAgentSession: (sessionId) => invoke<void>("delete_agent_session", { sessionId }),
   listAgentExtensions: () => invoke<AgentExtensionSummary[]>("list_agent_extensions"),

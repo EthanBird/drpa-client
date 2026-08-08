@@ -251,6 +251,9 @@ TOOLS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "vault_list_credentials": lambda arguments: _host_call("vault_list_credentials", arguments),
     "vault_get_credential": lambda arguments: _host_call("vault_get_credential", arguments),
     "vault_upsert_credential": lambda arguments: _host_call("vault_upsert_credential", arguments),
+    "document_read": lambda arguments: _host_call("document_read", arguments),
+    "document_create": lambda arguments: _host_call("document_create", arguments),
+    "document_convert": lambda arguments: _host_call("document_convert", arguments),
 }
 
 
@@ -276,6 +279,9 @@ TOOL_DEFINITIONS = [
     {"name": "vault_list_credentials", "description": "List unlocked DRPA credential summaries without secret values.", "inputSchema": _schema({})},
     {"name": "vault_get_credential", "description": "Read one sensitive credential after the user has unlocked the local vault.", "inputSchema": _schema({"id": {"type": "string"}}, ["id"])},
     {"name": "vault_upsert_credential", "description": "Create or update a credential in the unlocked local vault.", "inputSchema": _schema({"id": {"type": "string"}, "name": {"type": "string"}, "kind": {"type": "string", "enum": ["login", "apiKey", "token", "database", "ssh", "secureNote"]}, "username": {"type": "string"}, "secret": {"type": "string"}, "uri": {"type": "string"}, "notes": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}, "favorite": {"type": "boolean"}}, ["name", "kind", "secret"])},
+    {"name": "document_read", "description": "Read a DRPA conversation attachment by opaque documentId.", "inputSchema": _schema({"documentId": {"type": "string"}}, ["documentId"])},
+    {"name": "document_create", "description": "Create a PDF, DOCX, XLSX, or PPTX artifact in the current DRPA conversation.", "inputSchema": _schema({"format": {"type": "string", "enum": ["pdf", "docx", "xlsx", "pptx"]}, "title": {"type": "string"}, "content": {}, "fileName": {"type": "string"}}, ["format", "title", "content"])},
+    {"name": "document_convert", "description": "Convert a DRPA conversation attachment or artifact to another office format.", "inputSchema": _schema({"documentId": {"type": "string"}, "targetFormat": {"type": "string", "enum": ["pdf", "docx", "xlsx", "pptx"]}, "title": {"type": "string"}, "fileName": {"type": "string"}}, ["documentId", "targetFormat"])},
 ]
 
 

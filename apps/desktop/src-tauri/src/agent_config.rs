@@ -1,22 +1,22 @@
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc::{self, Receiver, RecvTimeoutError},
 };
 use std::thread;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::State;
 use uuid::Uuid;
 
-use crate::AppPaths;
+use crate::{AppPaths, agent_runtime::AgentRunControl};
 
 const MAX_DOCUMENT_BYTES: usize = 256 * 1024;
 const MAX_MEMORY_CONTEXT_BYTES: usize = 25 * 1024;
@@ -24,6 +24,7 @@ const MAX_SKILL_OUTPUT_BYTES: usize = 256 * 1024;
 const SKILL_IO_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const INITIALIZED_MARKER: &str = ".workspace-v2";
 const LEGACY_MARKER: &str = ".workspace-v1";
+static MEMORY_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 const DEFAULT_AGENTS: &str = r#"# DRPA Agent 工作约定
 
@@ -661,6 +662,7 @@ pub(crate) fn execute_skill_tool(
     python: &Path,
     qualified_name: &str,
     arguments: &Value,
+    control: &AgentRunControl,
 ) -> Option<Result<SkillToolExecution, String>> {
     let remainder = qualified_name.strip_prefix("skill_")?;
     let (skill_name, tool_name) = remainder.split_once("__")?;
@@ -671,6 +673,7 @@ pub(crate) fn execute_skill_tool(
         skill_name,
         tool_name,
         arguments,
+        control,
     ))
 }
 
@@ -681,6 +684,7 @@ fn execute_skill_tool_inner(
     skill_name: &str,
     tool_name: &str,
     arguments: &Value,
+    control: &AgentRunControl,
 ) -> Result<SkillToolExecution, String> {
     validate_skill_name(skill_name)?;
     let root = skills_root(workspace_root).join(skill_name);
@@ -744,9 +748,17 @@ fn execute_skill_tool_inner(
                 &root,
                 &request,
                 timeout,
+                Some(control),
             )?
         }
-        "command" => run_json_process(Command::new(&entry), &tool.args, &root, &request, timeout)?,
+        "command" => run_json_process(
+            Command::new(&entry),
+            &tool.args,
+            &root,
+            &request,
+            timeout,
+            Some(control),
+        )?,
         runtime => return Err(format!("Skill 工具 runtime 无效：{runtime}")),
     };
     Ok(SkillToolExecution {
@@ -766,6 +778,82 @@ pub(crate) fn read_memory_for_agent(workspace_root: &Path) -> Result<String, Str
 pub(crate) fn write_memory_for_agent(workspace_root: &Path, content: &str) -> Result<(), String> {
     ensure_agent_workspace(workspace_root)?;
     write_bounded_text(&agent_root(workspace_root).join("MEMORY.md"), content)
+}
+
+pub(crate) fn append_memory_entry(
+    workspace_root: &Path,
+    category: &str,
+    key: &str,
+    value: &str,
+    source: &str,
+) -> Result<Value, String> {
+    ensure_agent_workspace(workspace_root)?;
+    if !matches!(category, "preference" | "fact" | "project" | "workflow") {
+        return Err("记忆 category 无效".to_owned());
+    }
+    let key = key.trim();
+    let value = value.trim();
+    let source = source.trim();
+    if key.is_empty() || key.chars().count() > 120 || key.chars().any(char::is_control) {
+        return Err("记忆 key 必须为 1–120 个普通字符".to_owned());
+    }
+    if value.is_empty() || value.chars().count() > 4_000 {
+        return Err("记忆 value 必须为 1–4000 个字符".to_owned());
+    }
+    if source.chars().count() > 500 {
+        return Err("记忆 source 不能超过 500 个字符".to_owned());
+    }
+    let _guard = MEMORY_WRITE_LOCK
+        .lock()
+        .map_err(|_| "Agent 记忆写入状态已损坏".to_owned())?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let entry = json!({
+        "id": format!("memory-{}", Uuid::new_v4().simple()),
+        "category": category,
+        "key": key,
+        "value": value,
+        "source": source,
+        "createdAt": u64::try_from(now).unwrap_or(u64::MAX),
+    });
+    let journal_root = agent_root(workspace_root).join("memory");
+    fs::create_dir_all(&journal_root)
+        .map_err(|error| format!("创建 Agent 记忆账本目录失败：{error}"))?;
+    let journal_path = journal_root.join("events.jsonl");
+    if fs::metadata(&journal_path).map_or(0, |metadata| metadata.len()) > 8 * 1024 * 1024 {
+        return Err("Agent 记忆事件账本已达到 8 MiB 上限，请先整理 MEMORY.md".to_owned());
+    }
+    let mut bytes = serde_json::to_vec(&entry).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    let mut journal = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&journal_path)
+        .map_err(|error| format!("打开 Agent 记忆账本失败：{error}"))?;
+    journal
+        .write_all(&bytes)
+        .and_then(|_| journal.flush())
+        .map_err(|error| format!("追加 Agent 记忆事件失败：{error}"))?;
+
+    let memory_path = agent_root(workspace_root).join("MEMORY.md");
+    let mut memory = read_bounded_text(&memory_path, MAX_DOCUMENT_BYTES)?;
+    if !memory.contains("## Structured memory journal") {
+        memory.push_str("\n\n## Structured memory journal\n");
+    }
+    let safe_value = value.replace(['\r', '\n'], " ");
+    let safe_source = source.replace(['\r', '\n'], " ");
+    memory.push_str(&format!(
+        "\n- **{category}/{key}**: {safe_value}{}",
+        if safe_source.is_empty() {
+            String::new()
+        } else {
+            format!(" _(source: {safe_source})_")
+        }
+    ));
+    write_bounded_text(&memory_path, &memory)?;
+    Ok(entry)
 }
 
 fn ensure_agent_workspace(workspace_root: &Path) -> Result<(), String> {
@@ -946,6 +1034,7 @@ fn run_json_process(
     current_dir: &Path,
     request: &Value,
     timeout: Duration,
+    control: Option<&AgentRunControl>,
 ) -> Result<Value, String> {
     command
         .args(args)
@@ -984,6 +1073,12 @@ fn run_json_process(
     let mut status = None;
     let mut failure = None;
     loop {
+        if let Some(control) = control
+            && let Err(error) = control.check()
+        {
+            failure = Some(error);
+            break;
+        }
         if output_exceeded.load(Ordering::Relaxed) {
             failure = Some(format!(
                 "Skill 工具输出超过 {} KiB 安全上限",
@@ -1549,6 +1644,7 @@ libraries:
                 &python,
                 "skill_test-skill__echo",
                 &json!({"text": "hello"}),
+                &AgentRunControl::for_tests(),
             )
             .expect("skill tool dispatch")
             .expect("skill tool execution");
@@ -1584,6 +1680,7 @@ libraries:
             &workspace,
             &json!({}),
             Duration::from_secs(5),
+            None,
         )
         .unwrap();
         assert_eq!(output["ok"], true);
@@ -1614,6 +1711,7 @@ libraries:
             &workspace,
             &json!({}),
             Duration::from_secs(5),
+            None,
         )
         .unwrap_err();
         assert!(error.contains("输出超过"), "unexpected error: {error}");
@@ -1663,6 +1761,23 @@ libraries:
         );
         assert!(root.join("skill.yaml").is_file());
         assert!(root.join("instructions.md").is_file());
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn structured_memory_appends_events_without_replacing_existing_memory() {
+        let workspace = std::env::temp_dir().join(format!("drpa-agent-memory-{}", Uuid::new_v4()));
+        ensure_agent_workspace(&workspace).unwrap();
+        write_memory_for_agent(&workspace, "# Existing\n\nKeep this line.\n").unwrap();
+        let entry =
+            append_memory_entry(&workspace, "preference", "language", "简体中文", "user").unwrap();
+        assert_eq!(entry["key"], "language");
+        let memory = read_memory_for_agent(&workspace).unwrap();
+        assert!(memory.contains("Keep this line."));
+        assert!(memory.contains("preference/language"));
+        let journal =
+            fs::read_to_string(agent_root(&workspace).join("memory").join("events.jsonl")).unwrap();
+        assert!(journal.contains("简体中文"));
         let _ = fs::remove_dir_all(workspace);
     }
 }

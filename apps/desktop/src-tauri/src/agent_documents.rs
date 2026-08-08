@@ -12,7 +12,7 @@ use tauri::State;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use crate::AppPaths;
+use crate::{AppPaths, agent_runtime::AgentRunControl};
 
 const WORKER_PROTOCOL_VERSION: u32 = 1;
 const SUPPORTED_FORMATS: &[&str] = &["pdf", "docx", "xlsx", "pptx"];
@@ -93,6 +93,23 @@ pub(crate) fn list_agent_artifacts(
 }
 
 #[tauri::command]
+pub(crate) fn list_agent_attachments(
+    session_id: String,
+    paths: State<'_, AppPaths>,
+) -> Result<Vec<AgentDocumentAttachment>, String> {
+    list_agent_attachments_at(&paths.workspace_root, &session_id)
+}
+
+#[tauri::command]
+pub(crate) fn delete_agent_attachment(
+    session_id: String,
+    attachment_id: String,
+    paths: State<'_, AppPaths>,
+) -> Result<(), String> {
+    delete_agent_attachment_at(&paths.workspace_root, &session_id, &attachment_id)
+}
+
+#[tauri::command]
 pub(crate) fn export_agent_artifact(
     session_id: String,
     artifact_id: String,
@@ -113,6 +130,7 @@ pub(crate) fn read_document(
     python: &Path,
     session_id: &str,
     document_id: &str,
+    control: &AgentRunControl,
 ) -> Result<AgentDocumentRead, String> {
     validate_session_id(session_id)?;
     let resolved = resolve_document(workspace_root, session_id, document_id)?;
@@ -125,6 +143,7 @@ pub(crate) fn read_document(
             "session_id": session_id,
             "input_path": resolved.path,
         }),
+        control,
     )?;
     Ok(AgentDocumentRead {
         document_id: document_id.to_owned(),
@@ -142,6 +161,7 @@ pub(crate) fn create_document(
     title: &str,
     content: &Value,
     file_name: Option<&str>,
+    control: &AgentRunControl,
 ) -> Result<AgentDocumentArtifact, String> {
     validate_session_id(session_id)?;
     let format = validate_format(format)?;
@@ -156,7 +176,7 @@ pub(crate) fn create_document(
         "title": title,
         "content": content,
     });
-    finish_artifact(pending, || run_worker(python, request))
+    finish_artifact(pending, || run_worker(python, request, control))
 }
 
 /// Converts a session attachment/artifact by extracting its safe document model and recreating it.
@@ -168,6 +188,7 @@ pub(crate) fn convert_document(
     target_format: &str,
     title: Option<&str>,
     file_name: Option<&str>,
+    control: &AgentRunControl,
 ) -> Result<AgentDocumentArtifact, String> {
     validate_session_id(session_id)?;
     let source = resolve_document(workspace_root, session_id, document_id)?;
@@ -189,7 +210,7 @@ pub(crate) fn convert_document(
         "format": target_format,
         "title": title.unwrap_or_default(),
     });
-    finish_artifact(pending, || run_worker(python, request))
+    finish_artifact(pending, || run_worker(python, request, control))
 }
 
 fn import_agent_document_at(
@@ -278,6 +299,118 @@ fn list_agent_artifacts_at(
     }
     artifacts.sort_by(|left, right| right.created_at.cmp(&left.created_at));
     Ok(artifacts)
+}
+
+fn list_agent_attachments_at(
+    workspace_root: &Path,
+    session_id: &str,
+) -> Result<Vec<AgentDocumentAttachment>, String> {
+    validate_session_id(session_id)?;
+    let raw_session_root = attachment_session_root(workspace_root, session_id);
+    if !raw_session_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let session_root = existing_session_root(workspace_root, &raw_session_root)?;
+    let metadata_root = session_root.join("metadata");
+    let mut attachments = Vec::new();
+    for entry in
+        fs::read_dir(&metadata_root).map_err(|error| format!("无法列出对话附件：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("无法读取对话附件：{error}"))?;
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let record = read_record_path(&entry.path())?;
+        validate_stored_record(&record, "att")?;
+        let file = session_root
+            .join("files")
+            .join(format!("{}.{}", record.id, record.format));
+        let metadata = fs::symlink_metadata(&file)
+            .map_err(|_| format!("对话附件文件已丢失：{}", record.name))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("对话附件不是普通文件".to_owned());
+        }
+        let mut attachment = attachment_from_record(record);
+        attachment.size_bytes = metadata.len();
+        attachments.push(attachment);
+    }
+    attachments.sort_by(|left, right| right.imported_at.cmp(&left.imported_at));
+    Ok(attachments)
+}
+
+fn delete_agent_attachment_at(
+    workspace_root: &Path,
+    session_id: &str,
+    attachment_id: &str,
+) -> Result<(), String> {
+    validate_session_id(session_id)?;
+    validate_opaque_id(attachment_id, "att")?;
+    let session_root = existing_session_root(
+        workspace_root,
+        &attachment_session_root(workspace_root, session_id),
+    )?;
+    let metadata_path = session_root
+        .join("metadata")
+        .join(format!("{attachment_id}.json"));
+    let record = read_record_path(&metadata_path)?;
+    validate_stored_record(&record, "att")?;
+    let file_path = session_root
+        .join("files")
+        .join(format!("{}.{}", record.id, record.format));
+    fs::remove_file(&file_path).map_err(|error| format!("删除对话附件失败：{error}"))?;
+    if let Err(error) = fs::remove_file(&metadata_path) {
+        return Err(format!("附件文件已删除，但元数据清理失败：{error}"));
+    }
+    Ok(())
+}
+
+pub(crate) struct StagedSessionDocuments {
+    entries: Vec<(PathBuf, PathBuf)>,
+}
+
+impl StagedSessionDocuments {
+    pub(crate) fn commit(self) -> Result<(), String> {
+        for (_, staged) in self.entries {
+            fs::remove_dir_all(&staged)
+                .map_err(|error| format!("清理已删除会话文档失败：{error}"))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn rollback(self) {
+        for (original, staged) in self.entries.into_iter().rev() {
+            let _ = fs::rename(staged, original);
+        }
+    }
+}
+
+pub(crate) fn stage_session_documents(
+    workspace_root: &Path,
+    session_id: &str,
+) -> Result<StagedSessionDocuments, String> {
+    validate_session_id(session_id)?;
+    let mut entries = Vec::new();
+    for original in [
+        attachment_session_root(workspace_root, session_id),
+        artifact_session_root(workspace_root, session_id),
+    ] {
+        if !original.exists() {
+            continue;
+        }
+        let safe = existing_session_root(workspace_root, &original)?;
+        let staged = safe.with_file_name(format!(
+            ".deleting-{session_id}-{}",
+            Uuid::new_v4().simple()
+        ));
+        if let Err(error) = fs::rename(&safe, &staged) {
+            for (restore, pending) in entries.into_iter().rev() {
+                let _ = fs::rename(pending, restore);
+            }
+            return Err(format!("暂存待删除会话文档失败：{error}"));
+        }
+        entries.push((safe, staged));
+    }
+    Ok(StagedSessionDocuments { entries })
 }
 
 fn export_agent_artifact_at(
@@ -425,7 +558,7 @@ where
     Ok(artifact_from_record(pending.record))
 }
 
-fn run_worker(python: &Path, request: Value) -> Result<Value, String> {
+fn run_worker(python: &Path, request: Value, control: &AgentRunControl) -> Result<Value, String> {
     let mut command = Command::new(python);
     let development_worker = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../runtime/python/src/drpa_runner/document_worker.py");
@@ -477,6 +610,13 @@ fn run_worker(python: &Path, request: Value) -> Result<Value, String> {
 
     let started = Instant::now();
     let status = loop {
+        if let Err(error) = control.check() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(error);
+        }
         if let Some(status) = child
             .try_wait()
             .map_err(|error| format!("无法等待文档 worker：{error}"))?
@@ -885,6 +1025,34 @@ mod tests {
             .join("files")
             .join(format!("{}.pdf", imported.id));
         assert_eq!(fs::read(stored).unwrap(), b"%PDF-1.4\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn attachments_can_be_restored_deleted_and_staged_with_the_session() {
+        let root = temporary_root();
+        let source = root.join("input.pdf");
+        fs::write(&source, b"%PDF-1.4\n").unwrap();
+        let first = import_agent_document_at(&root, "session-1", &source).unwrap();
+        let second = import_agent_document_at(&root, "session-1", &source).unwrap();
+
+        let listed = list_agent_attachments_at(&root, "session-1").unwrap();
+        assert_eq!(listed.len(), 2);
+        delete_agent_attachment_at(&root, "session-1", &first.id).unwrap();
+        assert_eq!(
+            list_agent_attachments_at(&root, "session-1").unwrap().len(),
+            1
+        );
+
+        let staged = stage_session_documents(&root, "session-1").unwrap();
+        assert!(!attachment_session_root(&root, "session-1").exists());
+        staged.rollback();
+        assert!(attachment_session_root(&root, "session-1").is_dir());
+
+        let staged = stage_session_documents(&root, "session-1").unwrap();
+        staged.commit().unwrap();
+        assert!(!attachment_session_root(&root, "session-1").exists());
+        assert_ne!(first.id, second.id);
         fs::remove_dir_all(root).unwrap();
     }
 

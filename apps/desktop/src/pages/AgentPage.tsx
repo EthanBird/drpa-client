@@ -32,18 +32,18 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { DragEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { useAppStore } from "../app/store";
 import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
+import { getAgentWorkspaceRuntime } from "../features/agent/AgentWorkspaceRuntime";
 import type {
   AgentConversationMessage,
   AgentConversationProject,
   AgentConversationSession,
-  AgentConversationSessionSummary,
   AgentDocumentArtifact,
   AgentDocumentAttachment,
   AgentMessage,
@@ -60,6 +60,7 @@ const toolLabels: Record<string, string> = {
   agent_write_skill: "写入 Skill",
   agent_read_memory: "读取长期记忆",
   agent_write_memory: "更新长期记忆",
+  agent_remember: "追加结构化记忆",
   knowledge_list_documents: "列出知识文档",
   knowledge_read_document: "读取知识文档",
   knowledge_write_document: "写入知识文档",
@@ -101,6 +102,17 @@ function visibleMessageContent(content: string): string {
 function replaceVisibleMessageContent(original: string, visible: string): string {
   const marker = original.indexOf(DOCUMENT_CONTEXT_MARKER);
   return marker < 0 ? visible : `${visible}${original.slice(marker)}`;
+}
+
+function modelMessageContent(message: AgentConversationMessage): string {
+  if (!message.tools?.length) return message.content;
+  const evidence = message.tools.slice(-24).map((tool) => {
+    const output = tool.output.length > 2_000
+      ? `${tool.output.slice(0, 2_000)}\n…工具输出已截断…`
+      : tool.output;
+    return `- ${tool.name} [${tool.status}]: ${tool.summary}\n${output}`;
+  });
+  return `${message.content}\n\n[DRPA_PREVIOUS_TOOL_EVIDENCE_V1]\n${evidence.join("\n")}`;
 }
 
 function withAttachmentContext(
@@ -166,22 +178,6 @@ function latestUserIndex(messages: AgentConversationMessage[]): number {
   return -1;
 }
 
-function indexedSession(
-  summary: AgentConversationSessionSummary,
-  cached?: AgentConversationSession,
-): AgentConversationSession {
-  return {
-    id: summary.id,
-    title: summary.title,
-    projectId: summary.projectId ?? "",
-    createdAt: summary.createdAt,
-    updatedAt: summary.updatedAt,
-    messages: cached?.messages ?? [],
-    selectedSkillIds: summary.selectedSkillIds ?? cached?.selectedSkillIds ?? [],
-    messageCount: summary.messageCount,
-  };
-}
-
 interface AgentPageProps {
   embedded?: boolean;
   embeddedProjectId?: string;
@@ -203,13 +199,14 @@ export function AgentPage({
   const agentContextWindow = useAppStore((state) => state.agentContextWindow);
   const agentMaxOutputTokens = useAppStore((state) => state.agentMaxOutputTokens);
   const agentMaxRounds = useAppStore((state) => state.agentMaxRounds);
+  const agentMaxToolCalls = useAppStore((state) => state.agentMaxToolCalls);
+  const agentMaxWallTimeSeconds = useAppStore((state) => state.agentMaxWallTimeSeconds);
   const agentTemperature = useAppStore((state) => state.agentTemperature);
   const agentPythonTimeoutSeconds = useAppStore((state) => state.agentPythonTimeoutSeconds);
   const agentToolPolicy = useAppStore((state) => state.agentToolPolicy);
   const agentInspectorOpen = useAppStore((state) => state.agentInspectorOpen);
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const workspaceScopeLoaded = useAppStore((state) => state.workspaceScopeLoaded);
-  const clearAgentWorkspaceSessionCache = useAppStore((state) => state.clearAgentWorkspaceSessionCache);
   const agentSessions = useAppStore((state) => state.agentSessions);
   const activeAgentSessionId = useAppStore((state) => state.activeAgentSessionId);
   const setAgentBaseUrl = useAppStore((state) => state.setAgentBaseUrl);
@@ -220,13 +217,12 @@ export function AgentPage({
   const setAgentContextWindow = useAppStore((state) => state.setAgentContextWindow);
   const setAgentMaxOutputTokens = useAppStore((state) => state.setAgentMaxOutputTokens);
   const setAgentMaxRounds = useAppStore((state) => state.setAgentMaxRounds);
+  const setAgentMaxToolCalls = useAppStore((state) => state.setAgentMaxToolCalls);
+  const setAgentMaxWallTimeSeconds = useAppStore((state) => state.setAgentMaxWallTimeSeconds);
   const setAgentTemperature = useAppStore((state) => state.setAgentTemperature);
   const setAgentPythonTimeoutSeconds = useAppStore((state) => state.setAgentPythonTimeoutSeconds);
   const toggleAgentInspector = useAppStore((state) => state.toggleAgentInspector);
-  const replaceAgentConversations = useAppStore((state) => state.replaceAgentConversations);
-  const upsertAgentConversation = useAppStore((state) => state.upsertAgentConversation);
   const selectAgentConversation = useAppStore((state) => state.selectAgentConversation);
-  const deleteAgentConversation = useAppStore((state) => state.deleteAgentConversation);
   const renameAgentConversation = useAppStore((state) => state.renameAgentConversation);
   const setAgentConversationProject = useAppStore((state) => state.setAgentConversationProject);
   const setAgentConversationMessages = useAppStore((state) => state.setAgentConversationMessages);
@@ -243,13 +239,10 @@ export function AgentPage({
   const [projectContextMenu, setProjectContextMenu] = useState<{ x: number; y: number; projectId?: string } | null>(null);
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => new Set());
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [renamingId, setRenamingId] = useState("");
   const [renameDraft, setRenameDraft] = useState("");
   const [confirmation, setConfirmation] = useState<{ kind: "delete" | "clear"; sessionId: string; title: string } | null>(null);
-  const [streamingContent, setStreamingContent] = useState("");
-  const [streamingTools, setStreamingTools] = useState<AgentToolEvent[]>([]);
   const [editingMessageId, setEditingMessageId] = useState("");
   const [editingDraft, setEditingDraft] = useState("");
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, AgentDocumentAttachment[]>>({});
@@ -259,50 +252,57 @@ export function AgentPage({
   const [documentNotice, setDocumentNotice] = useState("");
   const [documentDragActive, setDocumentDragActive] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
-  const loadedSessionIdsRef = useRef(new Set<string>());
-  const saveQueuesRef = useRef(new Map<string, Promise<void>>());
+  const agentRuntime = useMemo(
+    () => getAgentWorkspaceRuntime(activeWorkspaceId),
+    [activeWorkspaceId],
+  );
+  const surfaceId = embedded ? `studio:${embeddedProjectId || "unbound"}` : "main";
+  const [surfaceSessionId, setSurfaceSessionId] = useState(() => (
+    agentRuntime.getSurfaceSelection(surfaceId)
+    || (!embedded ? activeAgentSessionId : "")
+  ));
+
+  useEffect(() => {
+    setDraft(agentRuntime.getSurfaceDraft(surfaceId));
+  }, [agentRuntime, surfaceId]);
+
+  const updateDraft = useCallback((value: string) => {
+    setDraft(value);
+    agentRuntime.setSurfaceDraft(surfaceId, value);
+  }, [agentRuntime, surfaceId]);
 
   const activeSession = useMemo(() => {
-    const selected = agentSessions.find((session) => session.id === activeAgentSessionId);
+    const selected = agentSessions.find((session) => session.id === surfaceSessionId);
     if (!embedded || !embeddedProjectId) return selected ?? agentSessions[0];
     return selected?.projectId === embeddedProjectId
       ? selected
       : agentSessions.find((session) => session.projectId === embeddedProjectId);
-  }, [activeAgentSessionId, agentSessions, embedded, embeddedProjectId]);
+  }, [agentSessions, embedded, embeddedProjectId, surfaceSessionId]);
+  const runSessionId = activeSession?.id ?? "";
+  const subscribeRun = useCallback(
+    (listener: () => void) => agentRuntime.subscribeRun(runSessionId, listener),
+    [agentRuntime, runSessionId],
+  );
+  const getRunProjection = useCallback(
+    () => agentRuntime.getRunProjection(runSessionId),
+    [agentRuntime, runSessionId],
+  );
+  const runProjection = useSyncExternalStore(subscribeRun, getRunProjection, getRunProjection);
+  const busy = runProjection.status === "running" || runProjection.status === "cancelling";
+  const currentRequestId = runProjection.requestId;
+  const streamingContent = runProjection.content;
+  const streamingTools = runProjection.tools;
   const messages = activeSession?.messages ?? [];
   const agentProjectId = activeSession?.projectId ?? "";
   const attachments = activeSession ? attachmentsBySession[activeSession.id] ?? [] : [];
   const artifacts = activeSession ? artifactsBySession[activeSession.id] ?? [] : [];
 
   const persistSession = useCallback((sessionId: string): Promise<void> => {
-    if (!loadedSessionIdsRef.current.has(sessionId)) {
-      return Promise.reject(new Error("会话正文尚未加载，已阻止覆盖数据库"));
-    }
-    const snapshot = useAppStore.getState().agentSessions.find((session) => session.id === sessionId);
-    if (!snapshot) return Promise.resolve();
-    const previous = saveQueuesRef.current.get(sessionId) ?? Promise.resolve();
-    const queued = previous
-      .catch(() => undefined)
-      .then(async () => {
-        await desktopGateway.saveAgentSession({
-          ...snapshot,
-          projectId: snapshot.projectId ?? "",
-          selectedSkillIds: snapshot.selectedSkillIds ?? [],
-          messages: snapshot.messages ?? [],
-        });
-      })
-      .catch((reason: unknown) => {
+    return agentRuntime.persistSession(sessionId).catch((reason: unknown) => {
         setError(`保存会话失败：${String(reason)}`);
         throw reason;
       });
-    saveQueuesRef.current.set(sessionId, queued);
-    void queued.finally(() => {
-      if (saveQueuesRef.current.get(sessionId) === queued) {
-        saveQueuesRef.current.delete(sessionId);
-      }
-    }).catch(() => undefined);
-    return queued;
-  }, []);
+  }, [agentRuntime]);
 
   const refreshProjectIndex = useCallback(async () => {
     const next = await desktopGateway.listAgentProjects();
@@ -311,108 +311,54 @@ export function AgentPage({
   }, []);
 
   const openSession = useCallback(async (sessionId: string) => {
-    selectAgentConversation(sessionId);
-    if (loadedSessionIdsRef.current.has(sessionId)) return;
+    setSurfaceSessionId(sessionId);
+    agentRuntime.setSurfaceSelection(surfaceId, sessionId);
+    if (!embedded) selectAgentConversation(sessionId);
+    if (agentRuntime.isLoaded(sessionId)) return;
     const summary = useAppStore.getState().agentSessions.find((session) => session.id === sessionId);
     if (summary?.messageCount === 0) {
-      loadedSessionIdsRef.current.add(sessionId);
+      await agentRuntime.loadSession(sessionId);
       return;
     }
     setSessionLoadingId(sessionId);
     try {
-      const session = await desktopGateway.getAgentSession(sessionId);
-      loadedSessionIdsRef.current.add(sessionId);
-      upsertAgentConversation(session);
-      if (useAppStore.getState().activeAgentSessionId === sessionId) {
-        selectAgentConversation(sessionId);
-      }
+      await agentRuntime.loadSession(sessionId);
     } catch (reason) {
       setError(`读取会话失败：${String(reason)}`);
     } finally {
       setSessionLoadingId((current) => current === sessionId ? "" : current);
     }
-  }, [selectAgentConversation, upsertAgentConversation]);
+  }, [agentRuntime, embedded, selectAgentConversation, surfaceId]);
 
   useEffect(() => {
     if (!workspaceScopeLoaded && !embedded) return;
     let active = true;
     setSessionIndexReady(false);
-    loadedSessionIdsRef.current.clear();
-    saveQueuesRef.current.clear();
 
     void (async () => {
       try {
-        const [storedProjects, storedSessions, studioProjects, workspaceConfig] = await Promise.all([
-          desktopGateway.listAgentProjects(),
-          desktopGateway.listAgentSessions(),
+        const [index, studioProjects] = await Promise.all([
+          agentRuntime.initialize(),
           embedded ? Promise.resolve([]) : desktopGateway.listStudioProjects().catch(() => []),
-          desktopGateway.getAgentWorkspaceConfig().catch(() => null),
         ]);
         if (!active) return;
-        let summaries = storedSessions;
-        let projectIndex = storedProjects;
-        const legacyWorkspaceState = useAppStore.getState().agentWorkspaceStates[activeWorkspaceId];
-        const legacySessions = legacyWorkspaceState?.sessions ?? [];
-        const storedSessionIds = new Set(summaries.map((session) => session.id));
-        const missingLegacySessions = legacySessions.filter((session) => !storedSessionIds.has(session.id));
-
-        if (missingLegacySessions.length > 0) {
-          for (const session of missingLegacySessions) {
-            if (!active) return;
-            await desktopGateway.saveAgentSession({
-              ...session,
-              projectId: session.projectId ?? "",
-              selectedSkillIds: session.selectedSkillIds ?? [],
-              messages: session.messages ?? [],
-            });
-            loadedSessionIdsRef.current.add(session.id);
-          }
-          summaries = await desktopGateway.listAgentSessions();
-          projectIndex = await desktopGateway.listAgentProjects();
-          const migratedIds = new Set(summaries.map((session) => session.id));
-          const missingAfterSave = missingLegacySessions.find((session) => !migratedIds.has(session.id));
-          if (missingAfterSave) {
-            throw new Error(`会话 ${missingAfterSave.title || missingAfterSave.id} 尚未写入 session.db`);
-          }
-        }
-        if (summaries.length === 0) {
-          const created = await desktopGateway.createAgentSession();
-          loadedSessionIdsRef.current.add(created.id);
-          summaries = [{
-            id: created.id,
-            title: created.title,
-            projectId: created.projectId || null,
-            createdAt: created.createdAt,
-            updatedAt: created.updatedAt,
-            messageCount: 0,
-            selectedSkillIds: created.selectedSkillIds,
-          }];
-        }
-        if (!active) return;
-
-        const cached = new Map(missingLegacySessions.map((session) => [session.id, session]));
-        const indexed = summaries.map((summary) => indexedSession(
-          summary,
-          loadedSessionIdsRef.current.has(summary.id) ? cached.get(summary.id) : undefined,
-        ));
-        const cachedActiveSessionId = useAppStore.getState().activeAgentSessionId;
-        const preferredId = summaries.some((session) => session.id === cachedActiveSessionId)
-          ? cachedActiveSessionId
-          : summaries[0]?.id;
-        replaceAgentConversations(indexed, preferredId);
-        setAgentProjects(projectIndex);
+        setAgentProjects(index.projects);
         setProjects(studioProjects);
-        setAvailableSkills(workspaceConfig?.skills ?? []);
+        setAvailableSkills(index.config?.skills ?? []);
         setSessionIndexReady(true);
-        if (legacyWorkspaceState) clearAgentWorkspaceSessionCache(activeWorkspaceId);
-
-        const preferred = indexed.find((session) => session.id === preferredId);
-        if (preferred && !loadedSessionIdsRef.current.has(preferred.id)) {
-          if ((preferred.messageCount ?? 0) === 0) {
-            loadedSessionIdsRef.current.add(preferred.id);
-          } else {
-            await openSession(preferred.id);
-          }
+        const sessions = useAppStore.getState().agentSessions;
+        const remembered = agentRuntime.getSurfaceSelection(surfaceId);
+        const preferred = embedded && embeddedProjectId
+          ? sessions.find((session) => session.id === remembered && session.projectId === embeddedProjectId)
+            ?? sessions.find((session) => session.projectId === embeddedProjectId)
+          : sessions.find((session) => session.id === remembered)
+            ?? sessions.find((session) => session.id === useAppStore.getState().activeAgentSessionId)
+            ?? sessions[0];
+        if (preferred) {
+          setSurfaceSessionId(preferred.id);
+          agentRuntime.setSurfaceSelection(surfaceId, preferred.id);
+          if (!embedded) selectAgentConversation(preferred.id);
+          await agentRuntime.loadSession(preferred.id);
         }
       } catch (reason) {
         if (active) {
@@ -425,11 +371,12 @@ export function AgentPage({
     return () => { active = false; };
   }, [
     activeWorkspaceId,
+    agentRuntime,
     embedded,
+    embeddedProjectId,
     workspaceScopeLoaded,
-    clearAgentWorkspaceSessionCache,
-    replaceAgentConversations,
-    openSession,
+    selectAgentConversation,
+    surfaceId,
   ]);
 
   const refreshArtifacts = useCallback(async (sessionId: string) => {
@@ -442,10 +389,20 @@ export function AgentPage({
     }
   }, []);
 
+  const refreshAttachments = useCallback(async (sessionId: string) => {
+    try {
+      const next = await documentGateway.listAgentAttachments(sessionId);
+      setAttachmentsBySession((current) => ({ ...current, [sessionId]: next }));
+    } catch (reason) {
+      setDocumentNotice(`读取对话附件失败：${String(reason)}`);
+    }
+  }, []);
+
   useEffect(() => {
     if (!activeSession) return;
     void refreshArtifacts(activeSession.id);
-  }, [activeSession?.id, refreshArtifacts]);
+    void refreshAttachments(activeSession.id);
+  }, [activeSession?.id, refreshArtifacts, refreshAttachments]);
 
   useEffect(() => {
     const target = transcriptRef.current;
@@ -590,13 +547,21 @@ export function AgentPage({
     }
   };
 
-  const removeAttachment = (attachmentId: string) => {
+  const removeAttachment = async (attachmentId: string) => {
     if (!activeSession || busy || documentBusy) return;
-    setAttachmentsBySession((current) => ({
-      ...current,
-      [activeSession.id]: (current[activeSession.id] ?? [])
-        .filter((attachment) => attachment.id !== attachmentId),
-    }));
+    setDocumentBusy(true);
+    try {
+      await documentGateway.deleteAgentAttachment(activeSession.id, attachmentId);
+      setAttachmentsBySession((current) => ({
+        ...current,
+        [activeSession.id]: (current[activeSession.id] ?? [])
+          .filter((attachment) => attachment.id !== attachmentId),
+      }));
+    } catch (reason) {
+      setDocumentNotice(`删除对话附件失败：${String(reason)}`);
+    } finally {
+      setDocumentBusy(false);
+    }
   };
 
   const exportArtifact = async (artifact: AgentDocumentArtifact) => {
@@ -642,10 +607,10 @@ export function AgentPage({
     const targetProjectId = projectId ?? (embedded ? embeddedProjectId : "");
     setSessionLoadingId("new");
     try {
-      const session = await desktopGateway.createAgentSession(targetProjectId);
-      loadedSessionIdsRef.current.add(session.id);
-      upsertAgentConversation(session);
-      selectAgentConversation(session.id);
+      const session = await agentRuntime.createSession(targetProjectId);
+      setSurfaceSessionId(session.id);
+      agentRuntime.setSurfaceSelection(surfaceId, session.id);
+      if (!embedded) selectAgentConversation(session.id);
       if (targetProjectId) void refreshProjectIndex();
     } catch (reason) {
       setError(`新建会话失败：${String(reason)}`);
@@ -653,13 +618,14 @@ export function AgentPage({
       setSessionLoadingId("");
     }
   }, [
+    agentRuntime,
     busy,
     embedded,
     embeddedProjectId,
     refreshProjectIndex,
     selectAgentConversation,
     sessionLoadingId,
-    upsertAgentConversation,
+    surfaceId,
   ]);
 
   useEffect(() => {
@@ -682,63 +648,35 @@ export function AgentPage({
 
   const finishRenameSession = useCallback(async (sessionId: string, title: string) => {
     setRenamingId("");
-    const previous = saveQueuesRef.current.get(sessionId) ?? Promise.resolve();
-    let mutation: Promise<void>;
-    mutation = previous.catch(() => undefined).then(async () => {
-      const session = await desktopGateway.renameAgentSession(sessionId, title);
-      loadedSessionIdsRef.current.add(session.id);
-      if (saveQueuesRef.current.get(sessionId) === mutation) {
-        upsertAgentConversation(session);
-      }
-    });
-    saveQueuesRef.current.set(sessionId, mutation);
     try {
-      await mutation;
+      await agentRuntime.renameSession(sessionId, title);
     } catch (reason) {
       setError(`重命名会话失败：${String(reason)}`);
-    } finally {
-      if (saveQueuesRef.current.get(sessionId) === mutation) {
-        saveQueuesRef.current.delete(sessionId);
-      }
     }
-  }, [upsertAgentConversation]);
+  }, [agentRuntime]);
 
   const moveSessionToProject = useCallback(async (sessionId: string, projectId: string) => {
     const previousProjectId = useAppStore.getState().agentSessions
       .find((session) => session.id === sessionId)?.projectId ?? "";
     setAgentConversationProject(sessionId, projectId);
-    const previous = saveQueuesRef.current.get(sessionId) ?? Promise.resolve();
-    let mutation: Promise<void>;
-    mutation = previous.catch(() => undefined).then(async () => {
-      const session = await desktopGateway.moveAgentSession(sessionId, projectId);
-      loadedSessionIdsRef.current.add(session.id);
-      if (saveQueuesRef.current.get(sessionId) === mutation) {
-        upsertAgentConversation(session);
-      }
-    });
-    saveQueuesRef.current.set(sessionId, mutation);
     try {
-      await mutation;
+      await agentRuntime.moveSession(sessionId, projectId);
       await refreshProjectIndex();
     } catch (reason) {
       setAgentConversationProject(sessionId, previousProjectId);
       setError(`移动会话失败：${String(reason)}`);
-    } finally {
-      if (saveQueuesRef.current.get(sessionId) === mutation) {
-        saveQueuesRef.current.delete(sessionId);
-      }
     }
-  }, [refreshProjectIndex, setAgentConversationProject, upsertAgentConversation]);
+  }, [agentRuntime, refreshProjectIndex, setAgentConversationProject]);
 
   const toggleSessionSkill = useCallback(async (skillId: string) => {
-    if (!activeSession || !loadedSessionIdsRef.current.has(activeSession.id)) return;
+    if (!activeSession || !agentRuntime.isLoaded(activeSession.id)) return;
     const selected = activeSession.selectedSkillIds ?? [];
     const next = selected.includes(skillId)
       ? selected.filter((item) => item !== skillId)
       : [...selected, skillId];
     setAgentConversationSkills(activeSession.id, next);
     await persistSession(activeSession.id).catch(() => undefined);
-  }, [activeSession, persistSession, setAgentConversationSkills]);
+  }, [activeSession, agentRuntime, persistSession, setAgentConversationSkills]);
 
   const openCreateProject = useCallback(() => {
     setProjectContextMenu(null);
@@ -803,18 +741,21 @@ export function AgentPage({
     if (confirmation.kind === "delete") {
       try {
         const beforeDelete = useAppStore.getState().agentSessions;
+        const deletingSurfaceSelection = surfaceSessionId === confirmation.sessionId;
         if (beforeDelete.length === 1) {
-          const replacement = await desktopGateway.createAgentSession();
-          loadedSessionIdsRef.current.add(replacement.id);
-          upsertAgentConversation(replacement);
+          const replacement = await agentRuntime.createSession(embedded ? embeddedProjectId : "");
+          setSurfaceSessionId(replacement.id);
+          agentRuntime.setSurfaceSelection(surfaceId, replacement.id);
         }
-        await (saveQueuesRef.current.get(confirmation.sessionId) ?? Promise.resolve())
-          .catch(() => undefined);
-        await desktopGateway.deleteAgentSession(confirmation.sessionId);
-        loadedSessionIdsRef.current.delete(confirmation.sessionId);
-        deleteAgentConversation(confirmation.sessionId);
-        const nextActiveId = useAppStore.getState().activeAgentSessionId;
-        if (nextActiveId) void openSession(nextActiveId);
+        await agentRuntime.deleteSession(confirmation.sessionId);
+        if (deletingSurfaceSelection) {
+          const remaining = useAppStore.getState().agentSessions;
+          const replacement = embedded && embeddedProjectId
+            ? remaining.find((session) => session.projectId === embeddedProjectId)
+            : remaining.find((session) => session.id === useAppStore.getState().activeAgentSessionId)
+              ?? remaining[0];
+          if (replacement) void openSession(replacement.id);
+        }
         setAttachmentsBySession((current) => {
           const next = { ...current };
           delete next[confirmation.sessionId];
@@ -844,28 +785,11 @@ export function AgentPage({
     }
     setAgentConversationMessages(sessionId, history);
     setError("");
-    setStreamingContent("");
-    setStreamingTools([]);
-    setBusy(true);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     await persistSession(sessionId).catch(() => undefined);
     const requestId = `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    let unlisten: (() => void) | undefined;
     try {
-      if (agentStreamEnabled) {
-        unlisten = await desktopGateway.listenAgentStream(requestId, (event) => {
-          if (event.type === "roundStarted") {
-            setStreamingContent("");
-          } else if (event.type === "delta") {
-            setStreamingContent((current) => current + event.content);
-          } else if (event.type === "contentReplace") {
-            setStreamingContent(event.content);
-          } else {
-            setStreamingTools((current) => [...current.filter((tool) => tool.callId !== event.tool.callId), event.tool]);
-          }
-        });
-      }
-      const result = await desktopGateway.runAgentTurn({
+      const result = await agentRuntime.runTurn({
         requestId,
         sessionId,
         baseUrl: agentBaseUrl.trim(),
@@ -882,9 +806,14 @@ export function AgentPage({
         maxRounds: agentMaxRounds,
         temperature: agentTemperature,
         pythonTimeoutSeconds: agentPythonTimeoutSeconds,
+        maxToolCalls: agentMaxToolCalls,
+        maxWallTimeSeconds: agentMaxWallTimeSeconds,
         selectedSkillIds: useAppStore.getState().agentSessions.find((session) => session.id === sessionId)?.selectedSkillIds ?? [],
         toolPolicy: agentToolPolicy,
-        messages: history.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
+        messages: history.map((message) => ({
+          role: message.role,
+          content: modelMessageContent(message),
+        })),
       });
       setAgentConversationMessages(sessionId, [...history, {
         id: messageId("assistant"),
@@ -893,16 +822,29 @@ export function AgentPage({
         tools: result.tools,
         durationMs: result.durationMs,
         tokens: result.usage.promptTokens + result.usage.completionTokens,
+        run: {
+          requestId,
+          stopReason: result.stopReason,
+          rounds: result.rounds,
+          toolCalls: result.toolCalls,
+        },
       }]);
       await persistSession(sessionId).catch(() => undefined);
     } catch (reason) {
-      setError(`Agent 请求失败：${String(reason)}`);
+      setError(String(reason).includes("运行已取消")
+        ? "Agent 运行已取消"
+        : `Agent 请求失败：${String(reason)}`);
     } finally {
-      unlisten?.();
-      setStreamingContent("");
-      setStreamingTools([]);
-      setBusy(false);
       void refreshArtifacts(sessionId);
+    }
+  };
+
+  const cancelCurrentRun = async () => {
+    if (!currentRequestId) return;
+    try {
+      await agentRuntime.cancelRun(runSessionId);
+    } catch (reason) {
+      setError(`取消 Agent 运行失败：${String(reason)}`);
     }
   };
 
@@ -918,7 +860,7 @@ export function AgentPage({
       renameAgentConversation(activeSession.id, generatedTitle);
       await finishRenameSession(activeSession.id, generatedTitle);
     }
-    setDraft("");
+    updateDraft("");
     await runTurn(activeSession.id, history);
   };
 
@@ -958,7 +900,7 @@ export function AgentPage({
     if (name === "data_create_connection") return agentToolPolicy.databaseConnections;
     if (name.startsWith("data_")) return agentToolPolicy.databaseRead;
     if (name.startsWith("knowledge_base_")) return agentToolPolicy.knowledgeBaseRead;
-    if (name === "knowledge_write_document" || name === "agent_write_skill" || name === "agent_write_memory") return agentToolPolicy.workspaceWrite;
+    if (name === "knowledge_write_document" || name === "agent_write_skill" || name === "agent_write_memory" || name === "agent_remember") return agentToolPolicy.workspaceWrite;
     if (name === "document_read") return agentToolPolicy.documentRead;
     if (name === "document_create") return agentToolPolicy.documentWrite;
     if (name === "document_convert") return agentToolPolicy.documentConvert;
@@ -1091,14 +1033,14 @@ export function AgentPage({
               onExportArtifact={(artifact) => void exportArtifact(artifact)}
               onRefreshArtifacts={() => activeSession && void refreshArtifacts(activeSession.id)}
             />
-            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void send(); } }} placeholder={!activeSession ? "正在准备项目会话…" : selectedProject ? `向 Agent 描述“${selectedProject.name}”的开发任务…` : "先选择左侧开发项目…"} disabled={busy || !selectedProject || !activeSession} />
+            <textarea value={draft} onChange={(event) => updateDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void send(); } }} placeholder={!activeSession ? "正在准备项目会话…" : selectedProject ? `向 Agent 描述“${selectedProject.name}”的开发任务…` : "先选择左侧开发项目…"} disabled={busy || !selectedProject || !activeSession} />
             <SkillPicker
               skills={availableSkills}
               selectedSkillIds={selectedSkillIds}
               disabled={busy || !activeSession || sessionLoadingId === activeSession?.id}
               onToggle={(skillId) => void toggleSessionSkill(skillId)}
             />
-            <footer><button className="agent-attach-trigger" type="button" title="添加 PDF、Word、Excel 或 PowerPoint" aria-label="添加对话文档" onClick={() => void selectDocuments()} disabled={busy || documentBusy}><Paperclip size={14} /></button><span><Code2 size={12} /> {selectedProject ? "当前项目" : "未绑定项目"}</span><small>Ctrl + Enter</small><button type="button" aria-label="发送工作室 Agent 消息" onClick={() => void send()} disabled={busy || documentBusy || (!draft.trim() && attachments.length === 0) || !selectedProject}><Send size={14} /></button></footer>
+            <footer><button className="agent-attach-trigger" type="button" title="添加 PDF、Word、Excel 或 PowerPoint" aria-label="添加对话文档" onClick={() => void selectDocuments()} disabled={busy || documentBusy}><Paperclip size={14} /></button><span><Code2 size={12} /> {selectedProject ? "当前项目" : "未绑定项目"}</span><small>Ctrl + Enter</small>{busy ? <button type="button" aria-label="取消 Agent 运行" onClick={() => void cancelCurrentRun()} disabled={!currentRequestId}><XCircle size={14} /></button> : <button type="button" aria-label="发送工作室 Agent 消息" onClick={() => void send()} disabled={documentBusy || (!draft.trim() && attachments.length === 0) || !selectedProject}><Send size={14} /></button>}</footer>
           </div>
         </div>
         {confirmation && (
@@ -1274,7 +1216,7 @@ export function AgentPage({
               />
               <textarea
                 value={draft}
-                onChange={(event) => setDraft(event.target.value)}
+                onChange={(event) => updateDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
                     event.preventDefault();
@@ -1290,7 +1232,7 @@ export function AgentPage({
                 disabled={busy || !activeSession || sessionLoadingId === activeSession?.id}
                 onToggle={(skillId) => void toggleSessionSkill(skillId)}
               />
-              <footer><button className="agent-attach-trigger" type="button" title="添加 PDF、Word、Excel 或 PowerPoint" aria-label="添加对话文档" onClick={() => void selectDocuments()} disabled={busy || documentBusy || !sessionIndexReady}><Paperclip size={14} /></button><span><Code2 size={12} /> {selectedProject?.name ?? "未绑定项目"}</span><small>Ctrl + Enter</small><button type="button" aria-label="发送消息" onClick={() => void send()} disabled={busy || !sessionIndexReady || documentBusy || (!draft.trim() && attachments.length === 0)}><Send size={15} /></button></footer>
+              <footer><button className="agent-attach-trigger" type="button" title="添加 PDF、Word、Excel 或 PowerPoint" aria-label="添加对话文档" onClick={() => void selectDocuments()} disabled={busy || documentBusy || !sessionIndexReady}><Paperclip size={14} /></button><span><Code2 size={12} /> {selectedProject?.name ?? "未绑定项目"}</span><small>Ctrl + Enter</small>{busy ? <button type="button" aria-label="取消 Agent 运行" onClick={() => void cancelCurrentRun()} disabled={!currentRequestId}><XCircle size={15} /></button> : <button type="button" aria-label="发送消息" onClick={() => void send()} disabled={!sessionIndexReady || documentBusy || (!draft.trim() && attachments.length === 0)}><Send size={15} /></button>}</footer>
             </div>
           </div>
         </section>
@@ -1316,6 +1258,8 @@ export function AgentPage({
               <label><span>上下文窗口</span><input aria-label="Agent 上下文窗口" type="number" min={1024} max={2000000} step={1024} value={agentContextWindow} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentContextWindow(event.currentTarget.valueAsNumber); }} /><small>按模型 token 上限裁剪较早对话，默认 384K（393216）。</small></label>
               <label><span>最大输出 tokens</span><input aria-label="Agent 最大输出 tokens" type="number" min={64} max={131072} step={64} value={agentMaxOutputTokens} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentMaxOutputTokens(event.currentTarget.valueAsNumber); }} /><small>默认 98304，可按服务端能力调整。</small></label>
               <label><span>最大模型/工具循环</span><input aria-label="Agent 最大模型工具循环" type="number" min={1} max={256} step={1} value={agentMaxRounds} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentMaxRounds(event.currentTarget.valueAsNumber); }} /><small>单次请求默认 64 轮，可配置 1–256。</small></label>
+              <label><span>最大工具调用数</span><input aria-label="Agent 最大工具调用数" type="number" min={1} max={4096} step={1} value={agentMaxToolCalls} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentMaxToolCalls(event.currentTarget.valueAsNumber); }} /><small>跨全部轮次累计，默认 128；达到上限后进入最终总结。</small></label>
+              <label><span>单次运行时限（秒）</span><input aria-label="Agent 单次运行时限秒数" type="number" min={10} max={86400} step={30} value={agentMaxWallTimeSeconds} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentMaxWallTimeSeconds(event.currentTarget.valueAsNumber); }} /><small>默认 900 秒；达到时限后结束工具循环并保留事件日志。</small></label>
               <label><span>Python 超时（秒）</span><input aria-label="Agent Python 超时秒数" type="number" min={1} max={86400} step={30} value={agentPythonTimeoutSeconds} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentPythonTimeoutSeconds(event.currentTarget.valueAsNumber); }} /><small>默认 300 秒；长时间分析可继续调大。</small></label>
               <label><span>Temperature</span><input aria-label="Agent Temperature" type="number" min={0} max={2} step={0.1} value={agentTemperature} onChange={(event) => { if (Number.isFinite(event.currentTarget.valueAsNumber)) setAgentTemperature(event.currentTarget.valueAsNumber); }} /></label>
             </section>
@@ -1331,7 +1275,7 @@ export function AgentPage({
               {agentMode === "developer" ? <div className="agent-developer-tool-note"><Code2 size={16} /><span><strong>完整开发工具已启用</strong><small>JCode 可访问当前工作目录中的文件、命令、构建与测试工具；DRPA 内置工具分类开关仅作用于 RPAZ Agent。</small></span></div> : <div className="agent-tool-list">{Object.entries(toolLabels).map(([name, label]) => { const active = toolIsActive(name); return <div className={active ? "active" : ""} key={name}><CheckCircle2 size={12} /><span><strong>{label}</strong><code>{name}</code></span></div>; })}</div>}
             </section>
           </div>
-          <footer><span className="agent-limit-dot" /> {agentMode === "developer" ? "JCode 完整开发工具 · 单任务串行运行" : `单 Agent · 最多 ${agentMaxRounds} 轮模型/工具循环 · Python ${agentPythonTimeoutSeconds} 秒`}</footer>
+          <footer><span className="agent-limit-dot" /> {agentMode === "developer" ? "JCode 完整开发工具 · 每会话单任务运行" : `单 Agent · ${agentMaxRounds} 轮 / ${agentMaxToolCalls} 次工具 / ${agentMaxWallTimeSeconds} 秒 · Python ${agentPythonTimeoutSeconds} 秒`}</footer>
         </aside>}
       </div>
       {projectContextMenu && (

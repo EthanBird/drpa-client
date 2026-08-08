@@ -13,9 +13,9 @@ use serde_json::Value;
 use tauri::State;
 use uuid::Uuid;
 
-use crate::AppPaths;
+use crate::{AppPaths, agent_browser, agent_documents, jcode};
 
-const SESSION_SCHEMA_VERSION: i64 = 1;
+const SESSION_SCHEMA_VERSION: i64 = 2;
 const DEFAULT_SESSION_TITLE: &str = "新对话";
 const MAX_PROJECT_NAME_CHARS: usize = 120;
 const MAX_SESSION_TITLE_CHARS: usize = 200;
@@ -42,6 +42,7 @@ pub(crate) struct AgentSessionSummary {
     pub(crate) project_id: Option<String>,
     pub(crate) created_at: u64,
     pub(crate) updated_at: u64,
+    pub(crate) revision: u64,
     pub(crate) message_count: usize,
     pub(crate) selected_skill_ids: Vec<String>,
 }
@@ -57,6 +58,8 @@ pub(crate) struct AgentSessionRecord {
     pub(crate) created_at: u64,
     #[serde(default)]
     pub(crate) updated_at: u64,
+    #[serde(default)]
+    pub(crate) revision: u64,
     #[serde(default)]
     pub(crate) messages: Vec<Value>,
     #[serde(default)]
@@ -163,9 +166,17 @@ pub(crate) fn move_agent_session(
 pub(crate) fn delete_agent_session(
     session_id: String,
     paths: State<'_, AppPaths>,
+    browsers: State<'_, agent_browser::AgentBrowserManager>,
 ) -> Result<(), String> {
     let _guard = lock_session_database()?;
-    delete_agent_session_at(&paths.workspace_root, &session_id)
+    let staged = agent_documents::stage_session_documents(&paths.workspace_root, &session_id)?;
+    if let Err(error) = delete_agent_session_at(&paths.workspace_root, &session_id) {
+        staged.rollback();
+        return Err(error);
+    }
+    staged.commit()?;
+    jcode::delete_session_data(&paths.workspace_root, &session_id)?;
+    browsers.release(&session_id)
 }
 
 fn list_agent_projects_at(workspace_root: &Path) -> Result<Vec<AgentProjectSummary>, String> {
@@ -341,7 +352,7 @@ fn list_agent_sessions_at(
     let mut statement = connection
         .prepare(
             "SELECT id, title, project_id, created_at, updated_at, message_count,
-                    selected_skills_json
+                    selected_skills_json, revision
              FROM sessions
              WHERE ?1 = 0
                 OR (?1 = 1 AND project_id IS NULL)
@@ -372,6 +383,7 @@ fn create_agent_session_at(
         project_id,
         created_at: now,
         updated_at: now,
+        revision: 1,
         messages: Vec::new(),
         selected_skill_ids,
     };
@@ -388,7 +400,7 @@ fn get_agent_session_at(
     connection
         .query_row(
             "SELECT id, title, project_id, created_at, updated_at, messages_json,
-                    selected_skills_json
+                    selected_skills_json, revision
              FROM sessions WHERE id = ?1",
             [session_id],
             session_record_from_row,
@@ -426,31 +438,74 @@ fn save_agent_session_at(
     if let Some(project_id) = session.project_id.as_deref() {
         ensure_or_register_project_in(&transaction, workspace_root, project_id)?;
     }
-    transaction
-        .execute(
-            "INSERT INTO sessions (
-                id, project_id, title, messages_json, selected_skills_json,
-                message_count, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(id) DO UPDATE SET
-                project_id = excluded.project_id,
-                title = excluded.title,
-                messages_json = excluded.messages_json,
-                selected_skills_json = excluded.selected_skills_json,
-                message_count = excluded.message_count,
-                updated_at = excluded.updated_at",
-            params![
-                session.id,
-                session.project_id,
-                session.title,
-                messages_json,
-                skills_json,
-                usize_i64(session.messages.len())?,
-                millis_i64(session.created_at),
-                millis_i64(session.updated_at),
-            ],
+    let current_revision = transaction
+        .query_row(
+            "SELECT revision FROM sessions WHERE id = ?1",
+            [&session.id],
+            |row| row.get::<_, i64>(0),
         )
-        .map_err(database_error("保存 Agent 会话失败"))?;
+        .optional()
+        .map_err(database_error("读取 Agent 会话版本失败"))?
+        .map(nonnegative_u64);
+    match current_revision {
+        Some(current) if session.revision != current => {
+            return Err(format!(
+                "Agent 会话版本冲突：客户端 revision={}，数据库 revision={current}；请重新载入会话",
+                session.revision
+            ));
+        }
+        None if session.revision > 0 => {
+            return Err("Agent 会话已删除，已阻止旧快照重新创建会话".to_owned());
+        }
+        _ => {}
+    }
+    let next_revision = current_revision.unwrap_or(0).saturating_add(1);
+    if current_revision.is_some() {
+        transaction
+            .execute(
+                "UPDATE sessions SET
+                    project_id = ?1,
+                    title = ?2,
+                    messages_json = ?3,
+                    selected_skills_json = ?4,
+                    message_count = ?5,
+                    updated_at = ?6,
+                    revision = ?7
+                 WHERE id = ?8",
+                params![
+                    session.project_id,
+                    session.title,
+                    messages_json,
+                    skills_json,
+                    usize_i64(session.messages.len())?,
+                    millis_i64(session.updated_at),
+                    millis_i64(next_revision),
+                    session.id,
+                ],
+            )
+            .map_err(database_error("保存 Agent 会话失败"))?;
+    } else {
+        transaction
+            .execute(
+                "INSERT INTO sessions (
+                    id, project_id, title, messages_json, selected_skills_json,
+                    message_count, created_at, updated_at, revision
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    session.id,
+                    session.project_id,
+                    session.title,
+                    messages_json,
+                    skills_json,
+                    usize_i64(session.messages.len())?,
+                    millis_i64(session.created_at),
+                    millis_i64(session.updated_at),
+                    millis_i64(next_revision),
+                ],
+            )
+            .map_err(database_error("保存 Agent 会话失败"))?;
+    }
+    session.revision = next_revision;
     transaction
         .commit()
         .map_err(database_error("提交 Agent 会话失败"))?;
@@ -467,7 +522,7 @@ fn rename_agent_session_at(
     let connection = open_database(workspace_root)?;
     let changed = connection
         .execute(
-            "UPDATE sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE sessions SET title = ?1, updated_at = ?2, revision = revision + 1 WHERE id = ?3",
             params![title, millis_i64(now_millis()), session_id],
         )
         .map_err(database_error("重命名 Agent 会话失败"))?;
@@ -493,7 +548,7 @@ fn move_agent_session_at(
     }
     let changed = transaction
         .execute(
-            "UPDATE sessions SET project_id = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE sessions SET project_id = ?1, updated_at = ?2, revision = revision + 1 WHERE id = ?3",
             params![project_id, millis_i64(now_millis()), session_id],
         )
         .map_err(database_error("移动 Agent 会话失败"))?;
@@ -534,8 +589,8 @@ fn insert_session(workspace_root: &Path, session: &AgentSessionRecord) -> Result
         .execute(
             "INSERT INTO sessions (
                 id, project_id, title, messages_json, selected_skills_json,
-                message_count, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                message_count, created_at, updated_at, revision
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 session.id,
                 session.project_id,
@@ -545,6 +600,7 @@ fn insert_session(workspace_root: &Path, session: &AgentSessionRecord) -> Result
                 usize_i64(session.messages.len())?,
                 millis_i64(session.created_at),
                 millis_i64(session.updated_at),
+                millis_i64(session.revision.max(1)),
             ],
         )
         .map_err(database_error("创建 Agent 会话失败"))?;
@@ -592,7 +648,7 @@ fn get_agent_session_with(
     connection
         .query_row(
             "SELECT id, title, project_id, created_at, updated_at, messages_json,
-                    selected_skills_json
+                    selected_skills_json, revision
              FROM sessions WHERE id = ?1",
             [session_id],
             session_record_from_row,
@@ -611,6 +667,7 @@ fn session_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentSes
         project_id: row.get(2)?,
         created_at: nonnegative_u64(row.get(3)?),
         updated_at: nonnegative_u64(row.get(4)?),
+        revision: nonnegative_u64(row.get(7)?),
         messages: parse_json_column(&messages_json, 5)?,
         selected_skill_ids: parse_json_column(&skills_json, 6)?,
     })
@@ -624,6 +681,7 @@ fn session_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentSe
         project_id: row.get(2)?,
         created_at: nonnegative_u64(row.get(3)?),
         updated_at: nonnegative_u64(row.get(4)?),
+        revision: nonnegative_u64(row.get(7)?),
         message_count: nonnegative_usize(row.get(5)?),
         selected_skill_ids: parse_json_column(&skills_json, 6)?,
     })
@@ -723,7 +781,8 @@ fn migrate_database(connection: &mut Connection) -> Result<(), String> {
                         ),
                     message_count INTEGER NOT NULL DEFAULT 0 CHECK (message_count >= 0),
                     created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
+                    updated_at INTEGER NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1)
                  );
                  CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated
                     ON sessions(updated_at DESC, created_at DESC);
@@ -733,6 +792,14 @@ fn migrate_database(connection: &mut Connection) -> Result<(), String> {
                     ON projects(name COLLATE NOCASE);",
             )
             .map_err(database_error("创建 Agent 会话数据库结构失败"))?;
+    }
+    if version < 2 && version >= 1 {
+        transaction
+            .execute_batch(
+                "ALTER TABLE sessions ADD COLUMN revision INTEGER NOT NULL DEFAULT 1
+                    CHECK (revision >= 1);",
+            )
+            .map_err(database_error("增加 Agent 会话版本列失败"))?;
     }
     transaction
         .pragma_update(None, "user_version", SESSION_SCHEMA_VERSION)
@@ -1139,6 +1206,7 @@ mod tests {
             project_id: None,
             created_at: 1_700_000_000,
             updated_at: 1_700_000_100,
+            revision: 0,
             messages: vec![json!({"id":"old","role":"user","content":"保留我"})],
             selected_skill_ids: vec!["data-analysis".to_owned()],
         };
@@ -1150,6 +1218,36 @@ mod tests {
         let renamed = rename_agent_session_at(&workspace.root, &imported.id, "已迁移").unwrap();
         assert_eq!(renamed.title, "已迁移");
         assert_eq!(renamed.messages, imported.messages);
+    }
+
+    #[test]
+    fn rejects_stale_saves_and_does_not_resurrect_deleted_sessions() {
+        let workspace = TestWorkspace::new("optimistic-concurrency");
+        let created =
+            create_agent_session_at(&workspace.root, None, Some("版本化会话"), Vec::new()).unwrap();
+        let mut first_writer = get_agent_session_at(&workspace.root, &created.id).unwrap();
+        let mut stale_writer = first_writer.clone();
+
+        first_writer.messages = vec![json!({"id":"m1","role":"user","content":"第一位写入者"})];
+        first_writer.updated_at += 1;
+        let saved = save_agent_session_at(&workspace.root, first_writer).unwrap();
+        assert_eq!(saved.revision, created.revision + 1);
+
+        stale_writer.messages = vec![json!({"id":"m2","role":"user","content":"旧快照"})];
+        stale_writer.updated_at += 2;
+        let conflict = save_agent_session_at(&workspace.root, stale_writer.clone()).unwrap_err();
+        assert!(conflict.contains("版本冲突"));
+        assert_eq!(
+            get_agent_session_at(&workspace.root, &created.id)
+                .unwrap()
+                .messages,
+            saved.messages
+        );
+
+        delete_agent_session_at(&workspace.root, &created.id).unwrap();
+        let resurrection = save_agent_session_at(&workspace.root, stale_writer).unwrap_err();
+        assert!(resurrection.contains("已删除"));
+        assert!(get_agent_session_at(&workspace.root, &created.id).is_err());
     }
 
     #[test]

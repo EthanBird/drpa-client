@@ -8,6 +8,7 @@ import { RuntimePage } from "../pages/RuntimePage";
 import { SecretsPage } from "../pages/SecretsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { desktopGateway } from "../infra/gateway";
+import { resetAgentWorkspaceRuntimesForTests } from "../features/agent/AgentWorkspaceRuntime";
 import { App } from "./App";
 import { useAppStore } from "./store";
 
@@ -46,6 +47,7 @@ describe("DRPA Next desktop shell", () => {
   });
 
   beforeEach(async () => {
+    resetAgentWorkspaceRuntimesForTests();
     localStorage.clear();
     for (const session of await desktopGateway.listAgentSessions()) {
       await desktopGateway.deleteAgentSession(session.id);
@@ -91,6 +93,11 @@ describe("DRPA Next desktop shell", () => {
         python: true,
         workspaceWrite: true,
         extensions: true,
+        browser: true,
+        rpazRuns: true,
+        runRecords: true,
+        vaultRead: true,
+        vaultWrite: true,
       },
       agentProjectId: "",
       agentInspectorOpen: true,
@@ -615,6 +622,9 @@ describe("DRPA Next desktop shell", () => {
       tools: [{ callId: "call-1", name: "rpaz_validate", status: "completed", summary: "manifest.yaml 校验通过", output: '{"ok":true}' }],
       usage: { promptTokens: 20, completionTokens: 10 },
       durationMs: 31,
+      stopReason: "completed",
+      rounds: 1,
+      toolCalls: 1,
     });
     useAppStore.setState({ activeNavigation: "agent" });
     render(<App />);
@@ -736,6 +746,36 @@ describe("DRPA Next desktop shell", () => {
     await waitFor(() => expect(useAppStore.getState().agentWorkspaceStates.personal).toBeUndefined());
   });
 
+  it("loads a shared Agent conversation body once across the main and embedded surfaces", async () => {
+    const created = await desktopGateway.createAgentSession("shared-project", "共享会话");
+    const stored = await desktopGateway.saveAgentSession({
+      ...created,
+      messages: [{ id: "preserved-message", role: "assistant", content: "这条正文不能被摘要覆盖" }],
+      messageCount: 1,
+    });
+    const getSession = vi.spyOn(desktopGateway, "getAgentSession");
+    useAppStore.setState({
+      activeWorkspaceId: "personal",
+      workspaceScopeLoaded: true,
+      agentSessions: [],
+      activeAgentSessionId: stored.id,
+    });
+
+    render(
+      <>
+        <AgentPage />
+        <AgentPage embedded embeddedProjectId="shared-project" embeddedProjectName="共享项目" />
+      </>,
+    );
+
+    await waitFor(() => {
+      const session = useAppStore.getState().agentSessions.find((item) => item.id === stored.id);
+      expect(session?.bodyState).toBe("ready");
+      expect(session?.messages).toEqual(stored.messages);
+    });
+    expect(getSession).toHaveBeenCalledTimes(1);
+  });
+
   it("starts a manifest-driven Dify2API plugin and runs its declared debugger endpoint", async () => {
     const setPluginEnabled = vi.spyOn(desktopGateway, "setPluginEnabled");
     const startPlugin = vi.spyOn(desktopGateway, "startPlugin");
@@ -798,7 +838,7 @@ describe("DRPA Next desktop shell", () => {
       return () => {};
     });
     let resolveFirst!: (value: Awaited<ReturnType<typeof desktopGateway.runAgentTurn>>) => void;
-    const result = { message: "# 实时结果\n\nMarkdown 已完成。", tools: [], usage: { promptTokens: 30, completionTokens: 12 }, durationMs: 80 };
+    const result = { message: "# 实时结果\n\nMarkdown 已完成。", tools: [], usage: { promptTokens: 30, completionTokens: 12 }, durationMs: 80, stopReason: "completed", rounds: 1, toolCalls: 0 };
     const runAgent = vi.spyOn(desktopGateway, "runAgentTurn")
       .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
       .mockResolvedValue(result);
@@ -1035,6 +1075,9 @@ describe("DRPA Next desktop shell", () => {
       tools: [],
       usage: { promptTokens: 10, completionTokens: 6 },
       durationMs: 12,
+      stopReason: "completed",
+      rounds: 1,
+      toolCalls: 0,
     });
     render(<StudioPage />);
 

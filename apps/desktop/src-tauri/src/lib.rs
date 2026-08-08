@@ -21,10 +21,14 @@ use uuid::Uuid;
 use zip::{ZipArchive, write::SimpleFileOptions};
 
 mod agent;
+mod agent_browser;
 mod agent_config;
+mod agent_context;
 mod agent_documents;
 mod agent_extensions;
+mod agent_runtime;
 mod agent_sessions;
+mod agent_tools;
 mod automations;
 mod credential_vault;
 mod dashboard;
@@ -37,6 +41,7 @@ mod local_dify_workflow;
 #[cfg(windows)]
 mod native_splash;
 mod plugins;
+mod provider;
 mod system_metrics;
 mod workspaces;
 
@@ -1400,8 +1405,23 @@ async fn run_agent_turn(
     state: State<'_, HostState>,
     processes: State<'_, RunProcessManager>,
     vault: State<'_, credential_vault::CredentialVaultManager>,
+    runs: State<'_, agent_runtime::AgentRunManager>,
+    browsers: State<'_, agent_browser::AgentBrowserManager>,
 ) -> Result<agent::AgentTurnResult, String> {
     let event_name = agent::agent_stream_event_name(&request.request_id)?;
+    let request_id = request.request_id.clone();
+    let session_id = request.session_id.clone();
+    let max_wall_time =
+        std::time::Duration::from_secs(request.max_wall_time_seconds.clamp(10, 86_400));
+    let run_manager = runs.inner().clone();
+    let browser_manager = browsers.inner().clone();
+    let control = run_manager.begin(&request_id, &session_id, max_wall_time)?;
+    let started_event = agent::AgentStreamEvent::Started {
+        run_id: request_id.clone(),
+        session_id,
+    };
+    run_manager.record(&request_id, started_event.clone());
+    let _ = app.emit(&event_name, started_event);
     let paths = paths.inner().clone();
     let host = agent::AgentHostContext::new(
         state.inner().clone(),
@@ -1410,30 +1430,92 @@ async fn run_agent_turn(
         vault.inner().clone(),
     );
     tauri::async_runtime::spawn_blocking(move || {
-        let runtime = if request.mode == "sql" {
-            None
-        } else {
-            Some(locate_runtime(&paths)?)
-        };
-        let python = runtime
-            .as_ref()
-            .map(|runtime| runtime.python.clone())
-            .unwrap_or_default();
-        let browser = runtime.and_then(|runtime| runtime.browser);
-        agent::run_agent_turn(
-            request,
-            paths.workspace_root.clone(),
-            paths.resource_dir.clone(),
-            python,
-            browser,
-            host,
-            |event| {
-                let _ = app.emit(&event_name, event);
-            },
-        )
+        let result = (|| {
+            let runtime = if request.mode == "sql" {
+                None
+            } else {
+                Some(locate_runtime(&paths)?)
+            };
+            let python = runtime
+                .as_ref()
+                .map(|runtime| runtime.python.clone())
+                .unwrap_or_default();
+            let browser = runtime.and_then(|runtime| runtime.browser);
+            let browser_session_id = if request.session_id.trim().is_empty() {
+                request_id.as_str()
+            } else {
+                request.session_id.trim()
+            };
+            let browser_session = if request.mode == "sql" {
+                None
+            } else {
+                Some(browser_manager.session(browser_session_id)?)
+            };
+            agent::run_agent_turn(
+                request,
+                paths.workspace_root.clone(),
+                paths.resource_dir.clone(),
+                python,
+                browser,
+                browser_session,
+                host,
+                control.clone(),
+                |event| {
+                    run_manager.record(&request_id, event.clone());
+                    let _ = app.emit(&event_name, event);
+                },
+            )
+        })();
+        match &result {
+            Ok(completed) => {
+                run_manager.complete(&control, completed);
+                let terminal = agent::AgentStreamEvent::Completed {
+                    run_id: request_id.clone(),
+                    usage: completed.usage.clone(),
+                    duration_ms: completed.duration_ms,
+                    stop_reason: completed.stop_reason.clone(),
+                };
+                run_manager.record(&request_id, terminal.clone());
+                let _ = app.emit(&event_name, terminal);
+            }
+            Err(error) => {
+                run_manager.fail(&control, error);
+                let terminal = if control.is_cancelled() || error.contains("运行已取消") {
+                    agent::AgentStreamEvent::Cancelled {
+                        run_id: request_id.clone(),
+                    }
+                } else {
+                    agent::AgentStreamEvent::Failed {
+                        run_id: request_id.clone(),
+                        error: error.clone(),
+                    }
+                };
+                run_manager.record(&request_id, terminal.clone());
+                let _ = app.emit(&event_name, terminal);
+            }
+        }
+        result
     })
     .await
     .map_err(|error| format!("Agent 后台任务失败：{error}"))?
+}
+
+#[tauri::command]
+fn cancel_agent_run(
+    request_id: String,
+    runs: State<'_, agent_runtime::AgentRunManager>,
+) -> Result<agent_runtime::AgentRunSnapshot, String> {
+    agent::agent_stream_event_name(&request_id)?;
+    runs.cancel(&request_id)
+}
+
+#[tauri::command]
+fn get_agent_run(
+    request_id: String,
+    runs: State<'_, agent_runtime::AgentRunManager>,
+) -> Result<agent_runtime::AgentRunSnapshot, String> {
+    agent::agent_stream_event_name(&request_id)?;
+    runs.snapshot(&request_id)
 }
 
 #[tauri::command]
@@ -3120,6 +3202,12 @@ fn initialize_desktop(
     app.manage(plugin_manager);
     app.manage(local_dify::LocalDifyServiceManager::default());
     app.manage(credential_vault::CredentialVaultManager::default());
+    app.manage(agent_runtime::AgentRunManager::with_workspace(
+        &workspace_root,
+    ));
+    app.manage(agent_browser::AgentBrowserManager::with_workspace(
+        &workspace_root,
+    ));
 
     set_startup_progress_handle(&app, 76, "正在装载本地服务", "services://agent-tools");
     let scheduler = automations::SchedulerManager::default();
@@ -3373,6 +3461,8 @@ pub fn run() {
             knowledge_base::delete_knowledge_base_source,
             knowledge_base::search_knowledge_base,
             agent_documents::import_agent_document,
+            agent_documents::list_agent_attachments,
+            agent_documents::delete_agent_attachment,
             agent_documents::list_agent_artifacts,
             agent_documents::export_agent_artifact,
             automations::list_automation_plans,
@@ -3403,6 +3493,8 @@ pub fn run() {
             local_dify::start_local_dify_service,
             local_dify::stop_local_dify_service,
             run_agent_turn,
+            cancel_agent_run,
+            get_agent_run,
             list_agent_extensions,
             install_agent_extension,
             set_agent_extension_enabled,

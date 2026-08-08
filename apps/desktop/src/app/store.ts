@@ -15,9 +15,11 @@ function createAgentSession(projectId = ""): AgentConversationSession {
     projectId,
     createdAt: now,
     updatedAt: now,
+    revision: 0,
     messages: [],
     selectedSkillIds: [],
     messageCount: 0,
+    bodyState: "ready",
   };
 }
 
@@ -53,6 +55,8 @@ interface AppStore {
   agentContextWindow: number;
   agentMaxOutputTokens: number;
   agentMaxRounds: number;
+  agentMaxToolCalls: number;
+  agentMaxWallTimeSeconds: number;
   agentTemperature: number;
   agentPythonTimeoutSeconds: number;
   agentToolPolicy: AgentToolPolicy;
@@ -89,6 +93,8 @@ interface AppStore {
   setAgentContextWindow: (tokens: number) => void;
   setAgentMaxOutputTokens: (tokens: number) => void;
   setAgentMaxRounds: (rounds: number) => void;
+  setAgentMaxToolCalls: (calls: number) => void;
+  setAgentMaxWallTimeSeconds: (seconds: number) => void;
   setAgentTemperature: (temperature: number) => void;
   setAgentPythonTimeoutSeconds: (seconds: number) => void;
   setAgentToolPolicy: (policy: Partial<AgentToolPolicy>) => void;
@@ -129,6 +135,8 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   agentContextWindow: 393216,
   agentMaxOutputTokens: 98304,
   agentMaxRounds: 64,
+  agentMaxToolCalls: 128,
+  agentMaxWallTimeSeconds: 900,
   agentTemperature: 0.2,
   agentPythonTimeoutSeconds: 300,
   agentToolPolicy: {
@@ -144,6 +152,11 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     python: true,
     workspaceWrite: true,
     extensions: true,
+    browser: true,
+    rpazRuns: true,
+    runRecords: true,
+    vaultRead: true,
+    vaultWrite: true,
   },
   agentProjectId: "",
   agentInspectorOpen: true,
@@ -183,7 +196,9 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setAgentStreamEnabled: (agentStreamEnabled) => set({ agentStreamEnabled }),
   setAgentContextWindow: (agentContextWindow) => set({ agentContextWindow }),
   setAgentMaxOutputTokens: (agentMaxOutputTokens) => set({ agentMaxOutputTokens }),
-  setAgentMaxRounds: (agentMaxRounds) => set({ agentMaxRounds }),
+  setAgentMaxRounds: (agentMaxRounds) => set({ agentMaxRounds: Math.min(256, Math.max(1, Math.round(agentMaxRounds))) }),
+  setAgentMaxToolCalls: (agentMaxToolCalls) => set({ agentMaxToolCalls: Math.min(4096, Math.max(1, Math.round(agentMaxToolCalls))) }),
+  setAgentMaxWallTimeSeconds: (agentMaxWallTimeSeconds) => set({ agentMaxWallTimeSeconds: Math.min(86400, Math.max(10, Math.round(agentMaxWallTimeSeconds))) }),
   setAgentTemperature: (agentTemperature) => set({ agentTemperature }),
   setAgentPythonTimeoutSeconds: (agentPythonTimeoutSeconds) => set({ agentPythonTimeoutSeconds }),
   setAgentToolPolicy: (policy) => set((state) => ({
@@ -302,7 +317,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   })),
 }), {
   name: "drpa-ui-preferences",
-  version: 7,
+  version: 10,
   migrate: (persistedState, version) => {
     const state = (persistedState ?? {}) as Partial<AppStore>;
     const migrated = { ...state };
@@ -330,6 +345,11 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
         workspaceWrite: true,
         extensions: true,
         ...state.agentToolPolicy,
+        browser: state.agentToolPolicy?.browser ?? true,
+        rpazRuns: state.agentToolPolicy?.rpazRuns ?? true,
+        runRecords: state.agentToolPolicy?.runRecords ?? true,
+        vaultRead: state.agentToolPolicy?.vaultRead ?? true,
+        vaultWrite: state.agentToolPolicy?.vaultWrite ?? true,
       };
     }
     if (version < 5) {
@@ -362,6 +382,32 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
       }
       migrated.agentSessions = normalizeSessions(state.agentSessions);
     }
+    if (version < 9) {
+      migrated.agentToolPolicy = {
+        enabled: true,
+        databaseRead: true,
+        databaseConnections: true,
+        arbitraryFileRead: true,
+        knowledgeBaseRead: true,
+        documentRead: true,
+        documentWrite: true,
+        documentConvert: true,
+        projectWrite: true,
+        python: true,
+        workspaceWrite: true,
+        extensions: true,
+        ...state.agentToolPolicy,
+        browser: state.agentToolPolicy?.browser ?? true,
+        rpazRuns: state.agentToolPolicy?.rpazRuns ?? true,
+        runRecords: state.agentToolPolicy?.runRecords ?? true,
+        vaultRead: state.agentToolPolicy?.vaultRead ?? true,
+        vaultWrite: state.agentToolPolicy?.vaultWrite ?? true,
+      };
+    }
+    if (version < 10) {
+      migrated.agentMaxToolCalls = state.agentMaxToolCalls ?? 128;
+      migrated.agentMaxWallTimeSeconds = state.agentMaxWallTimeSeconds ?? 900;
+    }
     if (version < 6) {
       migrated.agentMode = state.agentMode === "developer" ? "developer" : "rpaz";
     }
@@ -377,6 +423,17 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
         ? Math.min(200, Math.max(75, legacyScale))
         : legacyScales[String(legacyScale ?? "standard")] ?? 100;
       migrated.language = (state as { language?: unknown }).language === "en-US" ? "en-US" : "zh-CN";
+    }
+    if (version < 8) {
+      // session.db is the only durable conversation source from v8 onward.
+      // Keep the old cache in-memory for the one-time AgentPage migration, but
+      // never persist it again after this hydration.
+      migrated.agentWorkspaceStates = state.agentWorkspaceStates ?? {};
+      migrated.agentSessions = (state.agentSessions ?? []).map((session) => ({
+        ...session,
+        revision: session.revision ?? 0,
+        bodyState: session.messages?.length ? "ready" : "summary",
+      }));
     }
     return migrated as never;
   },
@@ -395,11 +452,12 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     agentContextWindow: state.agentContextWindow,
     agentMaxOutputTokens: state.agentMaxOutputTokens,
     agentMaxRounds: state.agentMaxRounds,
+    agentMaxToolCalls: state.agentMaxToolCalls,
+    agentMaxWallTimeSeconds: state.agentMaxWallTimeSeconds,
     agentTemperature: state.agentTemperature,
     agentPythonTimeoutSeconds: state.agentPythonTimeoutSeconds,
     agentToolPolicy: state.agentToolPolicy,
     agentProjectId: state.agentProjectId,
     agentInspectorOpen: state.agentInspectorOpen,
-    agentWorkspaceStates: state.agentWorkspaceStates,
   }),
 }));

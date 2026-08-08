@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,10 +20,12 @@ use crate::agent::{
     AgentHostContext, AgentMessage, AgentStreamEvent, AgentToolEvent, AgentTurnRequest,
     AgentTurnResult, AgentUsage, validate_project_id,
 };
+use crate::agent_browser::AgentBrowserSession;
+use crate::agent_runtime::AgentRunControl;
 
 const JCODE_PROFILE: &str = "drpa-openai-compatible";
 const MAX_EVENT_OUTPUT_BYTES: usize = 40_000;
-static JCODE_RUN_LOCK: Mutex<()> = Mutex::new(());
+static JCODE_SESSION_INDEX_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,53 +159,76 @@ pub(crate) fn run_turn<F>(
     resource_dir: Option<&Path>,
     python: &Path,
     browser: Option<&Path>,
+    browser_session: Option<&AgentBrowserSession>,
     host: AgentHostContext,
+    control: AgentRunControl,
     mut emit: F,
 ) -> Result<AgentTurnResult, String>
 where
     F: FnMut(AgentStreamEvent),
 {
-    let _run_guard = JCODE_RUN_LOCK
-        .lock()
-        .map_err(|_| "JCode 运行状态已损坏，请重启 DRPA".to_owned())?;
+    control.check()?;
     let started = Instant::now();
     let executable = locate_jcode(workspace_root, resource_dir)?;
     let developer_root = workspace_root.join("agent").join("jcode");
-    let jcode_home = developer_root.join("home");
+    let home_key = if request.session_id.trim().is_empty() {
+        control.request_id()
+    } else {
+        request.session_id.trim()
+    };
+    let jcode_home = developer_root.join("homes").join(home_key);
     fs::create_dir_all(&jcode_home).map_err(|error| format!("创建 JCode 工作目录失败：{error}"))?;
     write_provider_config(&jcode_home, request)?;
+    let host = host.with_agent_scope(home_key, python, control.clone());
     let host_bridge = HostBridgeServer::start(host)?;
     write_mcp_config(
         &jcode_home,
-        workspace_root,
         python,
         browser,
+        browser_session,
         host_bridge.endpoint(),
         host_bridge.token(),
     )?;
 
     let working_dir = resolve_working_dir(workspace_root, &request.project_id)?;
     let index_path = developer_root.join("session-index.json");
-    let mut index = read_session_index(&index_path)?;
     let previous_messages = request
         .messages
         .split_last()
         .map(|(_, previous)| previous)
         .unwrap_or(&[]);
     let previous_digest = conversation_digest(previous_messages);
-    let resume_session = index
-        .sessions
-        .get(request.session_id.trim())
-        .filter(|state| state.conversation_digest == previous_digest)
-        .map(|state| state.jcode_session_id.clone());
+    let resume_session = {
+        let _guard = JCODE_SESSION_INDEX_LOCK
+            .lock()
+            .map_err(|_| "JCode 会话索引状态已损坏".to_owned())?;
+        read_session_index(&index_path)?
+            .sessions
+            .get(request.session_id.trim())
+            .filter(|state| state.conversation_digest == previous_digest)
+            .map(|state| state.jcode_session_id.clone())
+    };
+    let agent_context = crate::agent_config::render_agent_context(
+        workspace_root,
+        Some(&working_dir),
+        &request.selected_skill_ids,
+    )?;
     let prompt = if resume_session.is_some() {
-        request
-            .messages
-            .last()
-            .map(|message| message.content.clone())
-            .unwrap_or_default()
+        format!(
+            "{}\n\n{}",
+            request
+                .messages
+                .last()
+                .map(|message| message.content.clone())
+                .unwrap_or_default(),
+            agent_context
+        )
     } else {
-        render_imported_conversation(&request.messages, request.context_window)
+        format!(
+            "{}\n\n{}",
+            agent_context,
+            render_imported_conversation(&request.messages, request.context_window)
+        )
     };
 
     let mut command = Command::new(&executable);
@@ -263,25 +289,66 @@ where
         emit(AgentStreamEvent::RoundStarted { round: 1 });
     }
     let mut state = StreamState::default();
-    let mut reader = BufReader::new(stdout);
-    let mut bytes = Vec::new();
-    loop {
-        bytes.clear();
-        let read = reader
-            .read_until(b'\n', &mut bytes)
-            .map_err(|error| format!("读取 JCode 事件流失败：{error}"))?;
-        if read == 0 {
-            break;
+    let (stdout_tx, stdout_rx) = mpsc::channel::<Result<Option<Vec<u8>>, String>>();
+    let stdout_reader = thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut bytes = Vec::new();
+            match reader.read_until(b'\n', &mut bytes) {
+                Ok(0) => {
+                    let _ = stdout_tx.send(Ok(None));
+                    break;
+                }
+                Ok(_) => {
+                    if stdout_tx.send(Ok(Some(bytes))).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = stdout_tx.send(Err(format!("读取 JCode 事件流失败：{error}")));
+                    break;
+                }
+            }
         }
-        let line = String::from_utf8_lossy(&bytes);
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+    });
+    let stream_result = (|| -> Result<(), String> {
+        loop {
+            control.check()?;
+            let bytes = match stdout_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(Ok(Some(bytes))) => bytes,
+                Ok(Ok(None)) => break,
+                Ok(Err(error)) => return Err(error),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if child
+                        .try_wait()
+                        .map_err(|error| format!("检查 JCode 进程状态失败：{error}"))?
+                        .is_some()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            let line = String::from_utf8_lossy(&bytes);
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let value: Value = serde_json::from_str(trimmed)
+                .map_err(|error| format!("JCode 返回了无效 NDJSON 事件：{error} · {trimmed}"))?;
+            consume_event(&value, request.stream, &mut state, &mut emit)?;
         }
-        let value: Value = serde_json::from_str(trimmed)
-            .map_err(|error| format!("JCode 返回了无效 NDJSON 事件：{error} · {trimmed}"))?;
-        consume_event(&value, request.stream, &mut state, &mut emit)?;
+        Ok(())
+    })();
+
+    if stream_result.is_err() {
+        terminate_child_process_tree(&mut child);
+        let _ = child.wait();
     }
+
+    let _ = stdout_reader.join();
+    stream_result?;
 
     let status = child
         .wait()
@@ -310,6 +377,10 @@ where
             role: "assistant".to_owned(),
             content: state.message.clone(),
         });
+        let _guard = JCODE_SESSION_INDEX_LOCK
+            .lock()
+            .map_err(|_| "JCode 会话索引状态已损坏".to_owned())?;
+        let mut index = read_session_index(&index_path)?;
         index.sessions.insert(
             request.session_id.trim().to_owned(),
             SessionState {
@@ -320,12 +391,30 @@ where
         write_session_index(&index_path, &index)?;
     }
 
+    let tool_calls = state.tools.len();
     Ok(AgentTurnResult {
         message: state.message,
         tools: state.tools.into_values().collect(),
         usage: state.usage,
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        stop_reason: "completed".to_owned(),
+        rounds: 1,
+        tool_calls,
     })
+}
+
+fn terminate_child_process_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("taskkill");
+        command
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        hide_child_window(&mut command);
+        let _ = command.status();
+    }
+    let _ = child.kill();
 }
 
 fn consume_event<F>(
@@ -569,15 +658,16 @@ fn write_provider_config(home: &Path, request: &AgentTurnRequest) -> Result<(), 
 
 fn write_mcp_config(
     home: &Path,
-    workspace_root: &Path,
     python: &Path,
     browser: Option<&Path>,
+    browser_session: Option<&AgentBrowserSession>,
     bridge_endpoint: &str,
     bridge_token: &str,
 ) -> Result<(), String> {
     if python.as_os_str().is_empty() {
         return Err("JCode 的 DRPA 工具桥需要内置 Python 运行时".to_owned());
     }
+    let browser_session = browser_session.ok_or_else(|| "JCode 浏览器会话尚未初始化".to_owned())?;
     let mut environment = serde_json::Map::from_iter([
         (
             "PYTHONIOENCODING".to_owned(),
@@ -586,28 +676,15 @@ fn write_mcp_config(
         ("PYTHONUTF8".to_owned(), Value::String("1".to_owned())),
         (
             "DRPA_BROWSER_PROFILE_ROOT".to_owned(),
-            Value::String(
-                workspace_root
-                    .join("browser")
-                    .join("drissionpage")
-                    .display()
-                    .to_string(),
-            ),
+            Value::String(browser_session.profile_root.display().to_string()),
         ),
         (
             "DRPA_BROWSER_PORT".to_owned(),
-            Value::String("9222".to_owned()),
+            Value::String(browser_session.port.to_string()),
         ),
         (
             "DRPA_AGENT_ARTIFACT_ROOT".to_owned(),
-            Value::String(
-                workspace_root
-                    .join("agent")
-                    .join("jcode")
-                    .join("browser")
-                    .display()
-                    .to_string(),
-            ),
+            Value::String(browser_session.artifact_root.display().to_string()),
         ),
         (
             "DRPA_AGENT_BRIDGE_ENDPOINT".to_owned(),
@@ -721,6 +798,23 @@ fn write_session_index(path: &Path, index: &SessionIndex) -> Result<(), String> 
     fs::write(path, content).map_err(|error| format!("保存 JCode 会话索引失败：{error}"))
 }
 
+pub(crate) fn delete_session_data(workspace_root: &Path, session_id: &str) -> Result<(), String> {
+    let developer_root = workspace_root.join("agent").join("jcode");
+    let home = developer_root.join("homes").join(session_id);
+    if home.is_dir() {
+        fs::remove_dir_all(&home).map_err(|error| format!("清理 JCode 会话目录失败：{error}"))?;
+    }
+    let index_path = developer_root.join("session-index.json");
+    let _guard = JCODE_SESSION_INDEX_LOCK
+        .lock()
+        .map_err(|_| "JCode 会话索引状态已损坏".to_owned())?;
+    let mut index = read_session_index(&index_path)?;
+    if index.sessions.remove(session_id).is_some() {
+        write_session_index(&index_path, &index)?;
+    }
+    Ok(())
+}
+
 fn truncate_text(mut value: String, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value;
@@ -764,6 +858,8 @@ mod tests {
             max_rounds: 64,
             temperature: 0.2,
             python_timeout_seconds: 300,
+            max_tool_calls: 128,
+            max_wall_time_seconds: 900,
             selected_skill_ids: Vec::new(),
             tool_policy: crate::agent::AgentToolPolicy::default(),
             messages: vec![AgentMessage {
@@ -807,8 +903,12 @@ mod tests {
         write_mcp_config(
             &root,
             Path::new("C:/DRPA/runtime/python.exe"),
-            Path::new("C:/DRPA/runtime/python.exe"),
             Some(Path::new("C:/DRPA/runtime/chrome.exe")),
+            Some(&AgentBrowserSession {
+                port: 43_124,
+                profile_root: PathBuf::from("C:/DRPA/browser/session"),
+                artifact_root: PathBuf::from("C:/DRPA/agent/session/browser"),
+            }),
             "127.0.0.1:43123",
             "test-token",
         )
@@ -827,6 +927,12 @@ mod tests {
                 .pointer("/mcpServers/drpa/env/DRPA_BROWSER_PATH")
                 .and_then(Value::as_str),
             Some("C:/DRPA/runtime/chrome.exe")
+        );
+        assert_eq!(
+            config
+                .pointer("/mcpServers/drpa/env/DRPA_BROWSER_PORT")
+                .and_then(Value::as_str),
+            Some("43124")
         );
         assert_eq!(
             config

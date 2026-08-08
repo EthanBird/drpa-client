@@ -32,8 +32,13 @@ const builtInPolicies: Array<{
   { key: "documentRead", label: "文档读取", detail: "读取对话中的 PDF、Word、Excel 与 PowerPoint 附件。", tools: ["document_read"] },
   { key: "documentWrite", label: "文档创建", detail: "在隔离的对话产物目录创建办公文档。", tools: ["document_create"] },
   { key: "documentConvert", label: "文档转换", detail: "转换对话附件并保留原文件。", tools: ["document_convert"] },
-  { key: "workspaceWrite", label: "知识与记忆写入", detail: "更新 Skill、MEMORY.md 与本地知识文档。", tools: ["agent_write_skill", "agent_write_memory", "knowledge_write_document"] },
+  { key: "workspaceWrite", label: "知识与记忆写入", detail: "更新 Skill、结构化记忆账本、MEMORY.md 与本地知识文档。", tools: ["agent_write_skill", "agent_remember", "agent_write_memory", "knowledge_write_document"] },
   { key: "extensions", label: "Skills、插件与 QuickJS", detail: "加载已选择的 Skill、已启用插件及离线 QuickJS 扩展工具。", tools: ["skill_*", "plugin_*", "ext__*"] },
+  { key: "browser", label: "Chrome 浏览器控制", detail: "通过内置 Chrome/DrissionPage 桥打开、读取并操作页面。", tools: ["browser_*"] },
+  { key: "rpazRuns", label: "运行 RPAZ 包", detail: "通过 DRPA Host 启动 RPAZ 包，运行会进入统一运行记录。", tools: ["rpaz_list_packages", "rpaz_run_package"] },
+  { key: "runRecords", label: "读取运行记录", detail: "列出运行记录并读取事件、debug 日志和结果详情。", tools: ["run_list", "run_get_detail"] },
+  { key: "vaultRead", label: "读取凭据保险箱", detail: "保险箱已由用户验证解锁时，允许列出并读取本地凭据。", tools: ["vault_list_credentials", "vault_get_credential"] },
+  { key: "vaultWrite", label: "写入凭据保险箱", detail: "保险箱已解锁时，允许 Agent 新增或更新本地凭据。", tools: ["vault_upsert_credential"] },
 ];
 
 function PolicyToggle({

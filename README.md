@@ -16,7 +16,7 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - 内置自有数据工作台：工作区 SQLite、外部 SQLite、PostgreSQL/MySQL 与只读 Excel 工作簿数据源，对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；Excel sheet 会映射为可查询表，RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
 - BI 主页支持低代码指标、图表、表格与 Markdown 组件；编辑时可实时拖拽、占位交换、自动让位、缩放和响应式无重叠排列。
 - 可编辑 BI 主页：工作区级响应式栅格、指标/折线图/柱状图/饼图/表格/Markdown 组件，既可读取 DRPA 运行数据，也可复用数据工作台连接执行只读 SQL；布局与数据适配器、组件渲染器解耦。
-- 基础设施内置双模式 AI Agent：RPAZ Agent 通过 ProviderAdapter 与 ToolRegistry 编排内置、Skills 2.0 和插件工具；JCode 开发者 Agent 提供完整文件、命令和开发工具。两种模式复用 OpenAI-compatible URL/model/key、流式 Markdown、持久会话和逐会话项目绑定，开发工作室右侧可直接切换。
+- 基础设施内置双模式 AI Agent：RPAZ Agent 通过 Run Manager、CapabilityAuthority、ProviderAdapter 与 ToolRegistry 编排内置、Skills 2.0 和插件工具；JCode 开发者 Agent 提供完整文件、命令和开发工具。两种模式复用 OpenAI-compatible 配置、流式 Markdown、带 revision 的持久会话、逐会话项目绑定、统一取消和运行事件日志，开发工作室右侧可直接切换。
 - 内置 DRPA Local Dify：管理 Chat/Completion/Workflow/Chatflow 应用和 OpenAI-compatible Provider；提供可视化工作流画布、节点连线与属性、图校验、本地节点执行、流式 Markdown 调试、SQLite 运行轨迹、Dify YAML DSL 导入导出，以及带独立应用 Token 的本地 Dify Service API；通用 Provider 插件可把外部模型服务接入 AI Agent。
 - Skills 2.0 使用 `skill.yaml + instructions.md` 能力包，可携带工作流、资源、可执行 Python/Command 工具和可调用代码库；设置页提供目录树、Monaco 编辑及文件/目录创建、重命名、删除，旧版 `SKILL.md` 自动迁移。
 - 内置能力驱动的离线插件系统：支持 `.drpa-plugin` 安装、配置、启停、多服务、Provider、工具、调试端点、结构化事件和自定义面板；插件开发工作台可生成 Tool/Service/Bundle 模板并验证、构建、安装。内置 Dify2API 可把 Dify App API 转换为本地 OpenAI 兼容接口、适配 `tool_calls`，并提供服务与上游调试器。
@@ -107,6 +107,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - [BI 主页架构](docs/architecture/BI_DASHBOARD.md)：仪表盘定义、数据适配器、只读查询和响应式栅格扩展约定。
 - [凭据保险箱安全架构](docs/architecture/CREDENTIAL_VAULT.md)：密钥层级、TOTP/恢复流程、loopback API、Agent 脱敏和威胁模型。
 - [AI Agent 设计](docs/AI_AGENT_DESIGN.md)：OpenAI-compatible 对话循环、RPAZ 工具和配置边界。
+- [AI Agent 运行时架构](docs/architecture/AI_AGENT_RUNTIME.md)：会话唯一事实源、运行租约、逐轮上下文预算、工具权限、Provider 与外部进程生命周期。
 - [Local Dify 开发平台](docs/LOCAL_DIFY.md)：应用、Provider、调试、Service API、DSL 兼容和套娃链路。
 - [Local Dify 工作流设计器](docs/LOCAL_DIFY_WORKFLOW.md)：Workflow IR、可视化画布、节点执行、校验、调试和 Dify Graph 互操作。
 - [Skills 2.0 与插件系统](docs/SKILLS_AND_PLUGINS.md)：能力包代码工具、插件清单、进程生命周期与 Dify 工具桥。
@@ -120,5 +121,5 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - 当前稳定 Release 为 `desktop-v2.0.3`，包含 Windows x64 Setup、Linux runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代 Linux 包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。UOS 包固定 X11 软件渲染以换取老显卡兼容性，仍需要系统内核和 X11 server；真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
 - Windows 升级统一使用新版全量 Setup，不再发布或在界面中接受 `.drpa-update`。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
-- AI Agent 当前采用单 Orchestrator，已支持流式 Markdown、ProviderAdapter、动态 ToolRegistry、Skills 2.0、插件 Provider/Tool 与本地会话；diff/checkpoint、会话导出、长期服务双向 JSON-RPC 和 Skill evaluation 仍在后续阶段。
+- AI Agent 当前由工作区运行时与 Rust Run Manager 共同持有状态，已支持流式 Markdown、会话 revision CAS、逐轮上下文核算、可取消 Provider/子进程、动态 ToolRegistry、CapabilityAuthority、Skills 2.0、插件 Provider/Tool 和附件恢复；diff/checkpoint 恢复、会话导出、长期服务双向 JSON-RPC 和 Skill evaluation 仍在后续阶段。
 - Local Dify 已执行 Chat、Completion、Workflow 与 Chatflow；基础节点可本地运行，导入的扩展 Dify 节点会保留并标记兼容状态，Iteration/Loop、知识检索、Agent 与并行汇聚继续按节点逐步接入。

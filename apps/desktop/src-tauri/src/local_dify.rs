@@ -21,8 +21,7 @@ use crate::local_dify_workflow::{
     graph_to_dify, is_workflow_mode, normalize_graph, validate_graph,
 };
 use crate::{
-    AppPaths, agent, installed_package_catalog, knowledge_base, locate_runtime,
-    locate_runtime_python,
+    AppPaths, installed_package_catalog, knowledge_base, locate_runtime, locate_runtime_python,
 };
 
 const LOCAL_DIFY_SCHEMA: u32 = 2;
@@ -433,7 +432,7 @@ fn validate_provider(input: &LocalDifyProviderInput) -> Result<(), String> {
     if input.name.trim().is_empty() || input.name.chars().count() > 100 {
         return Err("Provider 名称应为 1 到 100 个字符".to_owned());
     }
-    agent::chat_completions_endpoint(&input.base_url)?;
+    crate::provider::chat_completions_endpoint(&input.base_url)?;
     if input.model.trim().is_empty() || input.model.len() > 200 {
         return Err("模型名称无效".to_owned());
     }
@@ -2441,51 +2440,27 @@ fn call_provider<F>(
 where
     F: FnMut(String),
 {
-    let endpoint = agent::chat_completions_endpoint(&provider.base_url)?;
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(provider.timeout_seconds)))
-        .build();
-    let http = ureq::Agent::new_with_config(config);
-    let mut request = http
-        .post(&endpoint)
-        .header("User-Agent", "DRPA-Local-Dify/0.1")
-        .header(
-            "X-DRPA-Trace-Id",
-            &format!("trace-{}", Uuid::new_v4().simple()),
-        )
-        .header("X-DRPA-Hop-Count", &route.len().to_string())
-        .header("X-DRPA-Provider-Route", &route.join(","));
-    if payload
+    let mut headers = provider.custom_headers.clone();
+    headers.insert(
+        "X-DRPA-Trace-Id".to_owned(),
+        format!("trace-{}", Uuid::new_v4().simple()),
+    );
+    headers.insert("X-DRPA-Hop-Count".to_owned(), route.len().to_string());
+    headers.insert("X-DRPA-Provider-Route".to_owned(), route.join(","));
+    let profile = crate::provider::ProviderProfile {
+        base_url: provider.base_url.clone(),
+        api_key: api_key.to_owned(),
+        timeout: Duration::from_secs(provider.timeout_seconds),
+        user_agent: "DRPA-Local-Dify/1.0".to_owned(),
+        headers,
+    };
+    let stream = payload
         .get("stream")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        request = request.header("Accept", "text/event-stream");
-    } else {
-        request = request.header("Accept", "application/json");
-    }
-    if !api_key.trim().is_empty() {
-        request = request.header("Authorization", &format!("Bearer {}", api_key.trim()));
-    }
-    for (name, value) in &provider.custom_headers {
-        request = request.header(name, value);
-    }
-    let mut response = request
-        .send_json(payload)
-        .map_err(|error| format!("Provider 请求失败：{error}"))?;
-    if payload
-        .get("stream")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        parse_provider_stream(BufReader::new(response.body_mut().as_reader()), on_delta)
-    } else {
-        let value = response
-            .body_mut()
-            .read_json::<Value>()
-            .map_err(|error| format!("Provider JSON 响应无效：{error}"))?;
-        provider_completion_from_json(&value)
-    }
+        .unwrap_or(false);
+    let value = crate::provider::complete_blocking(&profile, payload, stream, on_delta)
+        .map_err(|error| error.to_string())?;
+    provider_completion_from_json(&value)
 }
 
 fn provider_completion_from_json(value: &Value) -> Result<ProviderCompletion, String> {
@@ -2506,74 +2481,6 @@ fn provider_completion_from_json(value: &Value) -> Result<ProviderCompletion, St
                 .or_else(|| value.pointer("/metadata/usage")),
         ),
     })
-}
-
-fn parse_provider_stream<R, F>(reader: R, mut on_delta: F) -> Result<ProviderCompletion, String>
-where
-    R: BufRead,
-    F: FnMut(String),
-{
-    let mut answer = String::new();
-    let mut usage = LocalDifyUsage::default();
-    let mut event_data = Vec::new();
-    for line in reader.lines() {
-        let line = line.map_err(|error| format!("读取 Provider 流失败：{error}"))?;
-        if line.trim().is_empty() {
-            consume_provider_stream_event(
-                &event_data.join("\n"),
-                &mut answer,
-                &mut usage,
-                &mut on_delta,
-            )?;
-            event_data.clear();
-        } else if let Some(data) = line.strip_prefix("data:") {
-            event_data.push(data.trim_start().to_owned());
-        }
-    }
-    if !event_data.is_empty() {
-        consume_provider_stream_event(
-            &event_data.join("\n"),
-            &mut answer,
-            &mut usage,
-            &mut on_delta,
-        )?;
-    }
-    if answer.trim().is_empty() {
-        return Err("Provider 流式响应没有消息内容".to_owned());
-    }
-    Ok(ProviderCompletion { answer, usage })
-}
-
-fn consume_provider_stream_event<F>(
-    data: &str,
-    answer: &mut String,
-    usage: &mut LocalDifyUsage,
-    on_delta: &mut F,
-) -> Result<(), String>
-where
-    F: FnMut(String),
-{
-    let data = data.trim();
-    if data.is_empty() || data == "[DONE]" {
-        return Ok(());
-    }
-    let value: Value =
-        serde_json::from_str(data).map_err(|error| format!("Provider SSE 数据无效：{error}"))?;
-    if let Some(chunk) = value
-        .pointer("/choices/0/delta/content")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("answer").and_then(Value::as_str))
-    {
-        answer.push_str(chunk);
-        on_delta(chunk.to_owned());
-    }
-    if let Some(parsed) = value
-        .get("usage")
-        .or_else(|| value.pointer("/metadata/usage"))
-    {
-        *usage = parse_usage(Some(parsed));
-    }
-    Ok(())
 }
 
 fn parse_usage(value: Option<&Value>) -> LocalDifyUsage {
