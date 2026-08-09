@@ -1553,11 +1553,15 @@ async fn start_plugin(
     paths: State<'_, AppPaths>,
     manager: State<'_, plugins::PluginManager>,
 ) -> Result<(), String> {
-    let python = locate_runtime(&paths)?.python;
     let workspace_root = paths.workspace_root.clone();
+    let python = if plugins::plugin_services_require_bundled_python(&workspace_root, &plugin_id)? {
+        Some(locate_runtime(&paths)?.python)
+    } else {
+        None
+    };
     let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        plugins::start_plugin_inner(&workspace_root, &plugin_id, &python, &manager)
+        plugins::start_plugin_inner(&workspace_root, &plugin_id, python.as_deref(), &manager)
             .map_err(|error| plugins::redact_plugin_error(&workspace_root, &plugin_id, error))
     })
     .await
@@ -3179,27 +3183,33 @@ fn initialize_desktop(
     };
     let plugin_manager = plugins::PluginManager::default();
     set_startup_progress_handle(&app, 52, "正在定位运行环境", "runtime://python");
-    if let Ok(runtime) = locate_runtime(&app_paths) {
-        let autostart_workspace = workspace_root.clone();
-        let autostart_manager = plugin_manager.clone();
-        let autostart_gate = Arc::clone(&reveal_requested);
-        std::thread::spawn(move || {
-            // Avoid competing with first-run WebView2 and knowledge initialization on slow disks.
-            // Plugins become available shortly after the real workbench is visible.
-            for _ in 0..600 {
-                if autostart_gate.load(AtomicOrdering::Acquire) {
-                    std::thread::sleep(std::time::Duration::from_millis(750));
+    let autostart_paths = app_paths.clone();
+    let autostart_workspace = workspace_root.clone();
+    let autostart_manager = plugin_manager.clone();
+    let autostart_gate = Arc::clone(&reveal_requested);
+    std::thread::spawn(move || {
+        // Avoid competing with first-run WebView2 and knowledge initialization on slow disks.
+        // Executable plugins remain independent from sealed Python initialization.
+        for _ in 0..600 {
+            if autostart_gate.load(AtomicOrdering::Acquire) {
+                std::thread::sleep(std::time::Duration::from_millis(750));
+                let _ = plugins::start_autostart_plugins(
+                    &autostart_workspace,
+                    None,
+                    &autostart_manager,
+                );
+                if let Ok(runtime) = locate_runtime(&autostart_paths) {
                     let _ = plugins::start_autostart_plugins(
                         &autostart_workspace,
-                        &runtime.python,
+                        Some(&runtime.python),
                         &autostart_manager,
                     );
-                    return;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                return;
             }
-        });
-    }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    });
 
     set_startup_progress_handle(&app, 64, "正在建立运行索引", "host://workspace.sqlite3");
     let host_state = HostState::try_new(workspace_root.clone())

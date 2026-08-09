@@ -102,7 +102,11 @@ rm -f "$ui_ready" "$input_ready" "$screenshot"
 Xvfb :99 -screen 0 1280x800x24 -ac -nolisten tcp >"$diagnostics/xvfb.log" 2>&1 &
 xvfb_pid=$!
 desktop_pid=""
+dify_pid=""
 cleanup() {
+  if [ -n "$dify_pid" ]; then
+    kill "$dify_pid" 2>/dev/null || true
+  fi
   if [ -n "$desktop_pid" ]; then
     kill "$desktop_pid" 2>/dev/null || true
   fi
@@ -155,6 +159,45 @@ fi
 grep -Eq '"reactMounted"[[:space:]]*:[[:space:]]*true' "$ui_ready"
 grep -Eq '"ipcRoundTrip"[[:space:]]*:[[:space:]]*true' "$ui_ready"
 cp "$ui_ready" "$diagnostics/drpa-uos20-ui-ready.json"
+
+# The built-in Dify2API sidecar is a static Linux executable seeded by the Host.
+# Run its real HTTP service in the old userspace so an architecture, mode-bit or
+# old-kernel regression fails the UOS package gate rather than the user's machine.
+dify_sidecar=""
+for _ in $(seq 1 200); do
+  dify_sidecar="$(find /tmp/drpa-uos20-data -type f -path '*/plugins/dify2api/service/dify2api-server' -print -quit)"
+  if [ -n "$dify_sidecar" ]; then
+    break
+  fi
+  sleep 0.1
+done
+test -n "$dify_sidecar"
+test -x "$dify_sidecar"
+cat >/tmp/drpa-uos20-dify2api.json <<'JSON'
+{"dify_base_url":"http://127.0.0.1:9/v1","dify_api_key":"smoke","listen_addr":"127.0.0.1:39423","model_name":"dify-agent","proxy_api_key":"drpa-uos20-smoke-proxy-key","enable_tool_emu":true,"strip_think_tags":true,"default_user":"drpa-smoke","show_agent_thought":false}
+JSON
+chown drpa-smoke:drpa-smoke /tmp/drpa-uos20-dify2api.json
+runuser -u drpa-smoke -- timeout 15s "$dify_sidecar" \
+  -server -config /tmp/drpa-uos20-dify2api.json \
+  >"$diagnostics/drpa-uos20-dify2api.log" 2>&1 &
+dify_pid=$!
+dify_ready=0
+for _ in $(seq 1 100); do
+  if python3 -c 'import urllib.request; print(urllib.request.build_opener(urllib.request.ProxyHandler({})).open("http://127.0.0.1:39423/healthz", timeout=1).read().decode())' \
+      >"$diagnostics/drpa-uos20-dify2api-health.json" 2>/dev/null; then
+    dify_ready=1
+    break
+  fi
+  sleep 0.1
+done
+if [ "$dify_ready" -ne 1 ]; then
+  cat "$diagnostics/drpa-uos20-dify2api.log"
+  exit 1
+fi
+grep -Eq '"service"[[:space:]]*:[[:space:]]*"dify2api"' "$diagnostics/drpa-uos20-dify2api-health.json"
+kill "$dify_pid" 2>/dev/null || true
+wait "$dify_pid" 2>/dev/null || true
+dify_pid=""
 
 # Exercise the native GTK/WebKit input-method path with real X11 events. Opening
 # the command palette focuses an input; the explicit click and typing reproduce

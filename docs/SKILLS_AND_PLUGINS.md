@@ -266,6 +266,12 @@ Completion App 或 Workflow App 伪装成 Chat Completions。
 `proxy_api_key`；本地客户端不应直接使用上游 Dify App Key。插件页可把
 Endpoint、模型名和本地代理 Key 一次性应用到 AI Agent。
 
+该服务是独立静态可执行文件，启动链不依赖封装 Python。Linux/UOS Host
+会把内置 sidecar 复制到当前登录会话的私有执行缓存后再启动，以兼容用户
+数据分区带 `noexec` 的企业桌面策略；本地健康检查和调试请求固定直连
+loopback，不继承系统 HTTP 代理。上游 Dify 请求仍按 sidecar 自身的代理
+环境执行。
+
 DRPA 自带的 Local Dify 开发平台见 [`LOCAL_DIFY.md`](LOCAL_DIFY.md)。
 
 ## 当前协议边界

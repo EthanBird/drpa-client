@@ -54,6 +54,8 @@ const BUILTIN_DIFY2API_SERVICE: &[u8] = &[];
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 const BUILTIN_DIFY2API_SERVICE_NAME: &str = "";
 static INITIALIZED_PLUGIN_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+#[cfg(target_os = "linux")]
+static BUILTIN_DIFY2API_EXECUTION_ENTRY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 const PLUGIN_PYTHON_RUNNER: &str = r#"
 import importlib.util
 import inspect
@@ -817,6 +819,7 @@ pub(crate) async fn test_plugin_connection(
             validate_loopback_http_endpoint(&endpoint)?;
             let config = ureq::Agent::config_builder()
                 .timeout_global(Some(Duration::from_secs(35)))
+                .proxy(None)
                 .max_redirects(0)
                 .build();
             let http = ureq::Agent::new_with_config(config);
@@ -1013,7 +1016,7 @@ fn build_plugin_project_inner(workspace_root: &Path, plugin_id: &str) -> Result<
 pub(crate) fn start_plugin_inner(
     workspace_root: &Path,
     plugin_id: &str,
-    python: &Path,
+    python: Option<&Path>,
     manager: &PluginManager,
 ) -> Result<(), String> {
     let result = start_plugin_process(workspace_root, plugin_id, python, manager);
@@ -1028,7 +1031,7 @@ pub(crate) fn start_plugin_inner(
 fn start_plugin_process(
     workspace_root: &Path,
     plugin_id: &str,
-    python: &Path,
+    python: Option<&Path>,
     manager: &PluginManager,
 ) -> Result<(), String> {
     let manager_plugin_key = plugin_manager_key(workspace_root, plugin_id);
@@ -1114,7 +1117,7 @@ fn start_plugin_service(
     root: &Path,
     state: &PluginStateFile,
     service: &ResolvedPluginService,
-    python: &Path,
+    python: Option<&Path>,
     log_buffer: Arc<Mutex<VecDeque<PluginLogLine>>>,
     redactions: Arc<Vec<String>>,
     manager: &PluginManager,
@@ -1124,16 +1127,16 @@ fn start_plugin_service(
     let config_path = root.join("state.json");
     let mut command = match service.manifest.runtime.as_str() {
         "bundled-python" => {
-            if !python.is_file() {
+            let Some(python) = python.filter(|path| path.is_file()) else {
                 return Err("插件需要已初始化的封装 Python 运行环境".to_owned());
-            }
+            };
             let mut command = Command::new(python);
             command.arg("-I").arg(&entry);
             command
         }
         "executable" => {
-            ensure_executable(&entry)?;
-            Command::new(&entry)
+            let execution_entry = prepare_service_execution_entry(plugin_id, root, &entry)?;
+            Command::new(execution_entry)
         }
         runtime => return Err(format!("插件服务 runtime 无效：{runtime}")),
     };
@@ -1220,7 +1223,7 @@ fn start_plugin_service(
 
 pub(crate) fn start_autostart_plugins(
     workspace_root: &Path,
-    python: &Path,
+    python: Option<&Path>,
     manager: &PluginManager,
 ) -> Result<(), String> {
     ensure_plugins_root(workspace_root)?;
@@ -1241,6 +1244,16 @@ pub(crate) fn start_autostart_plugins(
         }
     }
     Ok(())
+}
+
+pub(crate) fn plugin_services_require_bundled_python(
+    workspace_root: &Path,
+    plugin_id: &str,
+) -> Result<bool, String> {
+    let (_, manifest) = load_plugin(workspace_root, plugin_id)?;
+    Ok(resolved_plugin_services(&manifest)?
+        .iter()
+        .any(|service| service.manifest.runtime == "bundled-python"))
 }
 
 pub(crate) fn plugin_tool_definitions(workspace_root: &Path) -> Result<Vec<Value>, String> {
@@ -1645,6 +1658,7 @@ fn wait_for_plugin_health(
     let deadline = Instant::now() + health.startup_timeout;
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(health.request_timeout))
+        .proxy(None)
         .max_redirects(0)
         .build();
     let http = ureq::Agent::new_with_config(config);
@@ -2499,6 +2513,7 @@ fn run_plugin_debugger_inner(
     let timeout = endpoint.timeout_seconds.clamp(1, MAX_DEBUG_TIMEOUT_SECONDS);
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(timeout)))
+        .proxy(None)
         .http_status_as_error(false)
         .max_redirects(0)
         .build();
@@ -3261,6 +3276,53 @@ fn write_bytes_if_different(path: &Path, content: &[u8]) -> Result<(), String> {
     fs::write(path, content).map_err(|error| error.to_string())
 }
 
+fn prepare_service_execution_entry(
+    plugin_id: &str,
+    root: &Path,
+    entry: &Path,
+) -> Result<PathBuf, String> {
+    ensure_executable(entry)?;
+    #[cfg(target_os = "linux")]
+    if plugin_id == "dify2api"
+        && root.join(".builtin").is_file()
+        && entry == root.join(BUILTIN_DIFY2API_SERVICE_NAME)
+    {
+        return staged_builtin_dify2api_execution_entry();
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (plugin_id, root);
+    Ok(entry.to_path_buf())
+}
+
+#[cfg(target_os = "linux")]
+fn staged_builtin_dify2api_execution_entry() -> Result<PathBuf, String> {
+    BUILTIN_DIFY2API_EXECUTION_ENTRY
+        .get_or_init(|| {
+            use std::os::unix::fs::PermissionsExt;
+
+            let runtime_root = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .filter(|path| path.is_dir())
+                .unwrap_or_else(std::env::temp_dir)
+                .join(format!("drpa-next-{}", std::process::id()))
+                .join("plugin-runtime");
+            fs::create_dir_all(&runtime_root).map_err(|error| {
+                format!(
+                    "创建 UOS 插件执行缓存 {} 失败：{error}",
+                    runtime_root.display()
+                )
+            })?;
+            fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("设置 UOS 插件执行缓存权限失败：{error}"))?;
+            let entry = runtime_root.join("dify2api-server");
+            write_bytes_if_different(&entry, BUILTIN_DIFY2API_SERVICE)?;
+            fs::set_permissions(&entry, fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("设置 Dify2API sidecar 执行权限失败：{error}"))?;
+            Ok(entry)
+        })
+        .clone()
+}
+
 #[cfg(unix)]
 fn ensure_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
@@ -3904,7 +3966,7 @@ default_config:
         ensure_plugins_root(&workspace).unwrap();
         let root = plugins_root(&workspace).join("dify2api");
         let manifest = load_manifest_from_root(&root, Some("dify2api")).unwrap();
-        let mut config = manifest.default_config;
+        let mut config = manifest.default_config.clone();
         config["listen_addr"] = json!(format!("127.0.0.1:{port}"));
         config["dify_api_key"] = json!("test-dify-api-key");
         secure_dify2api_config(&mut config).unwrap();
@@ -3919,7 +3981,9 @@ default_config:
         .unwrap();
         let manager = PluginManager::default();
 
-        if let Err(error) = start_plugin_inner(&workspace, "dify2api", Path::new(""), &manager) {
+        assert!(!plugin_services_require_bundled_python(&workspace, "dify2api").unwrap());
+
+        if let Err(error) = start_plugin_inner(&workspace, "dify2api", None, &manager) {
             let logs = manager
                 .inner
                 .logs
@@ -3937,6 +4001,32 @@ default_config:
         assert_eq!(debug.status, 200);
 
         stop_plugin_inner(&workspace, "dify2api", &manager).unwrap();
+
+        let mut state = read_plugin_state(&root, &manifest).unwrap();
+        state.autostart = true;
+        write_plugin_state(&root, &state).unwrap();
+        start_autostart_plugins(&workspace, None, &manager).unwrap();
+        assert!(service_is_running(&workspace, "dify2api", "gateway", &manager).unwrap());
+        stop_plugin_inner(&workspace, "dify2api", &manager).unwrap();
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stages_builtin_dify2api_outside_the_workspace_for_uos_noexec_mounts() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let workspace = std::env::temp_dir().join(format!("drpa-plugin-stage-{}", Uuid::new_v4()));
+        ensure_plugins_root(&workspace).unwrap();
+        let root = plugins_root(&workspace).join("dify2api");
+        let source = root.join(BUILTIN_DIFY2API_SERVICE_NAME);
+        let staged = prepare_service_execution_entry("dify2api", &root, &source).unwrap();
+        assert_ne!(staged, source);
+        assert_eq!(fs::read(&staged).unwrap(), BUILTIN_DIFY2API_SERVICE);
+        assert_ne!(
+            fs::metadata(&staged).unwrap().permissions().mode() & 0o111,
+            0
+        );
         let _ = fs::remove_dir_all(workspace);
     }
 

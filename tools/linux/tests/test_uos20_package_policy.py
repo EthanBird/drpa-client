@@ -42,6 +42,14 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn("__EGL_VENDOR_LIBRARY_FILENAMES=", source)
         self.assertIn("GTK_IM_MODULE=xim", source)
 
+    def test_container_smoke_runs_the_builtin_dify2api_service(self) -> None:
+        source = Path(__file__).resolve().parents[1].joinpath("uos20_container_smoke.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("plugins/dify2api/service/dify2api-server", source)
+        self.assertIn("http://127.0.0.1:39423/healthz", source)
+        self.assertIn("drpa-uos20-dify2api-health.json", source)
+
     def test_x86_64_elf_detection_rejects_other_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

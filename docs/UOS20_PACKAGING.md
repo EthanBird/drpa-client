@@ -352,9 +352,10 @@ docker run --rm --volume /tmp/uos-diagnostics:/diagnostics drpa-next-uos20-smoke
 9. 内置 Chrome 以普通用户完成 headless DOM 测试；
 10. 前端成功取得 workspace snapshot，等待两次 `requestAnimationFrame` 后通过 Tauri IPC 写入 `reactMounted=true` 与 `ipcRoundTrip=true` 就绪标记；
 11. `WebKitWebProcess` 在标记产生后仍存活，日志不得包含 `EGL_NOT_INITIALIZED`、无法创建 EGL display、swrast 加载失败或 `Aborting`；
-12. `xdotool` 用真实 X11 事件打开命令面板、物理点击输入框、逐键输入 `drpa-input-smoke`、关闭面板并点击侧栏按钮；前端必须在后续点击 300ms 后仍能通过 Tauri IPC 写出 `nativeInputTyped=true`、`postInputClick=true` marker；
-13. 捕获 1280×800 Xvfb 根窗口截图：始终要求至少 32 色；有字体时灰度标准差必须不低于 0.03，顶部 1100×100 文字区在 30% 灰度阈值下必须有至少 0.2% 深色像素、至少 5 个连通组件且最大组件不超过 500 像素；无字体的最小镜像要求灰度标准差不低于 0.01，并必须同时通过第 12 项原生输入 marker；
-14. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
+12. Host 写出 Linux Dify2API sidecar 后，以普通用户启动真实服务并要求 `/healthz` 返回 `service=dify2api`；日志和健康响应作为诊断资产保存；
+13. `xdotool` 用真实 X11 事件打开命令面板、物理点击输入框、逐键输入 `drpa-input-smoke`、关闭面板并点击侧栏按钮；前端必须在后续点击 300ms 后仍能通过 Tauri IPC 写出 `nativeInputTyped=true`、`postInputClick=true` marker；
+14. 捕获 1280×800 Xvfb 根窗口截图：始终要求至少 32 色；有字体时灰度标准差必须不低于 0.03，顶部 1100×100 文字区在 30% 灰度阈值下必须有至少 0.2% 深色像素、至少 5 个连通组件且最大组件不超过 500 像素；无字体的最小镜像要求灰度标准差不低于 0.01，并必须同时通过第 13 项原生输入 marker；
+15. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
 
 Debian 10 镜像不会安装系统 WebKitGTK 4.1；截图工具间接带入的系统 Mesa DRI 目录会在启动应用前被移走，从而证明软件渲染闭包确实来自 deb。Deepin 20.8 镜像固定到不可变 SHA-256 digest，用于覆盖与 UOS 同代的发行版用户态；即使镜像本身带 Mesa，launcher 的私有 RPATH、DRI 路径和 EGL vendor manifest 仍会固定到包内闭包。两次测试始终上传 PNG、视觉指标、React/IPC marker、WebKit 进程树、X11 window tree 和完整日志。
 
@@ -419,6 +420,7 @@ git diff --check
 | 页面卡片和图表可见但没有任何文字 | 最小 Deepin 测试镜像没有可用系统字体，旧门禁又只看整图方差 | 不把目标系统字体重复塞进 deb；由 Debian 10 严格检查文字，Deepin 明确记录 `font_available=0` 并只验收布局、WebKit 和真实输入响应；实体 UOS 单独人工确认字体 |
 | 聚焦任意输入框后页面点击全部失效，但窗口仍可拖动 | 私有 Ubuntu GTK 自动连接 UOS 的 IBus/Fcitx D-Bus IM 模块，WebKit 输入上下文阻塞 | UOS launcher 固定 `GTK_IM_MODULE=xim`；用真实 X11 点击、键入、后续点击与延迟 IPC 门禁覆盖 |
 | 连续访问多个业务页面后点击越来越慢或停滞 | 所有已访问 React 页面都以隐藏 DOM 常驻，旧 WebKit 的 `inert` 焦点树与 llvmpipe 模糊合成持续累积 | 只保留 BI、Studio、知识文档三个草稿型工作区；其余页面离开即释放；隐藏面不再使用 `inert`；UOS 启用低成本视觉配置 |
+| Dify2API 显示已启用但服务启动失败 | 纯 executable 插件被错误绑定到 Python 初始化，或用户数据分区使用 `noexec`，或 loopback 健康检查继承了系统代理 | executable 服务跳过 Python 初始化；内置 sidecar 从会话级 `0700` 执行缓存启动；Host 的 loopback 请求关闭代理；Debian 10/Deepin 门禁运行真实 `/healthz` |
 
 遇到新缺库时，不要立即把目标机的任意 `.so` 复制进包。先确认它属于普通用户态闭包还是显卡/内核 ABI 边界，再更新构建器、验证器和测试；对 `dlopen` 模块还要补完整的数据/校验伴随文件。
 
