@@ -241,6 +241,7 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
             "WEBKIT_DISABLE_DMABUF_RENDERER=1",
             "WEBKIT_DISABLE_COMPOSITING_MODE=1",
             "LIBGL_ALWAYS_SOFTWARE=1",
+            "DRPA_UI_REDUCED_EFFECTS=1",
             "GALLIUM_DRIVER=",
             'LIBGL_DRIVERS_PATH="$APPDIR/uos-runtime/dri"',
             '__EGL_VENDOR_LIBRARY_FILENAMES="$APPDIR/uos-runtime/egl_vendor.d/50_mesa.json"',

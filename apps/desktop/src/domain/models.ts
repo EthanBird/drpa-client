@@ -487,6 +487,7 @@ export interface PlatformCapabilities {
   supportsWindowsUpdates: boolean;
   fileManagerName: string;
   dataDirectoryPolicy: string;
+  reducedVisualEffects: boolean;
 }
 
 export interface CurrentUser {

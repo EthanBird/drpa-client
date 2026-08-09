@@ -1489,6 +1489,7 @@ const mockGateway: DesktopGateway = {
       supportsWindowsUpdates: false,
       fileManagerName: "资源管理器",
       dataDirectoryPolicy: "安装目录 data",
+      reducedVisualEffects: false,
     };
   },
   async initializeRuntime() { return this.getRuntimeStatus(); },

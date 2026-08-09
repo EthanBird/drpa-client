@@ -12,7 +12,6 @@ export function NavigationSurface({ id, activeId, children }: { id: NavigationId
         className="navigation-page"
         data-navigation-page={id}
         hidden={!active}
-        inert={!active}
         aria-hidden={!active}
       >
         {children}

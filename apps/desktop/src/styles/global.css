@@ -248,3 +248,30 @@ nav { margin-top: 14px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* The UOS package intentionally uses llvmpipe and disables WebKit compositing.
+   Avoid effects that otherwise force expensive full-window software repaints. */
+:root[data-reduced-visual-effects="true"] *,
+:root[data-reduced-visual-effects="true"] *::before,
+:root[data-reduced-visual-effects="true"] *::after {
+  scroll-behavior: auto !important;
+  animation-duration: .01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .01ms !important;
+}
+
+:root[data-reduced-visual-effects="true"] .modal-backdrop,
+:root[data-reduced-visual-effects="true"] .drop-overlay,
+:root[data-reduced-visual-effects="true"] .context-menu,
+:root[data-reduced-visual-effects="true"] .studio-confirm-overlay,
+:root[data-reduced-visual-effects="true"] .knowledge-confirm-overlay,
+:root[data-reduced-visual-effects="true"] .vault-dialog-backdrop,
+:root[data-reduced-visual-effects="true"] .automation-v2-notice,
+:root[data-reduced-visual-effects="true"] .automation-v2-dialog-backdrop,
+:root[data-reduced-visual-effects="true"] .plugin-workbench-modal-backdrop,
+:root[data-reduced-visual-effects="true"] .knowledge-base-dialog-backdrop,
+:root[data-reduced-visual-effects="true"] .sql-ai-backdrop,
+:root[data-reduced-visual-effects="true"] .database-dialog-backdrop {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}

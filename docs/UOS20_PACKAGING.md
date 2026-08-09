@@ -223,6 +223,8 @@ UOS 时代的系统 GBM 和 libdrm 缺少现代 WebKitGTK 使用的符号。构�
 
 launcher 固定 `LIBGL_ALWAYS_SOFTWARE=1`，把 `LIBGL_DRIVERS_PATH` 与 `__EGL_VENDOR_LIBRARY_FILENAMES` 指向包内 Mesa，并设置 `GALLIUM_DRIVER=llvmpipe`、禁用 DMABUF/GBM 与 WebKit compositing 路径。包中只含 swrast/kms_swrast，不含厂商硬件 DRI；这能避开 Fantasy II-M 的 EGL 初始化失败，但仍不替代实体机图形测试。
 
+launcher 同时设置 `DRPA_UI_REDUCED_EFFECTS=1`。Host 通过平台能力协议把该标记传给 React，前端据此关闭 `backdrop-filter`、连续动画和过渡，避免 llvmpipe 在弹窗、菜单与页面交互时反复执行整窗软件重绘。普通 Windows、现代 Linux 与 macOS 启动路径不设置该标记，保留完整视觉效果。
+
 ### 8.3 X11 基线
 
 当前 launcher 固定 `GDK_BACKEND=x11`，自动化用 Xvfb 验证 X11 启动。Wayland/DDE 混合环境尚未成为发布硬门禁；如果未来开放 Wayland backend，必须保留 X11 回归并新增真实 Wayland 会话测试。
@@ -416,6 +418,7 @@ git diff --check
 | CI 构建成功但目标机仍失败 | 只做编译或静态检查，没有旧用户态运行 | 增加 Debian 10/glibc 2.28 真实安装、Chrome、X11 门禁 |
 | 页面卡片和图表可见但没有任何文字 | 最小 Deepin 测试镜像没有可用系统字体，旧门禁又只看整图方差 | 不把目标系统字体重复塞进 deb；由 Debian 10 严格检查文字，Deepin 明确记录 `font_available=0` 并只验收布局、WebKit 和真实输入响应；实体 UOS 单独人工确认字体 |
 | 聚焦任意输入框后页面点击全部失效，但窗口仍可拖动 | 私有 Ubuntu GTK 自动连接 UOS 的 IBus/Fcitx D-Bus IM 模块，WebKit 输入上下文阻塞 | UOS launcher 固定 `GTK_IM_MODULE=xim`；用真实 X11 点击、键入、后续点击与延迟 IPC 门禁覆盖 |
+| 连续访问多个业务页面后点击越来越慢或停滞 | 所有已访问 React 页面都以隐藏 DOM 常驻，旧 WebKit 的 `inert` 焦点树与 llvmpipe 模糊合成持续累积 | 只保留 BI、Studio、知识文档三个草稿型工作区；其余页面离开即释放；隐藏面不再使用 `inert`；UOS 启用低成本视觉配置 |
 
 遇到新缺库时，不要立即把目标机的任意 `.so` 复制进包。先确认它属于普通用户态闭包还是显卡/内核 ABI 边界，再更新构建器、验证器和测试；对 `dlopen` 模块还要补完整的数据/校验伴随文件。
 

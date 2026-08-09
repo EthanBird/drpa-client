@@ -2015,6 +2015,7 @@ struct PlatformCapabilities {
     supports_windows_updates: bool,
     file_manager_name: &'static str,
     data_directory_policy: &'static str,
+    reduced_visual_effects: bool,
 }
 
 #[derive(Deserialize)]
@@ -2453,6 +2454,14 @@ fn get_runtime_status(paths: State<'_, AppPaths>) -> Result<RuntimeStatus, Strin
 
 #[tauri::command]
 fn get_platform_capabilities() -> PlatformCapabilities {
+    let reduced_visual_effects = std::env::var("DRPA_UI_REDUCED_EFFECTS")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
     if cfg!(windows) {
         PlatformCapabilities {
             os: "windows",
@@ -2461,6 +2470,7 @@ fn get_platform_capabilities() -> PlatformCapabilities {
             supports_windows_updates: false,
             file_manager_name: "资源管理器",
             data_directory_policy: "安装目录 data",
+            reduced_visual_effects,
         }
     } else if cfg!(target_os = "linux") {
         PlatformCapabilities {
@@ -2470,6 +2480,7 @@ fn get_platform_capabilities() -> PlatformCapabilities {
             supports_windows_updates: false,
             file_manager_name: "文件管理器",
             data_directory_policy: "XDG 本地数据目录",
+            reduced_visual_effects,
         }
     } else {
         PlatformCapabilities {
@@ -2483,6 +2494,7 @@ fn get_platform_capabilities() -> PlatformCapabilities {
             supports_windows_updates: false,
             file_manager_name: "Finder",
             data_directory_policy: "应用本地数据目录",
+            reduced_visual_effects,
         }
     }
 }

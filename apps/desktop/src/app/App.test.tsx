@@ -43,6 +43,7 @@ describe("DRPA Next desktop shell", () => {
   afterEach(() => {
     cleanup();
     delete (window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    delete document.documentElement.dataset.reducedVisualEffects;
     vi.restoreAllMocks();
   });
 
@@ -493,6 +494,7 @@ describe("DRPA Next desktop shell", () => {
       supportsWindowsUpdates: false,
       fileManagerName: "文件管理器",
       dataDirectoryPolicy: "XDG 本地数据目录",
+      reducedVisualEffects: false,
     });
     render(<SettingsPage />);
 
@@ -986,6 +988,9 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.change(editor, { target: { value: "def main():\n    return 99\n" } });
     fireEvent.click(screen.getByRole("button", { name: "知识文档" }));
     expect(await screen.findByRole("heading", { name: "知识文档" })).toBeVisible();
+    const studioSurface = document.querySelector<HTMLElement>('[data-navigation-page="studio"]');
+    expect(studioSurface).toHaveAttribute("hidden");
+    expect(studioSurface).not.toHaveAttribute("inert");
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     await act(async () => Promise.resolve());
     expect(writeFile).not.toHaveBeenCalled();
@@ -993,6 +998,34 @@ describe("DRPA Next desktop shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "开发工作室" }));
     expect(await screen.findByLabelText("mock-editor")).toHaveValue("def main():\n    return 99\n");
     expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases inactive transient pages instead of retaining every visited workspace", async () => {
+    useAppStore.setState({ activeNavigation: "runtimes" });
+    const { container } = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "运行环境" })).toBeVisible();
+    expect(container.querySelector('[data-navigation-page="runtimes"]')).toBeInTheDocument();
+
+    act(() => useAppStore.getState().setActiveNavigation("settings"));
+    expect(await screen.findByRole("heading", { name: "设置" })).toBeVisible();
+    expect(container.querySelector('[data-navigation-page="runtimes"]')).not.toBeInTheDocument();
+  });
+
+  it("enables the low-cost visual profile reported by the UOS launcher", async () => {
+    vi.spyOn(desktopGateway, "getPlatformCapabilities").mockResolvedValue({
+      os: "linux",
+      displayName: "UOS 20 x86_64",
+      runtimeTarget: "linux-x86_64",
+      supportsWindowsUpdates: false,
+      fileManagerName: "文件管理器",
+      dataDirectoryPolicy: "XDG 本地数据目录",
+      reducedVisualEffects: true,
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("data-reduced-visual-effects", "true"));
   });
 
   it("initializes the local vault with a TOTP QR code and presents the recovery code once", async () => {

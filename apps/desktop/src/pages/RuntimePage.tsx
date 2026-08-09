@@ -14,6 +14,7 @@ import {
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
 
+import { useNavigationSurfaceActive } from "../app/NavigationSurface";
 import type {
   PlatformCapabilities,
   RuntimeStatus,
@@ -25,6 +26,7 @@ import { desktopGateway } from "../infra/gateway";
 const METRICS_REFRESH_MS = 2_000;
 
 export function RuntimePage() {
+  const pageActive = useNavigationSurfaceActive();
   const [status, setStatus] = useState<RuntimeStatus | null>(null);
   const [platform, setPlatform] = useState<PlatformCapabilities | null>(null);
   const [metrics, setMetrics] = useState<SystemMetricsSnapshot | null>(null);
@@ -59,6 +61,7 @@ export function RuntimePage() {
   }, [loadRuntime]);
 
   useEffect(() => {
+    if (!pageActive) return;
     let disposed = false;
     let timer = 0;
     const refresh = async () => {
@@ -70,7 +73,7 @@ export function RuntimePage() {
       disposed = true;
       window.clearTimeout(timer);
     };
-  }, [loadMetrics]);
+  }, [loadMetrics, pageActive]);
 
   const refreshAll = () => {
     void loadRuntime();

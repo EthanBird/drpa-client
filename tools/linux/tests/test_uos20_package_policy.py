@@ -37,6 +37,7 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn("WEBKIT_DISABLE_DMABUF_RENDERER=1", source)
         self.assertIn("WEBKIT_DISABLE_COMPOSITING_MODE=1", source)
         self.assertIn("LIBGL_ALWAYS_SOFTWARE=1", source)
+        self.assertIn("DRPA_UI_REDUCED_EFFECTS=1", source)
         self.assertIn('LIBGL_DRIVERS_PATH="$APPDIR/uos-runtime/dri"', source)
         self.assertIn("__EGL_VENDOR_LIBRARY_FILENAMES=", source)
         self.assertIn("GTK_IM_MODULE=xim", source)
