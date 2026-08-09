@@ -618,9 +618,7 @@ pub(crate) fn list_automation_plans(
     for plan in &mut store.plans {
         plan.next_run_at = next_run_at(plan, now);
     }
-    store
-        .plans
-        .sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    store.plans.sort_by_key(|left| left.name.to_lowercase());
     save_plan_store(&paths.workspace_root, &store)?;
     Ok(store.plans)
 }
@@ -1200,11 +1198,9 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
     drop(temporary_file);
 
     let had_original = path.exists();
-    if had_original {
-        if let Err(error) = fs::rename(path, &backup) {
-            let _ = fs::remove_file(&temporary);
-            return Err(format!("备份原自动化数据失败：{error}"));
-        }
+    if had_original && let Err(error) = fs::rename(path, &backup) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("备份原自动化数据失败：{error}"));
     }
     if let Err(error) = fs::rename(&temporary, path) {
         if had_original {

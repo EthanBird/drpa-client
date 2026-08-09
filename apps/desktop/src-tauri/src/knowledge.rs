@@ -539,7 +539,7 @@ fn stable_content_hash(content: &[u8]) -> String {
 
 fn decode_hex_snapshot(value: &str) -> std::io::Result<Vec<u8>> {
     let value = value.trim();
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "legacy manual snapshot has an odd number of hexadecimal digits",

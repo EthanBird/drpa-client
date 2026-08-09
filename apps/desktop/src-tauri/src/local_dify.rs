@@ -1796,14 +1796,13 @@ fn execute_workflow_list_operator(
             .get("enabled")
             .and_then(Value::as_bool)
             .unwrap_or(false)
-    }) {
-        if let Some(conditions) = filter.get("conditions").and_then(Value::as_array) {
-            items.retain(|item| {
-                conditions
-                    .iter()
-                    .all(|condition| list_condition_matches(item, condition))
-            });
-        }
+    }) && let Some(conditions) = filter.get("conditions").and_then(Value::as_array)
+    {
+        items.retain(|item| {
+            conditions
+                .iter()
+                .all(|condition| list_condition_matches(item, condition))
+        });
     }
     if let Some(order) = node.config.get("order_by").filter(|value| {
         value

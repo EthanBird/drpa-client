@@ -153,6 +153,7 @@ pub(crate) fn read_document(
 }
 
 /// Creates a new document. The worker can only write to this session's artifact directory.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_document(
     workspace_root: &Path,
     python: &Path,
@@ -180,6 +181,7 @@ pub(crate) fn create_document(
 }
 
 /// Converts a session attachment/artifact by extracting its safe document model and recreating it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn convert_document(
     workspace_root: &Path,
     python: &Path,

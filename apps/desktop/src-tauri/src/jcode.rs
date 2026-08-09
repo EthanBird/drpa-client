@@ -153,6 +153,7 @@ fn handle_host_bridge_connection(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_turn<F>(
     request: &AgentTurnRequest,
     workspace_root: &Path,

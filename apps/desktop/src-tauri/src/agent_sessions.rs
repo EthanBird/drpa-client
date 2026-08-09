@@ -793,7 +793,7 @@ fn migrate_database(connection: &mut Connection) -> Result<(), String> {
             )
             .map_err(database_error("创建 Agent 会话数据库结构失败"))?;
     }
-    if version < 2 && version >= 1 {
+    if (1..2).contains(&version) {
         transaction
             .execute_batch(
                 "ALTER TABLE sessions ADD COLUMN revision INTEGER NOT NULL DEFAULT 1

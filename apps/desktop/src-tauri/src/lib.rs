@@ -1398,6 +1398,7 @@ fn execute_studio_cell_blocking(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn run_agent_turn(
     request: agent::AgentTurnRequest,
     app: tauri::AppHandle,

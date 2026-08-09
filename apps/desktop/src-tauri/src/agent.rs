@@ -533,6 +533,7 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_agent_turn<F>(
     mut request: AgentTurnRequest,
     workspace_root: PathBuf,
@@ -1391,15 +1392,13 @@ fn execute_tool(
     if let Some((skill_name, _)) = name
         .strip_prefix("skill_")
         .and_then(|value| value.split_once("__"))
+        && !context.selected_skill_ids.is_empty()
+        && !context
+            .selected_skill_ids
+            .iter()
+            .any(|selected| selected == skill_name)
     {
-        if !context.selected_skill_ids.is_empty()
-            && !context
-                .selected_skill_ids
-                .iter()
-                .any(|selected| selected == skill_name)
-        {
-            return Err(format!("Skill {skill_name} 未在当前会话中启用"));
-        }
+        return Err(format!("Skill {skill_name} 未在当前会话中启用"));
     }
     if let Some(executed) = agent_config::execute_skill_tool(
         &context.workspace_root,
@@ -2414,6 +2413,7 @@ struct CapturedPythonProcess {
     stderr: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn wait_for_python_process(
     child: &mut Child,
     process_tree: &mut AgentPythonProcessTree,

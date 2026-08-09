@@ -198,10 +198,9 @@ fn validate_schema(schema: &Value, value: &Value, path: &str) -> Result<(), Stri
         }
         if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false)
             && let Some(properties) = properties
+            && let Some(key) = object.keys().find(|key| !properties.contains_key(*key))
         {
-            if let Some(key) = object.keys().find(|key| !properties.contains_key(*key)) {
-                return Err(format!("{path}.{key} 是未声明参数"));
-            }
+            return Err(format!("{path}.{key} 是未声明参数"));
         }
         if let Some(properties) = properties {
             for (key, child) in object {

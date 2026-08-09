@@ -4098,7 +4098,7 @@ default_config:
         assert!(validate_loopback_http_endpoint("https://example.com/debug").is_err());
         let source = vec![b'x'; MAX_LOG_LINE_BYTES + 1024]
             .into_iter()
-            .chain([b'\n'])
+            .chain(*b"\n")
             .collect::<Vec<_>>();
         let mut reader = BufReader::new(source.as_slice());
         let mut line = Vec::new();
