@@ -339,9 +339,12 @@ export GDK_BACKEND=x11
 export XDG_DATA_DIRS="$APPDIR/usr/share:/usr/share${{XDG_DATA_DIRS:+:$XDG_DATA_DIRS}}"
 export GSETTINGS_SCHEMA_DIR="$APPDIR/usr/share/glib-2.0/schemas"
 export GTK_EXE_PREFIX="$APPDIR/usr"
-export GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0:/usr/lib/x86_64-linux-gnu/gtk-3.0"
+export GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0"
+unset GTK_MODULES GTK3_MODULES
+export NO_AT_BRIDGE=1
 export GTK_IM_MODULE_FILE="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache"
-export GTK_IM_MODULE=xim
+export GTK_IM_MODULE=gtk-im-context-simple
+export GDK_CORE_DEVICE_EVENTS=1
 export GDK_PIXBUF_MODULE_FILE="$APPDIR/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 export GIO_EXTRA_MODULES="$APPDIR/usr/lib/x86_64-linux-gnu/gio/modules"
 export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0:$APPDIR/usr/lib/x86_64-linux-gnu/gstreamer-1.0"

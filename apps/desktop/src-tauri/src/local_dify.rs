@@ -568,7 +568,7 @@ fn open_runtime_database(paths: &AppPaths) -> Result<Connection, String> {
     Ok(connection)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_local_dify_apps(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<LocalDifyApp>, String> {
@@ -592,7 +592,7 @@ pub(crate) fn list_local_dify_apps(
     Ok(apps)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_local_dify_app(
     input: CreateLocalDifyAppInput,
     paths: State<'_, AppPaths>,
@@ -631,7 +631,7 @@ pub(crate) fn create_local_dify_app(
     Ok(app)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_local_dify_app(
     mut app: LocalDifyApp,
     paths: State<'_, AppPaths>,
@@ -666,7 +666,7 @@ pub(crate) fn save_local_dify_app(
     Ok(app)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn validate_local_dify_workflow(
     mut graph: WorkflowGraph,
     mode: String,
@@ -678,7 +678,7 @@ pub(crate) fn validate_local_dify_workflow(
     Ok(validate_graph(&graph, &mode))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_local_dify_workflow_node(
     kind: String,
     x: f64,
@@ -709,7 +709,7 @@ pub(crate) fn create_local_dify_workflow_node(
     Ok(local_dify_workflow::new_node(&kind, x, y))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_local_dify_app(
     app_id: String,
     paths: State<'_, AppPaths>,
@@ -725,7 +725,7 @@ pub(crate) fn delete_local_dify_app(
     write_json_atomic(&secrets_path(&paths), &secrets)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_local_dify_providers(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<LocalDifyProvider>, String> {
@@ -733,7 +733,7 @@ pub(crate) fn list_local_dify_providers(
     load_providers(&paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_local_dify_provider(
     input: LocalDifyProviderInput,
     paths: State<'_, AppPaths>,
@@ -794,7 +794,7 @@ pub(crate) fn save_local_dify_provider(
     Ok(provider)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_local_dify_provider(
     provider_id: String,
     paths: State<'_, AppPaths>,
@@ -2542,7 +2542,7 @@ fn record_run(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_local_dify_runs(
     app_id: Option<String>,
     limit: Option<usize>,
@@ -2591,7 +2591,7 @@ pub(crate) fn list_local_dify_runs(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn publish_local_dify_app(
     app_id: String,
     paths: State<'_, AppPaths>,
@@ -2609,7 +2609,7 @@ pub(crate) fn publish_local_dify_app(
     Ok(app)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_local_dify_app_api_token(
     app_id: String,
     paths: State<'_, AppPaths>,
@@ -2646,7 +2646,7 @@ fn find_app_by_token(paths: &AppPaths, token: &str) -> Result<LocalDifyApp, Stri
     Ok(app)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn check_local_dify_compatibility(
     app_id: String,
     paths: State<'_, AppPaths>,
@@ -2704,7 +2704,7 @@ fn compatibility_report(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn export_local_dify_dsl(
     app_id: String,
     target_path: String,
@@ -2834,7 +2834,7 @@ fn render_dify_dsl(
     serde_yaml::to_string(&value).map_err(|error| format!("生成 Dify DSL 失败：{error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn import_local_dify_dsl(
     source_path: String,
     paths: State<'_, AppPaths>,
@@ -3093,14 +3093,14 @@ impl LocalDifyServiceManager {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_local_dify_service_status(
     manager: State<'_, LocalDifyServiceManager>,
 ) -> Result<LocalDifyServiceStatus, String> {
     manager.status()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn start_local_dify_service(
     port: u16,
     manager: State<'_, LocalDifyServiceManager>,
@@ -3110,7 +3110,7 @@ pub(crate) fn start_local_dify_service(
     manager.start(port, paths.inner().clone())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn stop_local_dify_service(
     manager: State<'_, LocalDifyServiceManager>,
 ) -> Result<LocalDifyServiceStatus, String> {

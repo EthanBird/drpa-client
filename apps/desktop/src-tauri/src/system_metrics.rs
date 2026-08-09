@@ -58,7 +58,7 @@ struct DiskVolume {
     usage_percent: f64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_system_metrics(
     monitor: State<'_, SystemMetricsMonitor>,
 ) -> Result<SystemMetricsSnapshot, String> {

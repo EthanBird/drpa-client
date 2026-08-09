@@ -66,7 +66,7 @@ pub(crate) struct AgentSessionRecord {
     pub(crate) selected_skill_ids: Vec<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_agent_projects(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<AgentProjectSummary>, String> {
@@ -74,7 +74,7 @@ pub(crate) fn list_agent_projects(
     list_agent_projects_at(&paths.workspace_root)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_agent_project(
     name: String,
     paths: State<'_, AppPaths>,
@@ -83,7 +83,7 @@ pub(crate) fn create_agent_project(
     create_agent_project_at(&paths.workspace_root, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn rename_agent_project(
     project_id: String,
     name: String,
@@ -97,7 +97,7 @@ pub(crate) fn rename_agent_project(
 /// - omitted (`None`): all sessions, newest activity first (the "recent" view);
 /// - empty string: ordinary sessions that are not inside a project;
 /// - a project id: only sessions inside that project.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_agent_sessions(
     project_id: Option<String>,
     paths: State<'_, AppPaths>,
@@ -106,7 +106,7 @@ pub(crate) fn list_agent_sessions(
     list_agent_sessions_at(&paths.workspace_root, project_id.as_deref())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_agent_session(
     project_id: Option<String>,
     title: Option<String>,
@@ -122,7 +122,7 @@ pub(crate) fn create_agent_session(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_agent_session(
     session_id: String,
     paths: State<'_, AppPaths>,
@@ -133,7 +133,7 @@ pub(crate) fn get_agent_session(
 
 /// Saves the complete message JSON without pruning or truncating it. Existing
 /// browser-local sessions may use this command as an upsert during migration.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_agent_session(
     session: AgentSessionRecord,
     paths: State<'_, AppPaths>,
@@ -142,7 +142,7 @@ pub(crate) fn save_agent_session(
     save_agent_session_at(&paths.workspace_root, session)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn rename_agent_session(
     session_id: String,
     title: String,
@@ -152,7 +152,7 @@ pub(crate) fn rename_agent_session(
     rename_agent_session_at(&paths.workspace_root, &session_id, &title)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn move_agent_session(
     session_id: String,
     project_id: Option<String>,
@@ -162,7 +162,7 @@ pub(crate) fn move_agent_session(
     move_agent_session_at(&paths.workspace_root, &session_id, project_id.as_deref())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_agent_session(
     session_id: String,
     paths: State<'_, AppPaths>,

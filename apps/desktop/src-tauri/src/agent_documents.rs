@@ -75,7 +75,7 @@ struct StoredDocument {
     source_id: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn import_agent_document(
     source_path: String,
     session_id: String,
@@ -84,7 +84,7 @@ pub(crate) fn import_agent_document(
     import_agent_document_at(&paths.workspace_root, &session_id, Path::new(&source_path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_agent_artifacts(
     session_id: String,
     paths: State<'_, AppPaths>,
@@ -92,7 +92,7 @@ pub(crate) fn list_agent_artifacts(
     list_agent_artifacts_at(&paths.workspace_root, &session_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_agent_attachments(
     session_id: String,
     paths: State<'_, AppPaths>,
@@ -100,7 +100,7 @@ pub(crate) fn list_agent_attachments(
     list_agent_attachments_at(&paths.workspace_root, &session_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_agent_attachment(
     session_id: String,
     attachment_id: String,
@@ -109,7 +109,7 @@ pub(crate) fn delete_agent_attachment(
     delete_agent_attachment_at(&paths.workspace_root, &session_id, &attachment_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn export_agent_artifact(
     session_id: String,
     artifact_id: String,

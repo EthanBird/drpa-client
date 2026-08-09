@@ -40,7 +40,12 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn("DRPA_UI_REDUCED_EFFECTS=1", source)
         self.assertIn('LIBGL_DRIVERS_PATH="$APPDIR/uos-runtime/dri"', source)
         self.assertIn("__EGL_VENDOR_LIBRARY_FILENAMES=", source)
-        self.assertIn("GTK_IM_MODULE=xim", source)
+        self.assertIn('GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0"', source)
+        self.assertNotIn('gtk-3.0:/usr/lib', source)
+        self.assertIn("unset GTK_MODULES GTK3_MODULES", source)
+        self.assertIn("NO_AT_BRIDGE=1", source)
+        self.assertIn("GTK_IM_MODULE=gtk-im-context-simple", source)
+        self.assertIn("GDK_CORE_DEVICE_EVENTS=1", source)
 
     def test_container_smoke_runs_the_builtin_dify2api_service(self) -> None:
         source = Path(__file__).resolve().parents[1].joinpath("uos20_container_smoke.sh").read_text(
@@ -51,6 +56,18 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn("drpa-uos20-dify2api-health.json", source)
         self.assertIn('"$runtime_python" -I -c', source)
         self.assertIn("drpa-uos20-dify2api-health-errors.log", source)
+
+    def test_container_smoke_injects_and_rejects_system_gtk_modules(self) -> None:
+        source = Path(__file__).resolve().parents[1].joinpath("uos20_container_smoke.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("GTK_IM_MODULE=fcitx", source)
+        self.assertIn("GTK_MODULES=gail:atk-bridge", source)
+        self.assertIn("GTK3_MODULES=atk-bridge", source)
+        self.assertIn("drpa-uos20-host-environment.txt", source)
+        self.assertIn("GTK_IM_MODULE=gtk-im-context-simple", source)
+        self.assertIn("GDK_CORE_DEVICE_EVENTS=1", source)
+        self.assertIn("NO_AT_BRIDGE=1", source)
 
     def test_x86_64_elf_detection_rejects_other_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

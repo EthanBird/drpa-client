@@ -97,6 +97,7 @@ gui_log="$diagnostics/drpa-uos20-gui.log"
 screenshot="$diagnostics/drpa-uos20-ui.png"
 processes="$diagnostics/drpa-uos20-processes.txt"
 window_tree="$diagnostics/drpa-uos20-window-tree.txt"
+host_environment="$diagnostics/drpa-uos20-host-environment.txt"
 rm -f "$ui_ready" "$input_ready" "$screenshot"
 
 Xvfb :99 -screen 0 1280x800x24 -ac -nolisten tcp >"$diagnostics/xvfb.log" 2>&1 &
@@ -131,6 +132,10 @@ fi
 runuser -u drpa-smoke -- env \
   DISPLAY=:99 \
   XMODIFIERS=@im=fcitx \
+  GTK_IM_MODULE=fcitx \
+  GTK_MODULES=gail:atk-bridge \
+  GTK3_MODULES=atk-bridge \
+  GTK_PATH=/usr/lib/x86_64-linux-gnu/gtk-3.0 \
   DRPA_DATA_DIR=/tmp/drpa-uos20-data \
   DRPA_UI_READY_FILE="$ui_ready" \
   DRPA_UI_INPUT_READY_FILE="$input_ready" \
@@ -159,6 +164,21 @@ fi
 grep -Eq '"reactMounted"[[:space:]]*:[[:space:]]*true' "$ui_ready"
 grep -Eq '"ipcRoundTrip"[[:space:]]*:[[:space:]]*true' "$ui_ready"
 cp "$ui_ready" "$diagnostics/drpa-uos20-ui-ready.json"
+
+# Reproduce a real DDE login session that exports system GTK/Fcitx/AT-SPI
+# modules. The fixed-root launcher must replace that hostile module state before
+# private Ubuntu GTK starts; otherwise focus and pointer events can deadlock.
+host_pid="$(pgrep -u drpa-smoke -f '/opt/drpa-next-uos20/usr/bin/drpa-desktop' | head -n 1)"
+test -n "$host_pid"
+tr '\0' '\n' <"/proc/$host_pid/environ" | sort >"$host_environment"
+grep -Fxq 'GTK_IM_MODULE=gtk-im-context-simple' "$host_environment"
+grep -Fxq 'GDK_CORE_DEVICE_EVENTS=1' "$host_environment"
+grep -Fxq 'NO_AT_BRIDGE=1' "$host_environment"
+grep -Fxq 'GTK_PATH=/opt/drpa-next-uos20/usr/lib/x86_64-linux-gnu/gtk-3.0' "$host_environment"
+if grep -Eq '^GTK3?_MODULES=' "$host_environment"; then
+  cat "$host_environment"
+  exit 1
+fi
 
 # The built-in Dify2API sidecar is a static Linux executable seeded by the Host.
 # Run its real HTTP service in the old userspace so an architecture, mode-bit or

@@ -258,6 +258,9 @@ nav { margin-top: 14px; }
   animation-duration: .01ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: .01ms !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  will-change: auto !important;
 }
 
 :root[data-reduced-visual-effects="true"] .modal-backdrop,

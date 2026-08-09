@@ -63,7 +63,7 @@ pub(crate) fn resolve_active_workspace(data_root: &Path) -> Result<PathBuf, Stri
     Ok(workspace_root)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_workspaces(paths: State<'_, AppPaths>) -> Result<Vec<WorkspaceInfo>, String> {
     let mut registry = load_registry(&paths.data_root)?;
     normalize_registry(&mut registry);
@@ -75,7 +75,7 @@ pub(crate) fn list_workspaces(paths: State<'_, AppPaths>) -> Result<Vec<Workspac
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_workspace(
     name: String,
     paths: State<'_, AppPaths>,
@@ -83,7 +83,7 @@ pub(crate) fn create_workspace(
     create_workspace_inner(&paths.data_root, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn switch_workspace(
     workspace_id: String,
     app: tauri::AppHandle,

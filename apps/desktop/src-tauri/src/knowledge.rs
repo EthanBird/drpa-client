@@ -712,14 +712,14 @@ pub(crate) fn write_for_agent(
         .map_err(|error| format!("保存 Markdown 文档失败：{error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_knowledge_entries(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<KnowledgeEntry>, String> {
     list_for_agent(&paths.workspace_root)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn read_knowledge_file(
     relative_path: String,
     paths: State<'_, AppPaths>,
@@ -727,7 +727,7 @@ pub(crate) fn read_knowledge_file(
     read_for_agent(&paths.workspace_root, &relative_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn write_knowledge_file(
     relative_path: String,
     content: String,
@@ -736,7 +736,7 @@ pub(crate) fn write_knowledge_file(
     write_for_agent(&paths.workspace_root, &relative_path, &content)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_knowledge_entry(
     relative_path: String,
     kind: String,
@@ -762,7 +762,7 @@ pub(crate) fn create_knowledge_entry(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn rename_knowledge_entry(
     relative_path: String,
     target_path: String,
@@ -787,7 +787,7 @@ pub(crate) fn rename_knowledge_entry(
     fs::rename(source, target).map_err(|error| format!("重命名知识条目失败：{error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_knowledge_entry(
     relative_path: String,
     paths: State<'_, AppPaths>,
@@ -802,7 +802,7 @@ pub(crate) fn delete_knowledge_entry(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn import_knowledge_files(
     source_paths: Vec<String>,
     target_directory: String,
@@ -861,7 +861,7 @@ pub(crate) fn import_knowledge_files(
     Ok(imported)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn export_knowledge_file(
     relative_path: String,
     target_path: String,

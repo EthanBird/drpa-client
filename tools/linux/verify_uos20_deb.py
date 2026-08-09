@@ -249,8 +249,18 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         for setting in required_rendering_settings:
             if setting not in launcher_text:
                 errors.append(f"UOS launcher is missing software-rendering setting: {setting}")
-        if "GTK_IM_MODULE=xim" not in launcher_text:
-            errors.append("UOS launcher must use the XIM input-method bridge")
+        required_gtk_isolation_settings = (
+            'GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0"',
+            "unset GTK_MODULES GTK3_MODULES",
+            "NO_AT_BRIDGE=1",
+            "GTK_IM_MODULE=gtk-im-context-simple",
+            "GDK_CORE_DEVICE_EVENTS=1",
+        )
+        for setting in required_gtk_isolation_settings:
+            if setting not in launcher_text:
+                errors.append(f"UOS launcher is missing private-GTK isolation setting: {setting}")
+        if 'GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0:/usr/' in launcher_text:
+            errors.append("UOS launcher must not load target-system GTK modules")
 
     runtime_manifests = [
         path for path in app_root.rglob("manifest.json") if path.parent.name == "runtime"
@@ -274,7 +284,8 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         "minimumSystemGlibc": "2.28",
         "privateGlibcVersion": "2.35",
         "renderingMode": "private-mesa-llvmpipe",
-        "inputMethodMode": "xim",
+        "inputMethodMode": "gtk-im-context-simple",
+        "inputEventMode": "x11-core",
         "depends": depends,
         "deb": {
             "filename": deb.name,

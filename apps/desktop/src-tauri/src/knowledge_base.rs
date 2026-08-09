@@ -79,14 +79,14 @@ struct StoredChunk {
     embedding: Vec<f32>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_knowledge_bases(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<KnowledgeBaseSummary>, String> {
     list_knowledge_bases_at(&paths.workspace_root)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_knowledge_base(
     name: String,
     description: String,
@@ -95,7 +95,7 @@ pub(crate) fn create_knowledge_base(
     create_knowledge_base_at(&paths.workspace_root, &name, &description)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_knowledge_base(
     knowledge_base_id: String,
     paths: State<'_, AppPaths>,
@@ -119,7 +119,7 @@ pub(crate) fn delete_knowledge_base(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_knowledge_base_sources(
     knowledge_base_id: String,
     paths: State<'_, AppPaths>,
@@ -127,7 +127,7 @@ pub(crate) fn list_knowledge_base_sources(
     list_sources_at(&paths.workspace_root, &knowledge_base_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn import_knowledge_base_files(
     knowledge_base_id: String,
     source_paths: Vec<String>,
@@ -145,7 +145,7 @@ pub(crate) fn import_knowledge_base_files(
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn import_knowledge_base_directory(
     knowledge_base_id: String,
     directory_path: String,
@@ -172,7 +172,7 @@ pub(crate) fn import_knowledge_base_directory(
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn add_knowledge_base_text(
     knowledge_base_id: String,
     title: String,
@@ -189,7 +189,7 @@ pub(crate) fn add_knowledge_base_text(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn add_knowledge_base_url(
     knowledge_base_id: String,
     url: String,
@@ -252,7 +252,7 @@ pub(crate) fn add_knowledge_base_url(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_knowledge_base_source(
     knowledge_base_id: String,
     source_id: String,
@@ -286,7 +286,7 @@ pub(crate) fn delete_knowledge_base_source(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn search_knowledge_base(
     knowledge_base_ids: Vec<String>,
     query: String,

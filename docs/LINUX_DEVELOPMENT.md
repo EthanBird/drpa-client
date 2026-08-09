@@ -300,7 +300,7 @@ Ubuntu 22.04 生成的普通 AppImage 和现代 deb 不能在 UOS 20 上直接�
 - 使用 `patchelf` 给 AppDir 中每个 x86_64 动态 ELF 写入 `/opt/drpa-next-uos20/uos-runtime/ld-linux-x86-64.so.2`；
 - 给每个动态 ELF 写入传递型 `DT_RPATH`，覆盖桌面 Host、WebKit 子进程、Python/uv、生成 venv、Python 原生扩展和 Chrome；
 - 启动器只设置 GTK/AppDir 环境，不导出全局 `LD_LIBRARY_PATH`，避免 UOS 自带的 `xdg-open`、文件管理器或 shell 错误加载私有 libc；
-- 启动器固定 `GTK_IM_MODULE=xim`，阻止私有 Ubuntu GTK 在输入框获得焦点时加载 UOS/Deepin 的系统 IBus/Fcitx GTK 模块；保留目标系统的 `XMODIFIERS`，中文输入仍经 XIM 服务进入应用；
+- 启动器把 `GTK_PATH` 限定到包内目录，清除 `GTK_MODULES` / `GTK3_MODULES` 并关闭跨用户态 AT-SPI bridge；默认使用 GTK 内置 `gtk-im-context-simple` 与 `GDK_CORE_DEVICE_EVENTS=1`，阻止 UOS/Deepin 的 Fcitx/XIM/辅助功能模块进入私有 Ubuntu GTK；
 - WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup、Python/Jupyter、uv 和 Chrome 全部来自应用包，不安装系统 `libwebkit2gtk-4.1-0`；
 - UOS 专用包不再加载目标机的 EGL/GL/厂商 DRI：GBM、通用 `libdrm.so.2`、GLVND、Mesa EGL/GL、swrast/kms_swrast、llvmpipe 及其 LLVM 闭包均私有携带；launcher 强制软件渲染，只有内核与 X11 server 来自系统。这是针对 Fantasy II-M 上 WebKitWebProcess 因 swrast 缺失和 `EGL_NOT_INITIALIZED` 退出的兼容策略。
 
@@ -434,14 +434,14 @@ cargo check -p drpa-desktop
 
 ### 点击输入框后页面冻结，但窗口仍能移动
 
-这是私有 Ubuntu GTK 与目标系统输入法 GTK 模块混用时的高风险边界：输入框聚焦才会创建输入法上下文，因此首屏可以正常显示，而 WebView 的页面事件随后全部失去响应。UOS launcher 必须保留 `GTK_IM_MODULE=xim`，不得改回自动发现，也不得把 UOS 系统目录中的 IBus/Fcitx `.so` 复制进私有 GTK。排查时先确认：
+这是私有 Ubuntu GTK 与目标系统 GTK/Fcitx/AT-SPI 模块混用时的高风险边界：输入框聚焦或控件创建辅助对象时才会建立输入上下文和 D-Bus bridge，因此首屏可以正常显示，而 WebView 的页面事件随后停滞。UOS launcher 必须保持包内模块路径、内置简单输入上下文和 X11 core events，不得把 UOS 系统目录拼回 `GTK_PATH`。排查时先确认：
 
 ```bash
-grep -F 'GTK_IM_MODULE=xim' /usr/bin/drpa-next
+grep -E 'GTK_PATH=|GTK_IM_MODULE=|GDK_CORE_DEVICE_EVENTS=|GTK_MODULES|NO_AT_BRIDGE' /usr/bin/drpa-next
 pgrep -a -f 'drpa-desktop|WebKitNetworkProcess|WebKitWebProcess|WebKitGPUProcess'
 ```
 
-发布门禁必须看到 `drpa-uos20-input-ready.json` 中 `nativeInputTyped`、`postInputClick` 和 `ipcRoundTrip` 都为 `true`；仅看到窗口或 NetworkProcess 存活不能证明输入路径可用。
+发布门禁必须看到 `drpa-uos20-host-environment.txt` 已清除系统 GTK modules，并且 `drpa-uos20-input-ready.json` 中 `nativeInputTyped`、`postInputClick` 和 `ipcRoundTrip` 都为 `true`；仅看到窗口或 NetworkProcess 存活不能证明输入路径可用。安全输入上下文不连接桌面输入法服务，UOS 端复杂文字可通过剪贴板输入；重新开放原生中文预编辑前必须把与私有 GTK 匹配的输入法模块纳入闭包并增加实体机门禁。
 
 ### 运行环境页面提示找不到封装运行时
 

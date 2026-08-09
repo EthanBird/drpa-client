@@ -1419,7 +1419,7 @@ fn handle_service_connection(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_vault_status(
     manager: State<'_, CredentialVaultManager>,
     paths: State<'_, AppPaths>,
@@ -1427,7 +1427,7 @@ pub(crate) fn get_vault_status(
     manager.status(&paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn begin_vault_setup(
     manager: State<'_, CredentialVaultManager>,
     paths: State<'_, AppPaths>,
@@ -1435,7 +1435,7 @@ pub(crate) fn begin_vault_setup(
     manager.begin_setup(&paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn complete_vault_setup(
     setup_id: String,
     code: String,
@@ -1445,7 +1445,7 @@ pub(crate) fn complete_vault_setup(
     manager.complete_setup(&paths, &setup_id, &code)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn unlock_vault(
     code: String,
     manager: State<'_, CredentialVaultManager>,
@@ -1454,7 +1454,7 @@ pub(crate) fn unlock_vault(
     manager.unlock_totp(&paths, &code)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn unlock_vault_with_recovery(
     recovery_code: String,
     manager: State<'_, CredentialVaultManager>,
@@ -1463,12 +1463,12 @@ pub(crate) fn unlock_vault_with_recovery(
     manager.unlock_recovery(&paths, &recovery_code)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn lock_vault(manager: State<'_, CredentialVaultManager>) -> Result<(), String> {
     manager.lock()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_vault_credentials(
     manager: State<'_, CredentialVaultManager>,
     paths: State<'_, AppPaths>,
@@ -1476,7 +1476,7 @@ pub(crate) fn list_vault_credentials(
     manager.list_credentials(&paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_vault_credential(
     id: String,
     manager: State<'_, CredentialVaultManager>,
@@ -1485,7 +1485,7 @@ pub(crate) fn get_vault_credential(
     manager.get_credential(&paths, &id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_vault_credential(
     input: VaultCredentialInput,
     manager: State<'_, CredentialVaultManager>,
@@ -1494,7 +1494,7 @@ pub(crate) fn save_vault_credential(
     manager.save_credential(&paths, input)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_vault_credential(
     id: String,
     manager: State<'_, CredentialVaultManager>,
@@ -1503,7 +1503,7 @@ pub(crate) fn delete_vault_credential(
     manager.delete_credential(&paths, &id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn start_vault_service(
     port: u16,
     manager: State<'_, CredentialVaultManager>,
@@ -1512,14 +1512,14 @@ pub(crate) fn start_vault_service(
     manager.start_service(port, paths.inner().clone())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn stop_vault_service(
     manager: State<'_, CredentialVaultManager>,
 ) -> Result<VaultServiceStatus, String> {
     manager.stop_service()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn export_vault_recovery_code(
     recovery_code: String,
     target_path: String,

@@ -243,14 +243,14 @@ const fn default_tool_timeout() -> u64 {
     30
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_agent_workspace_config(
     paths: State<'_, AppPaths>,
 ) -> Result<AgentWorkspaceConfig, String> {
     load_workspace_config(&paths.workspace_root)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn write_agent_workspace_document(
     document: String,
     content: String,
@@ -265,12 +265,12 @@ pub(crate) fn write_agent_workspace_document(
     write_bounded_text(&target, &content)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn read_agent_skill(name: String, paths: State<'_, AppPaths>) -> Result<String, String> {
     read_skill_for_agent(&paths.workspace_root, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn read_agent_skill_package(
     name: String,
     paths: State<'_, AppPaths>,
@@ -278,7 +278,7 @@ pub(crate) fn read_agent_skill_package(
     read_skill_package(&paths.workspace_root, &name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn write_agent_skill(
     name: String,
     content: String,
@@ -287,7 +287,7 @@ pub(crate) fn write_agent_skill(
     write_skill_for_agent(&paths.workspace_root, &name, &content)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn write_agent_skill_package(
     name: String,
     manifest_yaml: String,
@@ -302,7 +302,7 @@ pub(crate) fn write_agent_skill_package(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn read_agent_skill_file(
     name: String,
     relative_path: String,
@@ -312,7 +312,7 @@ pub(crate) fn read_agent_skill_file(
     read_bounded_text(&path, MAX_DOCUMENT_BYTES)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn write_agent_skill_file(
     name: String,
     relative_path: String,
@@ -333,7 +333,7 @@ pub(crate) fn write_agent_skill_file(
     write_bounded_text(&path, &content)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_agent_skill_directory(
     name: String,
     relative_path: String,
@@ -346,7 +346,7 @@ pub(crate) fn create_agent_skill_directory(
     fs::create_dir_all(path).map_err(|error| format!("创建 Skill 目录失败：{error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn rename_agent_skill_path(
     name: String,
     relative_path: String,
@@ -366,7 +366,7 @@ pub(crate) fn rename_agent_skill_path(
     fs::rename(source, target).map_err(|error| format!("重命名 Skill 路径失败：{error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_agent_skill_path(
     name: String,
     relative_path: String,
@@ -385,7 +385,7 @@ pub(crate) fn delete_agent_skill_path(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_agent_skill(name: String, paths: State<'_, AppPaths>) -> Result<(), String> {
     ensure_agent_workspace(&paths.workspace_root)?;
     validate_skill_name(&name)?;

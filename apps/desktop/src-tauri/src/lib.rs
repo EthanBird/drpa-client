@@ -527,7 +527,7 @@ fn report_ui_input_ready() -> Result<(), String> {
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn install_package(
     archive_path: String,
     state: State<'_, HostState>,
@@ -537,7 +537,7 @@ fn install_package(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn uninstall_package(package_id: String, state: State<'_, HostState>) -> Result<(), String> {
     state
         .uninstall_package(&package_id)
@@ -660,7 +660,7 @@ fn cancel_run(
     processes.cancel(&run_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_run_detail(
     run_id: String,
     state: State<'_, HostState>,
@@ -670,7 +670,7 @@ fn get_run_detail(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_run_output_directory(
     run_id: String,
     state: State<'_, HostState>,
@@ -695,7 +695,7 @@ fn open_run_output_directory(
     open_directory_in_file_explorer(&output)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_studio_projects(paths: State<'_, AppPaths>) -> Result<Vec<StudioProject>, String> {
     let projects_root = paths.workspace_root.join("projects");
     fs::create_dir_all(&projects_root).map_err(|error| error.to_string())?;
@@ -721,7 +721,7 @@ fn list_studio_projects(paths: State<'_, AppPaths>) -> Result<Vec<StudioProject>
     Ok(projects)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_studio_project(
     name: String,
     paths: State<'_, AppPaths>,
@@ -775,7 +775,7 @@ fn create_studio_project(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn rename_studio_project(
     project_id: String,
     name: String,
@@ -838,7 +838,7 @@ fn rename_studio_project(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn read_project_file(
     project_id: String,
     relative_path: String,
@@ -856,7 +856,7 @@ fn read_project_file(
     .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn write_project_file(
     project_id: String,
     relative_path: String,
@@ -876,7 +876,7 @@ fn write_project_file(
     fs::write(target, content).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_project_directory(
     project_id: String,
     relative_path: String,
@@ -894,7 +894,7 @@ fn create_project_directory(
     .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn rename_project_entry(
     project_id: String,
     relative_path: String,
@@ -922,7 +922,7 @@ fn rename_project_entry(
     fs::rename(source, target).map_err(|error| format!("重命名失败：{error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_project_entry(
     project_id: String,
     relative_path: String,
@@ -945,7 +945,7 @@ fn delete_project_entry(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_studio_project(
     project_id: String,
     kernels: State<'_, StudioKernelManager>,
@@ -964,7 +964,7 @@ fn delete_studio_project(
     fs::remove_dir_all(project_root).map_err(|error| format!("删除开发项目失败：{error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_project_file(
     project_id: String,
     source_path: String,
@@ -1000,12 +1000,12 @@ fn import_project_file(
     Ok(relative_output.to_string_lossy().replace('\\', "/"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn build_studio_project(project_id: String, paths: State<'_, AppPaths>) -> Result<String, String> {
     build_studio_project_inner(&project_id, &paths).map(|path| path.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn install_studio_project(
     project_id: String,
     paths: State<'_, AppPaths>,
@@ -1088,7 +1088,7 @@ async fn run_studio_project(
     Ok(run_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_installed_package(
     package_id: String,
     paths: State<'_, AppPaths>,
@@ -1519,14 +1519,14 @@ fn get_agent_run(
     runs.snapshot(&request_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_agent_extensions(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<agent_extensions::AgentExtensionSummary>, String> {
     agent_extensions::list_extensions(&paths.workspace_root)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn install_agent_extension(
     package_path: String,
     paths: State<'_, AppPaths>,
@@ -1534,7 +1534,7 @@ fn install_agent_extension(
     agent_extensions::install_extension(&paths.workspace_root, &package_path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_agent_extension_enabled(
     extension_id: String,
     enabled: bool,
@@ -1543,7 +1543,7 @@ fn set_agent_extension_enabled(
     agent_extensions::set_extension_enabled(&paths.workspace_root, &extension_id, enabled)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_agent_extension(extension_id: String, paths: State<'_, AppPaths>) -> Result<(), String> {
     agent_extensions::remove_extension(&paths.workspace_root, &extension_id)
 }
@@ -1604,7 +1604,7 @@ async fn invoke_plugin_tool(
     .map_err(|error| format!("插件工具后台任务失败：{error}"))?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn restart_studio_kernel(
     project_id: String,
     kernels: State<'_, StudioKernelManager>,
@@ -1623,7 +1623,7 @@ fn get_data_directory(paths: State<'_, AppPaths>) -> String {
     paths.workspace_root.to_string_lossy().into_owned()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_workspace_data_directory(paths: State<'_, AppPaths>) -> Result<(), String> {
     fs::create_dir_all(&paths.workspace_root).map_err(|error| error.to_string())?;
     open_directory_in_file_explorer(&paths.workspace_root)
@@ -1645,7 +1645,7 @@ const USER_DATA_DIRECTORIES: &[&str] = &[
     "system",
 ];
 
-#[tauri::command]
+#[tauri::command(async)]
 fn export_user_data(
     target_path: String,
     paths: State<'_, AppPaths>,
@@ -1765,7 +1765,7 @@ fn export_user_data(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_user_data(
     source_path: String,
     app: tauri::AppHandle,
@@ -1875,7 +1875,7 @@ fn import_user_data(
     result
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_build_output_directory(paths: State<'_, AppPaths>) -> Result<(), String> {
     let build_root = paths.workspace_root.join("build");
     fs::create_dir_all(&build_root).map_err(|error| error.to_string())?;
@@ -2059,7 +2059,7 @@ struct WindowsInstallCatalog {
     update_protocol: u32,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_windows_update(
     package_path: String,
     host: State<'_, HostState>,
@@ -2300,7 +2300,7 @@ fn apply_windows_update(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_windows_update_status(
     session_id: String,
     paths: State<'_, AppPaths>,
@@ -2317,7 +2317,7 @@ fn get_windows_update_status(
     serde_json::from_str(&source).map_err(|error| format!("更新进度数据无效：{error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_latest_windows_update_status(
     paths: State<'_, AppPaths>,
 ) -> Result<Option<WindowsUpdateStatus>, String> {
@@ -2354,7 +2354,7 @@ fn get_latest_windows_update_status(
         .map_err(|error| format!("最近更新状态无效：{error}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn restart_for_windows_update(
     session_id: String,
     app: tauri::AppHandle,
@@ -2452,7 +2452,7 @@ fn version_is_at_least(current: &str, minimum: &str) -> bool {
         .is_some_and(|(current, minimum)| current >= minimum)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_runtime_status(paths: State<'_, AppPaths>) -> Result<RuntimeStatus, String> {
     inspect_runtime_status(&paths)
 }
@@ -2504,14 +2504,14 @@ fn get_platform_capabilities() -> PlatformCapabilities {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn initialize_runtime(paths: State<'_, AppPaths>) -> Result<RuntimeStatus, String> {
     let runtime = locate_runtime(&paths)?;
     verify_runtime_imports(&runtime)?;
     inspect_runtime_status(&paths)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn repair_runtime(
     paths: State<'_, AppPaths>,
     kernels: State<'_, StudioKernelManager>,

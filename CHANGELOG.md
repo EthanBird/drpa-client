@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### UOS 交互与插件服务
+
+- UOS 固定根启动器彻底隔离目标系统的 GTK/Fcitx/AT-SPI 动态模块，使用 GTK 内置简单输入上下文与 X11 core events，修复 UOS 20 Professional 1070 中输入框、弹窗、工作区菜单及多数自定义控件聚焦后页面停滞的问题。
+- UOS 门禁注入 DDE 风格的 `GTK_MODULES`、`GTK3_MODULES`、Fcitx 和系统 `GTK_PATH` 污染，并读取真实 Host 进程环境确认启动器完成清理。
+- Dify2API 启动前检测监听端口；遇到旧 sidecar 或其他本机进程占用时自动分配并保存新端口。Linux 子服务绑定父进程生命周期，启动错误会附带已脱敏的 stdout/stderr 摘要。
+- 自动化、流程设计、Agent、知识库、插件、凭据保险箱、工作区与数据库等业务 Tauri command 改为异步调度，避免文件、SQLite、加密和进程操作占用 GTK/WebKit 主线程；新增静态策略测试防止同步 command 回归。
+
 ## [2.0.4] - 2026-08-09
 
 ### BI 与工作区状态

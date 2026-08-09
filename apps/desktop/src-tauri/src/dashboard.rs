@@ -118,12 +118,12 @@ fn default_true() -> bool {
     true
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_bi_dashboard(paths: State<'_, AppPaths>) -> Result<DashboardDocument, String> {
     load_document(&paths.workspace_root)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_bi_dashboard(
     document: DashboardDocument,
     paths: State<'_, AppPaths>,
@@ -131,7 +131,7 @@ pub(crate) fn save_bi_dashboard(
     save_document(&paths.workspace_root, document)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn reset_bi_dashboard(paths: State<'_, AppPaths>) -> Result<DashboardDocument, String> {
     save_document(&paths.workspace_root, default_document())
 }

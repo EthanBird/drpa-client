@@ -603,7 +603,7 @@ impl Drop for RunningGuard {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_automation_plans(
     paths: State<'_, AppPaths>,
     manager: State<'_, SchedulerManager>,
@@ -623,7 +623,7 @@ pub(crate) fn list_automation_plans(
     Ok(store.plans)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_automation_plan(
     input: AutomationPlanInput,
     paths: State<'_, AppPaths>,
@@ -660,7 +660,7 @@ pub(crate) fn create_automation_plan(
     Ok(plan)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn update_automation_plan(
     input: AutomationPlanInput,
     paths: State<'_, AppPaths>,
@@ -695,7 +695,7 @@ pub(crate) fn update_automation_plan(
     Ok(updated)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_automation_plan(
     plan_id: String,
     paths: State<'_, AppPaths>,
@@ -719,7 +719,7 @@ pub(crate) fn delete_automation_plan(
     save_plan_store(&paths.workspace_root, &store)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn set_automation_plan_enabled(
     plan_id: String,
     enabled: bool,
@@ -746,7 +746,7 @@ pub(crate) fn set_automation_plan_enabled(
     Ok(updated)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn run_automation_plan_now(
     plan_id: String,
     app: AppHandle,
@@ -779,7 +779,7 @@ pub(crate) fn run_automation_plan_now(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_automation_runs(
     plan_id: Option<String>,
     limit: Option<usize>,

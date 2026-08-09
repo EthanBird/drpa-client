@@ -131,6 +131,8 @@ Workbench / Studio
   → Host state / run history / UI
 ```
 
+Tauri 的同步 command 会直接占用桌面主线程。凡是涉及文件、SQLite、加解密、子进程、网络或运行时探测的业务入口，都必须声明为 `#[tauri::command(async)]`，并让 Tauri 调度到异步 worker；纯内存状态读取和窗口瞬时操作才保留同步入口。`tools/linux/tests/test_tauri_command_policy.py` 固化自动化、Local Dify、Agent、知识库、插件、凭据、工作区等模块的这一约束，新增 command 时必须同步纳入策略测试。
+
 兼容性规则：
 
 - 协议字段只增不删时，新增字段应提供默认值。
@@ -247,7 +249,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 - `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查；Ubuntu 目前只做到 Host 编译，没有 GUI/runtime 最终包验收。
 - `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
 - `.github/workflows/desktop-release.yml`：仅在手工运行或 `release(windows):` 提交时组合 runtime、WebView2、Host、JCode、示例和 NSIS 全量安装器。
-- `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `2.0.4-1` 与 UOS deb `2.0.4-1+uos20.3`，验证 sealed runtime、私有 WebKitGTK/Mesa llvmpipe 闭包、XIM 输入桥，以及 Debian 10 与 Deepin 20.8/glibc 2.28 的真实输入点击/键入/后续交互、React/IPC、Dify2API 健康检查、非白屏 UI、卸载和发布资产；可见文字组件由有系统字体的 Debian 10 门禁负责。
+- `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `2.0.4-1` 与 UOS deb `2.0.4-1+uos20.3`，验证 sealed runtime、私有 WebKitGTK/Mesa llvmpipe 闭包、GTK 模块隔离与 X11 core input，以及 Debian 10 与 Deepin 20.8/glibc 2.28 的真实输入点击/键入/后续交互、React/IPC、Dify2API 健康检查、非白屏 UI、卸载和发布资产；可见文字组件由有系统字体的 Debian 10 门禁负责。
 
 发布前检查：
 

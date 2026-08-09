@@ -683,7 +683,7 @@ pub(crate) async fn list_plugins(
         .map_err(|error| format!("插件扫描后台任务失败：{error}"))?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn install_plugin(
     package_path: String,
     paths: State<'_, AppPaths>,
@@ -697,7 +697,7 @@ pub(crate) fn install_plugin(
         .ok_or_else(|| "插件安装完成但无法重新读取".to_owned())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_plugin_config(
     plugin_id: String,
     mut config: Value,
@@ -720,7 +720,7 @@ pub(crate) fn save_plugin_config(
     write_plugin_state(&root, &state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn set_plugin_enabled(
     plugin_id: String,
     enabled: bool,
@@ -737,7 +737,7 @@ pub(crate) fn set_plugin_enabled(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn stop_plugin(
     plugin_id: String,
     paths: State<'_, AppPaths>,
@@ -746,7 +746,7 @@ pub(crate) fn stop_plugin(
     stop_plugin_inner(&paths.workspace_root, &plugin_id, &manager)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn uninstall_plugin(
     plugin_id: String,
     paths: State<'_, AppPaths>,
@@ -769,7 +769,7 @@ pub(crate) fn uninstall_plugin(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_plugin_logs(
     plugin_id: String,
     paths: State<'_, AppPaths>,
@@ -868,7 +868,7 @@ pub(crate) async fn list_plugin_projects(
         .map_err(|error| format!("插件项目扫描后台任务失败：{error}"))?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn create_plugin_project(
     plugin_id: String,
     name: String,
@@ -961,7 +961,7 @@ pub(crate) fn create_plugin_project(
         .ok_or_else(|| "插件项目创建后读取失败".to_owned())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn validate_plugin_project(
     plugin_id: String,
     paths: State<'_, AppPaths>,
@@ -975,7 +975,7 @@ pub(crate) fn validate_plugin_project(
         .ok_or_else(|| "插件项目不存在".to_owned())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn build_plugin_project(
     plugin_id: String,
     paths: State<'_, AppPaths>,
@@ -1058,9 +1058,16 @@ fn start_plugin_process(
     if plugin_id == "dify2api" {
         secure_dify2api_config(&mut state.config)?;
     }
+    refresh_processes(manager)?;
+    let any_service_running = services.iter().try_fold(false, |running, service| {
+        service_is_running(workspace_root, plugin_id, &service.id, manager)
+            .map(|service_running| running || service_running)
+    })?;
+    if plugin_id == "dify2api" && !any_service_running {
+        ensure_dify2api_listen_address_available(&mut state.config)?;
+    }
     state.enabled = true;
     write_plugin_state(&root, &state)?;
-    refresh_processes(manager)?;
     let log_buffer = {
         let mut logs = manager
             .inner
@@ -1174,6 +1181,7 @@ fn start_plugin_service(
         .env("DRPA_PLUGIN_CONFIG", &config_path)
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8");
+    configure_plugin_child_lifetime(&mut command);
     hide_child_window(&mut command);
     let mut child = command
         .spawn()
@@ -1664,7 +1672,7 @@ fn wait_for_plugin_health(
     let http = ureq::Agent::new_with_config(config);
     let process_key = plugin_service_process_key(workspace_root, plugin_id, service_id);
     loop {
-        {
+        let exited_code = {
             let mut processes = manager
                 .inner
                 .processes
@@ -1681,11 +1689,24 @@ fn wait_for_plugin_health(
                 .map_err(|error| error.to_string())?
             {
                 processes.remove(&process_key);
-                return Err(format!(
-                    "插件 {plugin_id} 的服务 {service_id} 启动失败，进程退出码 {}",
-                    status.code().unwrap_or(-1)
-                ));
+                Some(status.code().unwrap_or(-1))
+            } else {
+                None
             }
+        };
+        if let Some(code) = exited_code {
+            // stdout/stderr are drained on dedicated threads. Give a short-lived
+            // process enough time to publish its final diagnostic before returning.
+            thread::sleep(Duration::from_millis(80));
+            let excerpt =
+                plugin_service_log_excerpt(workspace_root, plugin_id, service_id, manager);
+            return Err(if excerpt.is_empty() {
+                format!("插件 {plugin_id} 的服务 {service_id} 启动失败，进程退出码 {code}")
+            } else {
+                format!(
+                    "插件 {plugin_id} 的服务 {service_id} 启动失败，进程退出码 {code}；诊断：{excerpt}"
+                )
+            });
         }
         if health.kind == "process" || http.get(&health.endpoint).call().is_ok() {
             return Ok(());
@@ -2455,6 +2476,40 @@ fn secure_dify2api_config(config: &mut Value) -> Result<bool, String> {
         changed = true;
     }
     Ok(changed)
+}
+
+fn ensure_dify2api_listen_address_available(config: &mut Value) -> Result<bool, String> {
+    let values = config
+        .as_object_mut()
+        .ok_or_else(|| "dify2api 配置根节点必须是 object".to_owned())?;
+    let listen_address = values
+        .get("listen_addr")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "dify2api listen_addr 配置缺失".to_owned())?
+        .to_owned();
+    match std::net::TcpListener::bind(&listen_address) {
+        Ok(listener) => {
+            drop(listener);
+            Ok(false)
+        }
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                .map_err(|error| format!("为 dify2api 重新分配本地端口失败：{error}"))?;
+            let port = listener
+                .local_addr()
+                .map_err(|error| format!("读取 dify2api 新端口失败：{error}"))?
+                .port();
+            values.insert(
+                "listen_addr".to_owned(),
+                Value::String(format!("127.0.0.1:{port}")),
+            );
+            drop(listener);
+            Ok(true)
+        }
+        Err(error) => Err(format!(
+            "检查 dify2api 监听地址 {listen_address} 失败：{error}"
+        )),
+    }
 }
 
 fn run_plugin_debugger_inner(
@@ -3276,6 +3331,45 @@ fn write_bytes_if_different(path: &Path, content: &[u8]) -> Result<(), String> {
     fs::write(path, content).map_err(|error| error.to_string())
 }
 
+fn plugin_service_log_excerpt(
+    workspace_root: &Path,
+    plugin_id: &str,
+    service_id: &str,
+    manager: &PluginManager,
+) -> String {
+    let manager_key = plugin_manager_key(workspace_root, plugin_id);
+    let lines = manager
+        .inner
+        .logs
+        .lock()
+        .ok()
+        .and_then(|logs| logs.get(&manager_key).cloned());
+    let Some(lines) = lines else {
+        return String::new();
+    };
+    let Ok(lines) = lines.lock() else {
+        return String::new();
+    };
+    let mut excerpt = lines
+        .iter()
+        .rev()
+        .filter(|line| line.service_id == service_id && !line.message.trim().is_empty())
+        .take(6)
+        .map(|line| format!("{}: {}", line.stream, line.message.trim()))
+        .collect::<Vec<_>>();
+    excerpt.reverse();
+    let mut excerpt = excerpt.join(" | ");
+    if excerpt.len() > 1_200 {
+        let mut boundary = 1_200;
+        while !excerpt.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        excerpt.truncate(boundary);
+        excerpt.push('…');
+    }
+    excerpt
+}
+
 fn prepare_service_execution_entry(
     plugin_id: &str,
     root: &Path,
@@ -3322,6 +3416,29 @@ fn staged_builtin_dify2api_execution_entry() -> Result<PathBuf, String> {
         })
         .clone()
 }
+
+#[cfg(target_os = "linux")]
+fn configure_plugin_child_lifetime(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    let expected_parent = std::process::id() as libc::pid_t;
+    // SAFETY: prctl/getppid/raise are async-signal-safe syscalls executed in the
+    // post-fork child. No shared Rust state is accessed from the closure.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::getppid() != expected_parent {
+                libc::raise(libc::SIGTERM);
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_plugin_child_lifetime(_command: &mut Command) {}
 
 #[cfg(unix)]
 fn ensure_executable(path: &Path) -> Result<(), String> {
@@ -3959,15 +4076,16 @@ default_config:
 
     #[test]
     fn starts_builtin_service_and_waits_for_its_healthcheck() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
+        // Keep the configured port occupied to reproduce a stale sidecar left by
+        // an interrupted prior desktop process. Startup must move to a free port.
+        let occupied_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let occupied_port = occupied_listener.local_addr().unwrap().port();
         let workspace = std::env::temp_dir().join(format!("drpa-plugin-start-{}", Uuid::new_v4()));
         ensure_plugins_root(&workspace).unwrap();
         let root = plugins_root(&workspace).join("dify2api");
         let manifest = load_manifest_from_root(&root, Some("dify2api")).unwrap();
         let mut config = manifest.default_config.clone();
-        config["listen_addr"] = json!(format!("127.0.0.1:{port}"));
+        config["listen_addr"] = json!(format!("127.0.0.1:{occupied_port}"));
         config["dify_api_key"] = json!("test-dify-api-key");
         secure_dify2api_config(&mut config).unwrap();
         write_plugin_state(
@@ -3996,7 +4114,15 @@ default_config:
         }
         let plugins = list_plugins_inner(&workspace, &manager).unwrap();
         assert_eq!(plugins[0].status, "running");
-        assert_eq!(plugins[0].endpoint, format!("http://127.0.0.1:{port}/v1"));
+        assert_ne!(
+            plugins[0].endpoint,
+            format!("http://127.0.0.1:{occupied_port}/v1")
+        );
+        let reassigned_state = read_plugin_state(&root, &manifest).unwrap();
+        assert_ne!(
+            reassigned_state.config["listen_addr"],
+            json!(format!("127.0.0.1:{occupied_port}"))
+        );
         let debug = run_plugin_debugger_inner(&workspace, "dify2api", "health", None).unwrap();
         assert_eq!(debug.status, 200);
 
@@ -4008,6 +4134,7 @@ default_config:
         start_autostart_plugins(&workspace, None, &manager).unwrap();
         assert!(service_is_running(&workspace, "dify2api", "gateway", &manager).unwrap());
         stop_plugin_inner(&workspace, "dify2api", &manager).unwrap();
+        drop(occupied_listener);
         let _ = fs::remove_dir_all(workspace);
     }
 
@@ -4121,6 +4248,29 @@ default_config:
             serialized.pointer("/event/req_id").and_then(Value::as_str),
             Some("req-1")
         );
+    }
+
+    #[test]
+    fn service_failure_excerpt_truncates_utf8_at_a_character_boundary() {
+        let workspace = std::env::temp_dir().join(format!("drpa-plugin-log-{}", Uuid::new_v4()));
+        let manager = PluginManager::default();
+        let key = plugin_manager_key(&workspace, "dify2api");
+        manager.inner.logs.lock().unwrap().insert(
+            key,
+            Arc::new(Mutex::new(VecDeque::from([PluginLogLine {
+                timestamp: 1,
+                stream: "stderr".to_owned(),
+                message: "启动失败".repeat(400),
+                service_id: "gateway".to_owned(),
+                event: None,
+            }]))),
+        );
+
+        let excerpt = plugin_service_log_excerpt(&workspace, "dify2api", "gateway", &manager);
+
+        assert!(excerpt.ends_with('…'));
+        assert!(excerpt.len() <= 1_203);
+        assert!(excerpt.is_char_boundary(excerpt.len()));
     }
 
     #[test]

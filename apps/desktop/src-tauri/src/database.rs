@@ -88,7 +88,7 @@ pub(crate) struct DatabaseQueryResult {
     statement_type: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_workspace_database_info(
     paths: State<'_, AppPaths>,
 ) -> Result<DatabaseInfo, String> {
@@ -105,14 +105,14 @@ pub(crate) fn get_workspace_database_info(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_database_tables(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<DatabaseTable>, String> {
     list_tables_at(&workspace_database_path(&paths))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn describe_database_table(
     table_name: String,
     paths: State<'_, AppPaths>,
@@ -120,7 +120,7 @@ pub(crate) fn describe_database_table(
     describe_table_at(&workspace_database_path(&paths), &table_name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn execute_database_sql(
     sql: String,
     paths: State<'_, AppPaths>,
@@ -128,19 +128,19 @@ pub(crate) fn execute_database_sql(
     execute_sql_at(&workspace_database_path(&paths), &sql)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_database_schema_context(paths: State<'_, AppPaths>) -> Result<String, String> {
     schema_context_at(&workspace_database_path(&paths))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_remote_database_profiles(
     paths: State<'_, AppPaths>,
 ) -> Result<Vec<RemoteDatabaseProfile>, String> {
     load_remote_profiles(&remote_profiles_path(&paths))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_remote_database_profile(
     profile: RemoteDatabaseProfile,
     paths: State<'_, AppPaths>,
@@ -248,7 +248,7 @@ pub(crate) async fn execute_dashboard_database_query(
     agent_execute_read_only_query(&paths.workspace_root, &profile_id, &password, &sql).await
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn delete_remote_database_profile(
     profile_id: String,
     paths: State<'_, AppPaths>,
@@ -400,7 +400,7 @@ pub(crate) async fn get_remote_database_schema_context(
     result
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn open_workspace_database_directory(paths: State<'_, AppPaths>) -> Result<(), String> {
     let directory = workspace_database_path(&paths)
         .parent()

@@ -18,7 +18,7 @@
 
 `1.0.0-2+uos20.2` 修复了 EGL/swrast 白屏，React、IPC 与 WebKitWebProcess 也都通过，但固定 Deepin 20.8 镜像的截图完全没有文字。旧像素门禁只检查整图颜色数与灰度方差，图表和卡片足以让它误判通过；该版本同样被 `uos20.3` 取代。
 
-真实 UOS 的系统字体已经由用户确认正常；`uos20.3` 不把字体重复塞进 deb。Debian 10 测试镜像能匹配 Noto CJK，承担可读文字截图门禁；固定 Deepin 20.8 镜像虽然请求安装字体包，但其 fontconfig 仍没有可用字体，因此只验收非白屏布局、WebKit 进程和真实输入后的页面响应，并明确记录 `font_available=0`。该修订的产品修复是输入法：私有 Ubuntu GTK 自动选择 UOS IBus/Fcitx D-Bus 模块时，首次聚焦输入框可能让 WebView 事件循环失去响应，因此 UOS launcher 固定走系统 XIM 桥。
+真实 UOS 的系统字体已经由用户确认正常；`uos20.3` 不把字体重复塞进 deb。Debian 10 测试镜像能匹配 Noto CJK，承担可读文字截图门禁；固定 Deepin 20.8 镜像虽然请求安装字体包，但其 fontconfig 仍没有可用字体，因此只验收非白屏布局、WebKit 进程和真实输入后的页面响应，并明确记录 `font_available=0`。后续实体机复核发现只切换到 XIM 仍会连接 DDE/Fcitx，并且系统 `GTK_MODULES`、AT-SPI 或 XInput2 也可在控件聚焦时进入私有 Ubuntu GTK。当前启动器因此采用完整 GTK 模块隔离和 core input，而不是继续把 XIM 当作最终修复。
 
 ## 1. 目标环境与兼容性声明
 
@@ -229,17 +229,21 @@ launcher 同时设置 `DRPA_UI_REDUCED_EFFECTS=1`。Host 通过平台能力协�
 
 当前 launcher 固定 `GDK_BACKEND=x11`，自动化用 Xvfb 验证 X11 启动。Wayland/DDE 混合环境尚未成为发布硬门禁；如果未来开放 Wayland backend，必须保留 X11 回归并新增真实 Wayland 会话测试。
 
-### 8.4 输入法隔离
+### 8.4 GTK 输入与动态模块隔离
 
-UOS 包包含 Ubuntu 22.04 的私有 GTK/WebKitGTK，但目标桌面可能运行 Deepin 定制 IBus 或 Fcitx。让 GTK 自动探测输入法时，第一次聚焦 `<input>`/`textarea` 会加载或连接目标系统的 D-Bus IM 模块；混合两代 GTK/GLib 用户态后可能阻塞 WebKit 输入上下文，表现为窗口仍能拖动、页面内所有点击和键盘事件却全部失效。
+UOS 包包含 Ubuntu 22.04 的私有 GTK/WebKitGTK，但目标桌面可能运行 Deepin 定制 IBus/Fcitx、AT-SPI 和 XInput2。第一次聚焦 `<input>`/`textarea`、打开下拉框或创建辅助对象时才会加载输入法/辅助功能模块；混合两代 GTK/GLib 用户态后可能阻塞 WebKit 输入上下文，表现为窗口仍能拖动、页面内按钮、输入框和 Tauri IPC 入口却全部停滞。
 
 launcher 因此设置：
 
 ```sh
-export GTK_IM_MODULE=xim
+export GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0"
+unset GTK_MODULES GTK3_MODULES
+export NO_AT_BRIDGE=1
+export GTK_IM_MODULE=gtk-im-context-simple
+export GDK_CORE_DEVICE_EVENTS=1
 ```
 
-它不覆盖系统 `XMODIFIERS`，而是通过 X11/XIM 使用 DDE/Fcitx 提供的输入服务，避免把系统 IBus/Fcitx GTK 模块加载进私有 GTK 进程。若未来改回 `ibus` 或 `fcitx`，必须把匹配私有 GTK 版本的 IM module 与服务协议纳入包内闭包，并重新通过原生 X11 输入门禁。
+`GTK_PATH` 不再包含 `/usr/lib/.../gtk-3.0`；会话注入的 `GTK_MODULES` / `GTK3_MODULES` 被清除，AT-SPI bridge 不跨用户态连接，GTK 使用内置 simple context，GDK 只消费 X11 core events。默认模式优先保证全部业务控件和 IPC 持续可用；复杂文字可通过剪贴板输入。若未来开放 `ibus`、`fcitx` 或 XIM 原生预编辑，必须把匹配私有 GTK 版本的模块与服务协议纳入包内闭包，并在真实 UOS/DDE 会话重新通过输入、下拉框、弹窗、工作区创建和 IPC 门禁。
 
 ## 9. 可复现构建
 
@@ -291,7 +295,7 @@ python tools/linux/build_uos20_deb.py \
 2. 复制 AppDir 到 `/opt/drpa-next-uos20` 对应的包根；
 3. 给应用 ELF 写入私有 interpreter 与传递型 RPATH；
 4. 复制固定 glibc/C++/NSS、GLVND/Mesa EGL、swrast/kms_swrast，并递归补齐 llvmpipe/LLVM 等 `DT_NEEDED`；
-5. 生成固定 XIM 输入桥的软件渲染 launcher、desktop entry、图标和文档；
+5. 生成隔离系统 GTK 模块、固定 simple input/core events 的软件渲染 launcher、desktop entry、图标和文档；
 6. 写入包内 `uos-runtime-manifest.json`；
 7. 生成 Debian control 和 `Installed-Size`；
 8. 使用 `dpkg-deb --root-owner-group -Zxz -z6` 压缩产物。
@@ -316,7 +320,7 @@ python tools/linux/verify_uos20_deb.py \
 - `Depends` 不得出现系统 WebKitGTK/JavaScriptCoreGTK/GTK、libstdc++6、`libgcc-s1`、`libgbm1`、`libdrm2`、`libegl1` 或 `libgl1`；
 - 私有 loader、glibc、C++、NSS、GBM、libdrm、X11、音频和字体关键文件存在；
 - 私有 GBM/libdrm 具备必需符号，GLVND/Mesa EGL、swrast/kms_swrast 与 vendor manifest 完整；
-- launcher 明确设置 `GTK_IM_MODULE=xim`，不让私有 GTK 自动选择 UOS 的 D-Bus IM 模块；
+- launcher 把 `GTK_PATH` 限定到包内，清除 `GTK_MODULES` / `GTK3_MODULES`，设置 `NO_AT_BRIDGE=1`、`GTK_IM_MODULE=gtk-im-context-simple` 与 `GDK_CORE_DEVICE_EVENTS=1`；
 - 所有应用动态 ELF 的 RPATH 完整且为 `DT_RPATH`；
 - 所有带 interpreter 的应用 ELF 指向固定私有 loader；
 - 实际 ELF 数量与包内 provenance manifest 一致；
@@ -353,9 +357,10 @@ docker run --rm --volume /tmp/uos-diagnostics:/diagnostics drpa-next-uos20-smoke
 10. 前端成功取得 workspace snapshot，等待两次 `requestAnimationFrame` 后通过 Tauri IPC 写入 `reactMounted=true` 与 `ipcRoundTrip=true` 就绪标记；
 11. `WebKitWebProcess` 在标记产生后仍存活，日志不得包含 `EGL_NOT_INITIALIZED`、无法创建 EGL display、swrast 加载失败或 `Aborting`；
 12. Host 写出 Linux Dify2API sidecar 后，以普通用户启动真实服务并要求 `/healthz` 返回 `service=dify2api`；日志和健康响应作为诊断资产保存；
-13. `xdotool` 用真实 X11 事件打开命令面板、物理点击输入框、逐键输入 `drpa-input-smoke`、关闭面板并点击侧栏按钮；前端必须在后续点击 300ms 后仍能通过 Tauri IPC 写出 `nativeInputTyped=true`、`postInputClick=true` marker；
-14. 捕获 1280×800 Xvfb 根窗口截图：始终要求至少 32 色；有字体时灰度标准差必须不低于 0.03，顶部 1100×100 文字区在 30% 灰度阈值下必须有至少 0.2% 深色像素、至少 5 个连通组件且最大组件不超过 500 像素；无字体的最小镜像要求灰度标准差不低于 0.01，并必须同时通过第 13 项原生输入 marker；
-15. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
+13. 启动前注入 DDE 风格的 Fcitx、系统 `GTK_PATH`、`GTK_MODULES=gail:atk-bridge` 与 `GTK3_MODULES=atk-bridge`，启动后读取 Host `/proc/.../environ`，确认启动器已清理系统模块并启用 simple input/core events；
+14. `xdotool` 用真实 X11 事件打开命令面板、物理点击输入框、逐键输入 `drpa-input-smoke`、关闭面板并点击侧栏按钮；前端必须在后续点击 300ms 后仍能通过 Tauri IPC 写出 `nativeInputTyped=true`、`postInputClick=true` marker；
+15. 捕获 1280×800 Xvfb 根窗口截图：始终要求至少 32 色；有字体时灰度标准差必须不低于 0.03，顶部 1100×100 文字区在 30% 灰度阈值下必须有至少 0.2% 深色像素、至少 5 个连通组件且最大组件不超过 500 像素；无字体的最小镜像要求灰度标准差不低于 0.01，并必须同时通过第 14 项原生输入 marker；
+16. `dpkg --remove drpa-next` 后，测试数据哨兵仍存在。
 
 Debian 10 镜像不会安装系统 WebKitGTK 4.1；截图工具间接带入的系统 Mesa DRI 目录会在启动应用前被移走，从而证明软件渲染闭包确实来自 deb。Deepin 20.8 镜像固定到不可变 SHA-256 digest，用于覆盖与 UOS 同代的发行版用户态；即使镜像本身带 Mesa，launcher 的私有 RPATH、DRI 路径和 EGL vendor manifest 仍会固定到包内闭包。两次测试始终上传 PNG、视觉指标、React/IPC marker、WebKit 进程树、X11 window tree 和完整日志。
 
@@ -418,9 +423,9 @@ git diff --check
 | Docker 构建前磁盘只剩几十 MB | AppImage、Cargo target、两个 deb 工作树并存 | 先 stage 9 项最终资产，再清理构建树和缓存 |
 | CI 构建成功但目标机仍失败 | 只做编译或静态检查，没有旧用户态运行 | 增加 Debian 10/glibc 2.28 真实安装、Chrome、X11 门禁 |
 | 页面卡片和图表可见但没有任何文字 | 最小 Deepin 测试镜像没有可用系统字体，旧门禁又只看整图方差 | 不把目标系统字体重复塞进 deb；由 Debian 10 严格检查文字，Deepin 明确记录 `font_available=0` 并只验收布局、WebKit 和真实输入响应；实体 UOS 单独人工确认字体 |
-| 聚焦任意输入框后页面点击全部失效，但窗口仍可拖动 | 私有 Ubuntu GTK 自动连接 UOS 的 IBus/Fcitx D-Bus IM 模块，WebKit 输入上下文阻塞 | UOS launcher 固定 `GTK_IM_MODULE=xim`；用真实 X11 点击、键入、后续点击与延迟 IPC 门禁覆盖 |
+| 聚焦输入框、打开弹窗或点击自定义控件后页面事件停滞 | 私有 Ubuntu GTK 仍通过 XIM、系统 `GTK_PATH`、`GTK_MODULES`、AT-SPI 或 XInput2 接入 UOS/DDE 用户态 | UOS launcher 只允许包内 GTK 模块，清除会话 modules，使用 simple input 与 X11 core events；门禁主动注入污染环境后验证 Host `/proc`、真实点击、键入和延迟 IPC |
 | 连续访问多个业务页面后点击越来越慢或停滞 | 所有已访问 React 页面都以隐藏 DOM 常驻，旧 WebKit 的 `inert` 焦点树与 llvmpipe 模糊合成持续累积 | 只保留 BI、Studio、知识文档三个草稿型工作区；其余页面离开即释放；隐藏面不再使用 `inert`；UOS 启用低成本视觉配置 |
-| Dify2API 显示已启用但服务启动失败 | 纯 executable 插件被错误绑定到 Python 初始化，或用户数据分区使用 `noexec`，或 loopback 健康检查继承了系统代理 | executable 服务跳过 Python 初始化；内置 sidecar 从会话级 `0700` 执行缓存启动；Host 的 loopback 请求关闭代理；Debian 10/Deepin 门禁运行真实 `/healthz` |
+| Dify2API 显示已启用但 gateway 以退出码 1 停止 | 纯 executable 插件被错误绑定到 Python 初始化、用户数据分区使用 `noexec`、loopback 健康检查继承系统代理，或上次异常退出残留 sidecar 占用端口 | executable 服务跳过 Python 初始化；sidecar 从会话级 `0700` 缓存启动并绑定父进程生命周期；Host 关闭 loopback 代理，端口冲突时自动保存新端口，错误附带脱敏 stderr；Debian 10/Deepin 门禁运行真实 `/healthz` |
 
 遇到新缺库时，不要立即把目标机的任意 `.so` 复制进包。先确认它属于普通用户态闭包还是显卡/内核 ABI 边界，再更新构建器、验证器和测试；对 `dlopen` 模块还要补完整的数据/校验伴随文件。
 
