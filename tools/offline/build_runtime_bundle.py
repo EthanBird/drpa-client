@@ -18,8 +18,20 @@ from typing import Any
 
 try:
     from tools.offline.validate_requirements import validate_requirements
+    from tools.offline.rpa_for_python import (
+        build_rpa_engine,
+        build_source_wheels,
+        load_rpa_spec,
+        write_binary_requirements,
+    )
 except ModuleNotFoundError:  # Direct script execution adds tools/offline to sys.path.
     from validate_requirements import validate_requirements
+    from rpa_for_python import (
+        build_rpa_engine,
+        build_source_wheels,
+        load_rpa_spec,
+        write_binary_requirements,
+    )
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -100,7 +112,12 @@ def browser_executable(stage: Path, chrome_platform: str) -> Path:
     return paths[chrome_platform]
 
 
-def create_wheelhouse_lock(stage: Path, platform_id: str, python_version: str) -> None:
+def create_wheelhouse_lock(
+    stage: Path,
+    platform_id: str,
+    python_version: str,
+    source_builds: list[dict[str, Any]] | None = None,
+) -> None:
     wheelhouse = stage / "wheelhouse"
     wheels = sorted(wheelhouse.glob("*.whl"))
     if not wheels:
@@ -137,6 +154,7 @@ def create_wheelhouse_lock(stage: Path, platform_id: str, python_version: str) -
         "pythonTag": f"cp{python_version.split('.')[0]}{python_version.split('.')[1]}",
         "requirementsSha256": sha256(REQUIREMENTS),
         "wheels": entries,
+        "sourceBuilds": source_builds or [],
     }
     (stage / "wheelhouse-lock.json").write_text(
         json.dumps(lock, indent=2) + "\n",
@@ -227,14 +245,27 @@ def smoke_test(stage: Path, chrome_platform: str) -> None:
         f"p.get({marker.resolve().as_uri()!r});"
         "assert p.title=='DRPA_OFFLINE_OK', p.title;"
         "p.quit();"
-        "import drpa_runner,pandas,openpyxl,xlwt,requests,docx,pptx,pypdf,reportlab;"
-        "from drpa_runner import document_worker,agent_mcp;"
+        "import drpa_runner,pandas,openpyxl,xlwt,requests,docx,pptx,pypdf,reportlab,rpa,tagui;"
+        "from drpa_runner import document_worker,agent_mcp,python_flow;"
         "from drpa_runner.context import RuntimeContext; assert agent_mcp.TOOL_DEFINITIONS;"
         "assert hasattr(RuntimeContext,'open_output_directory');"
         "assert document_worker.PROTOCOL_VERSION==1;"
+        "assert python_flow.SCHEMA_VERSION==1;"
+        "import os; assert tagui.tagui_location()==os.environ['DRPA_RPA_HOME'];"
         "print('DRPA offline smoke test passed')"
     )
-    run([str(python), "-c", smoke_script], env={**offline_env, "DRPA_BROWSER_PATH": str(browser)})
+    rpa_bundle = stage / "rpa" / "rpa_python.zip"
+    if not rpa_bundle.is_file():
+        raise RuntimeError(f"RPA for Python offline engine is missing: {rpa_bundle}")
+    run(
+        [str(python), "-c", smoke_script],
+        env={
+            **offline_env,
+            "DRPA_BROWSER_PATH": str(browser),
+            "DRPA_RPA_HOME": str(stage.parent / "rpa-smoke-home"),
+            "DRPA_RPA_BUNDLE": str(rpa_bundle),
+        },
+    )
     kernel_input = "\n".join(
         [
             json.dumps({"type": "execute", "request_id": "one", "code": "value = 40\nprint('ready')"}),
@@ -261,6 +292,7 @@ def smoke_test(stage: Path, chrome_platform: str) -> None:
 
 def build(platform_id: str, work_dir: Path) -> Path:
     spec = load_spec()
+    rpa_spec = load_rpa_spec()
     requirement_errors = validate_requirements(REQUIREMENTS)
     if requirement_errors:
         raise RuntimeError("invalid sealed requirements:\n" + "\n".join(requirement_errors))
@@ -276,7 +308,7 @@ def build(platform_id: str, work_dir: Path) -> Path:
     stage = work_dir / bundle_name
     if stage.exists():
         shutil.rmtree(stage)
-    for directory in (stage / "python", stage / "tools", stage / "wheelhouse", stage / "locks", stage / "browser"):
+    for directory in (stage / "python", stage / "tools", stage / "wheelhouse", stage / "locks", stage / "browser", stage / "rpa"):
         directory.mkdir(parents=True, exist_ok=True)
 
     uv_source = Path(shutil.which("uv") or "")
@@ -290,10 +322,14 @@ def build(platform_id: str, work_dir: Path) -> Path:
     managed_env["UV_PYTHON_INSTALL_DIR"] = str(stage / "python")
     run([str(uv_source), "python", "install", spec["pythonVersion"]], env=managed_env)
 
-    run([sys.executable, "-m", "pip", "download", "--only-binary=:all:", "--dest", str(stage / "wheelhouse"), "--requirement", str(REQUIREMENTS)])
+    binary_requirements = work_dir / "runtime-binary-only.txt"
+    write_binary_requirements(REQUIREMENTS, binary_requirements, rpa_spec)
+    run([sys.executable, "-m", "pip", "download", "--only-binary=:all:", "--dest", str(stage / "wheelhouse"), "--requirement", str(binary_requirements)])
+    source_builds = build_source_wheels(stage, work_dir, rpa_spec)
     run([str(uv_source), "build", str(RUNTIME_PROJECT), "--out-dir", str(stage / "wheelhouse")])
     shutil.copy2(REQUIREMENTS, stage / "locks" / "runtime.txt")
-    create_wheelhouse_lock(stage, platform_id, spec["pythonVersion"])
+    shutil.copy2(SPEC_PATH.parent / "rpa-for-python.json", stage / "locks" / "rpa-for-python.json")
+    create_wheelhouse_lock(stage, platform_id, spec["pythonVersion"], source_builds)
     for bootstrap in BOOTSTRAP.iterdir():
         if bootstrap.is_file():
             copied = stage / bootstrap.name
@@ -309,6 +345,7 @@ def build(platform_id: str, work_dir: Path) -> Path:
         chrome_archive,
     )
     safe_extract_zip(chrome_archive, stage / "browser")
+    build_rpa_engine(stage, work_dir, platform_id, rpa_spec)
     create_inventory(stage, spec, platform_id, chrome_platform)
     smoke_test(stage, chrome_platform)
     return archive_bundle(stage, work_dir / "out", target["archive"])

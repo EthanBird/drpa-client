@@ -42,6 +42,7 @@ mod local_dify_workflow;
 mod native_splash;
 mod plugins;
 mod provider;
+mod python_flow;
 mod system_metrics;
 mod workspaces;
 
@@ -726,11 +727,18 @@ fn create_studio_project(
     name: String,
     paths: State<'_, AppPaths>,
 ) -> Result<StudioProject, String> {
+    create_studio_project_in_workspace(&name, &paths.workspace_root)
+}
+
+fn create_studio_project_in_workspace(
+    name: &str,
+    workspace_root: &Path,
+) -> Result<StudioProject, String> {
     if name.trim().is_empty() {
         return Err("项目名称不能为空".to_owned());
     }
     let (project_id, package_id) = generated_project_ids(name.trim());
-    let root = paths.workspace_root.join("projects").join(&project_id);
+    let root = workspace_root.join("projects").join(&project_id);
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let yaml_name = serde_json::to_string(name.trim()).map_err(|error| error.to_string())?;
     let manifest = format!(
@@ -764,15 +772,126 @@ fn create_studio_project(
 "##,
     )
     .map_err(|error| error.to_string())?;
+    ensure_studio_project_readme(&root, name.trim())?;
     Ok(StudioProject {
         id: project_id,
         name: name.trim().to_owned(),
         files: vec![
+            "README.md".to_owned(),
             "main.py".to_owned(),
             "manifest.yaml".to_owned(),
             "notebook.ipynb".to_owned(),
         ],
     })
+}
+
+fn studio_project_readme(project_name: &str) -> String {
+    let project_name = escape_markdown_text(project_name);
+    format!(
+        r#"# {project_name}
+
+> DRPA Studio 为本项目生成的 AI 开发入口。代码、清单与本文档共同构成项目上下文。
+
+## AI 开发入口
+
+开始分析或修改前，按顺序阅读：`manifest.yaml` → `main.py` → `README.md`。先确认包契约和入口，再规划实现；不要只根据文件名猜测行为。
+
+## RPAZ schema 2 约定
+
+- `manifest.yaml` 必须保留 `schema: 2`，并维护稳定的 `id`、`version`、Python `entrypoint`、`capabilities` 与 `parameters`。
+- `main.py` 必须提供清单声明的 callable，默认签名为 `main(ctx)`；模块导入阶段避免执行网络、浏览器、数据库或文件写入。
+- 参数来自 manifest，代码通过 `ctx.params` 读取；新增能力时同步收紧或补充 capabilities。
+
+## ctx 默认能力
+
+- `ctx.params`：读取任务配置参数。
+- `ctx.log`：输出结构化运行日志。
+- `ctx.progress(...)`：实时报告 0–100 的进度和当前阶段。
+- `ctx.output_file(...)`：在隔离输出目录创建并登记产物。
+- `ctx.open_output_directory()`：按任务参数决定是否展示输出目录。
+- `ctx.sql`：访问工作区 SQLite，使用参数化 SQL 和事务。
+- `ctx.browser(...)`：连接 DRPA 管理的可复用 DrissionPage 浏览器会话。
+- `ctx.invoke(...)`：按包 ID 调用已安装 RPAZ 包；保持参数和返回值可序列化。
+
+## 离线依赖
+
+- 目标用户环境默认离线。代码只使用 DRPA sealed runtime 中已经锁定并随平台交付的依赖，不在运行代码中调用 pip，也不依赖系统 Python。
+- RPA for Python 已由平台运行时提供，自动化代码使用 `import rpa as r` 引入；项目自身不执行在线安装。
+- 新增平台级 Python 依赖时，更新 DRPA 源码仓库中的 `offline/requirements/runtime.txt` 与对应运行时构建锁，然后重新构建、验证并发布全量 sealed runtime。
+- Windows 与 UOS/Linux 均需验证 Python 3.11 ABI，代码应避免写死解释器、浏览器及工作区绝对路径。
+
+## 测试与导出
+
+1. 在 Studio 使用“直接运行”验证当前工作副本，修复 manifest、入口和参数问题。
+2. 运行最小参数、边界参数与失败路径，检查实时日志、进度、产物和工作区 SQLite 变更。
+3. 对纯函数和外部接口适配层补充测试；外部服务使用可替换夹具，确保离线测试可重复。
+4. 点击“导出 RPAZ”，安装生成包；再到运行工作台创建任务配置，执行“预检并保存”和试运行。
+
+## Python Flow 协作约定
+
+- Python 源码是业务逻辑和执行行为的唯一事实源（SSOT）；Python Flow 只承载可视化编排、节点位置和源码映射元数据，不维护第二套隐式业务逻辑。
+- 把可视化步骤拆成命名稳定、输入输出显式的函数，由 `main(ctx)` 负责薄编排；避免隐藏全局状态、动态 `exec` 和导入期副作用。
+- AI 修改函数名、参数或返回结构时，同步更新对应节点映射；可视化编辑回写代码后，重新格式化、预检并运行测试。
+- 手写代码与生成代码都应保留清晰边界。遇到无法映射的 Python 语义时保留为“代码节点”，不要静默丢弃行为。
+"#
+    )
+}
+
+fn ensure_studio_project_readme(root: &Path, project_name: &str) -> Result<(), String> {
+    let readme = root.join("README.md");
+    if !readme.is_file() {
+        fs::write(readme, studio_project_readme(project_name))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn escape_markdown_text(value: &str) -> String {
+    let normalized = value
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}'
+                )
+            {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut escaped = String::with_capacity(normalized.len());
+    for character in normalized.chars() {
+        if matches!(
+            character,
+            '\\' | '`'
+                | '*'
+                | '_'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '<'
+                | '>'
+                | '('
+                | ')'
+                | '#'
+                | '+'
+                | '-'
+                | '.'
+                | '!'
+                | '|'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 #[tauri::command(async)]
@@ -1119,6 +1238,7 @@ fn open_installed_package(
         )
         .map_err(|error| error.to_string())?;
     }
+    ensure_studio_project_readme(&target, &manifest.name)?;
     let mut files = Vec::new();
     collect_project_entries(&target, &target, &mut files).map_err(|error| error.to_string())?;
     files.sort();
@@ -1987,6 +2107,7 @@ struct RuntimeEnvironment {
     python: PathBuf,
     python_path: Option<PathBuf>,
     browser: Option<PathBuf>,
+    rpa_bundle: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -2536,8 +2657,11 @@ fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKerne
         python,
         python_path,
         browser,
+        rpa_bundle,
     } = locate_runtime(paths)?;
     let project_root = paths.workspace_root.join("projects").join(project_id);
+    fs::create_dir_all(paths.workspace_root.join("rpa-python"))
+        .map_err(|error| format!("准备 RPA for Python 工作目录失败：{error}"))?;
     let mut command = Command::new(python);
     command
         .args(["-m", "drpa_runner.kernel"])
@@ -2552,12 +2676,16 @@ fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKerne
         .env(
             "DRPA_BROWSER_PROFILE_ROOT",
             paths.workspace_root.join("browser").join("drissionpage"),
-        );
+        )
+        .env("DRPA_RPA_HOME", paths.workspace_root.join("rpa-python"));
     if let Some(python_path) = python_path {
         command.env("PYTHONPATH", python_path);
     }
     if let Some(browser) = browser {
         command.env("DRPA_BROWSER_PATH", browser);
+    }
+    if let Some(rpa_bundle) = rpa_bundle {
+        command.env("DRPA_RPA_BUNDLE", rpa_bundle);
     }
     configure_linux_process_group(&mut command);
     hide_child_window(&mut command);
@@ -2591,6 +2719,8 @@ fn execute_python_run(
     }
     let runtime = locate_runtime(paths)?;
     fs::create_dir_all(&launch.output_dir).map_err(|error| error.to_string())?;
+    fs::create_dir_all(paths.workspace_root.join("rpa-python"))
+        .map_err(|error| format!("准备 RPA for Python 工作目录失败：{error}"))?;
     let run_root = launch
         .output_dir
         .parent()
@@ -2633,12 +2763,16 @@ fn execute_python_run(
         .env(
             "DRPA_BROWSER_PROFILE_ROOT",
             paths.workspace_root.join("browser").join("drissionpage"),
-        );
+        )
+        .env("DRPA_RPA_HOME", paths.workspace_root.join("rpa-python"));
     if let Some(python_path) = runtime.python_path {
         command.env("PYTHONPATH", python_path);
     }
     if let Some(browser) = runtime.browser {
         command.env("DRPA_BROWSER_PATH", browser);
+    }
+    if let Some(rpa_bundle) = runtime.rpa_bundle {
+        command.env("DRPA_RPA_BUNDLE", rpa_bundle);
     }
     configure_linux_process_group(&mut command);
     hide_child_window(&mut command);
@@ -2795,6 +2929,7 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
             python: PathBuf::from(python),
             python_path: std::env::var_os("DRPA_RUNTIME_PYTHONPATH").map(PathBuf::from),
             browser: std::env::var_os("DRPA_BROWSER_PATH").map(PathBuf::from),
+            rpa_bundle: std::env::var_os("DRPA_RPA_BUNDLE").map(PathBuf::from),
         });
     }
 
@@ -2812,6 +2947,11 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
                 &root,
                 &manifest.browser_executable,
             )?),
+            rpa_bundle: root
+                .join("rpa")
+                .join("rpa_python.zip")
+                .is_file()
+                .then(|| root.join("rpa").join("rpa_python.zip")),
         });
     }
 
@@ -2829,6 +2969,7 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
                 },
                 python_path: Some(source),
                 browser: std::env::var_os("DRPA_BROWSER_PATH").map(PathBuf::from),
+                rpa_bundle: std::env::var_os("DRPA_RPA_BUNDLE").map(PathBuf::from),
             });
         }
     }
@@ -2919,7 +3060,7 @@ fn verify_runtime_imports(runtime: &RuntimeEnvironment) -> Result<(), String> {
         .args([
             "-I",
             "-c",
-            "import drpa_runner, DrissionPage, ipykernel, jupyter_client; from drpa_runner import agent_mcp; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert agent_mcp.TOOL_DEFINITIONS; print('DRPA_RUNTIME_OK')",
+            "import drpa_runner, DrissionPage, ipykernel, jupyter_client, rpa, tagui; from drpa_runner import agent_mcp, python_flow; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert agent_mcp.TOOL_DEFINITIONS; assert python_flow.SCHEMA_VERSION == 1; print('DRPA_RUNTIME_OK')",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -3441,6 +3582,9 @@ pub fn run() {
             execute_studio_cell,
             complete_studio_python,
             inspect_studio_python,
+            python_flow::parse_python_flow,
+            python_flow::render_python_flow,
+            python_flow::validate_python_flow,
             restart_studio_kernel,
             database::get_workspace_database_info,
             database::list_database_tables,
@@ -3686,6 +3830,58 @@ mod tests {
         assert_eq!(entries, vec!["main.py", "src/", "src/helper.py"]);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn new_studio_project_contains_ai_development_readme() {
+        let workspace_root =
+            std::env::temp_dir().join(format!("drpa-studio-template-test-{}", Uuid::new_v4()));
+        let project_name = "AI # 演示\n`项目`";
+
+        let project = create_studio_project_in_workspace(project_name, &workspace_root).unwrap();
+        let project_root = workspace_root.join("projects").join(&project.id);
+        let readme = fs::read_to_string(project_root.join("README.md")).unwrap();
+
+        assert!(project.files.contains(&"README.md".to_owned()));
+        assert!(readme.starts_with("# AI \\# 演示 \\`项目\\`\n"));
+        assert_eq!(readme.matches("# AI \\# 演示 \\`项目\\`").count(), 1);
+        for required in [
+            "`manifest.yaml` → `main.py` → `README.md`",
+            "RPAZ schema 2",
+            "`ctx.params`",
+            "`ctx.log`",
+            "`ctx.progress(...)`",
+            "`ctx.output_file(...)`",
+            "`ctx.open_output_directory()`",
+            "`ctx.sql`",
+            "`ctx.browser(...)`",
+            "离线依赖",
+            "`import rpa as r`",
+            "RPA for Python",
+            "`offline/requirements/runtime.txt`",
+            "全量 sealed runtime",
+            "预检",
+            "导出 RPAZ",
+            "Python Flow",
+            "唯一事实源（SSOT）",
+        ] {
+            assert!(readme.contains(required), "README missing {required}");
+        }
+        assert!(!readme.contains("manifest 的 `dependencies`"));
+        assert!(!readme.contains("wheel 放入 RPAZ 约定目录"));
+
+        fs::write(project_root.join("README.md"), "# 用户文档\n").unwrap();
+        ensure_studio_project_readme(&project_root, project_name).unwrap();
+        assert_eq!(
+            fs::read_to_string(project_root.join("README.md")).unwrap(),
+            "# 用户文档\n"
+        );
+
+        let manifest = fs::read_to_string(project_root.join("manifest.yaml")).unwrap();
+        let parsed = PackageManifest::from_yaml(&manifest).unwrap();
+        assert_eq!(parsed.name, project_name);
+
+        let _ = fs::remove_dir_all(workspace_root);
     }
 
     #[test]

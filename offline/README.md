@@ -10,6 +10,7 @@ drpa-runtime-<version>-<platform>/
 ├── tools/uv[.exe]          固定版本的离线安装器
 ├── wheelhouse/             目标平台 cp311 完整 wheel closure
 ├── browser/                固定 Chrome for Testing
+├── rpa/                    RPA for Python 的平台 TagUI 离线闭包与资产锁
 ├── locks/runtime.txt       直接与传递依赖精确版本
 ├── wheelhouse-lock.json    实际 wheel 文件、大小、平台与 SHA-256
 ├── bootstrap_runtime.py    幂等离线环境初始化
@@ -34,10 +35,22 @@ drpa-runtime-<version>-<platform>/
 
 - 每一项直接和传递依赖都必须使用精确版本。
 - 禁止 VCS URL、直接下载 URL、editable、额外 index 和未固定版本。
-- 每个平台 runtime 只接受与 CPython 3.11、目标 OS 和目标架构匹配的二进制 wheel；不同平台的 wheelhouse 不得混用。
+- 每个平台 runtime 只接受与 CPython 3.11、目标 OS 和目标架构匹配的 wheel；不同平台的 wheelhouse 不得混用。上游只发布 sdist 的 `rpa==1.50.0` 与 `tagui==1.50.0` 是显式例外：构建器按 `rpa-for-python.json` 校验源包 SHA-256、应用离线路径补丁并生成可审计的纯 Python wheel，`wheelhouse-lock.json.sourceBuilds` 记录源与产物。
 - 构建器必须生成 `wheelhouse-lock.json`；最终桌面布局必须复核其中的每个文件大小和 SHA-256，并拒绝其他 OS 或 musl wheel 混入 glibc Linux 包。
 - 离线机器永远不通过 pip 联网补依赖。
-- 基础环境是经过策划的能力集合，不等于整个 PyPI；OCR、桌面自动化和本地 AI 等大型能力应拆成未来 runtime pack。
+- 基础环境是经过策划的能力集合，不等于整个 PyPI；RPA for Python 已作为默认自动化能力进入 baseline，其他 OCR 模型、额外桌面驱动和本地 AI 等大型能力仍应拆成 runtime pack。
+
+## RPA for Python 离线闭包
+
+`rpa-for-python.json` 固定四类输入：PyPI 的 `rpa`/`tagui` sdist、TagUI 平台归档、Tump 的 immutable commit、稳定 delta 文件与 Windows vcredist。构建器执行：
+
+1. 对 sdist 校验 SHA-256，不调用未锁定的在线构建后端，直接生成 `py3-none-any` wheel。
+2. 给 `tagui.py` 注入 `DRPA_RPA_HOME` 与 `DRPA_RPA_BUNDLE` 两个 Host 路径；普通项目仍使用官方 `import rpa as r` API。
+3. 解压目标平台 TagUI，覆盖固定 commit 的 delta，写入 `rpa_python_1.50.0` 标记，再生成 `rpa/rpa_python.zip`。
+4. 桌面 Host 将工作区级可写目录作为 RPA Home，将只读 runtime 资产作为 Bundle。首次 `r.init()` 从本地 ZIP 部署，不访问网络；之后复用工作区安装。
+5. `asset-lock.json`、`wheelhouse-lock.json`、runtime `manifest.json` 与 `SHA256SUMS` 共同记录源资产、补丁 wheel、最终离线包和逐文件散列。
+
+TagUI 本身与 DRPA 的 DrissionPage Chrome 是并列运行后端。Windows 归档携带 TagUI 官方 PHP 与 vcredist；Linux 的 TagUI shell 仍需要可用的 PHP CLI，UOS 发布验证需把该系统能力作为专门门禁。视觉自动化还依赖 Java、SikuliX、OpenCV/Tesseract，不在默认 smoke 中冒充已验证能力。
 
 本地政策检查：
 
@@ -52,13 +65,13 @@ python -m compileall -q tools/offline tools/linux offline/bootstrap runtime/pyth
 
 `.github/workflows/offline-runtime.yml`、Windows desktop release 和 `.github/workflows/linux-desktop.yml` 会在各自原生 runner 上：
 
-1. 只下载当前目标平台的 CPython 3.11 二进制 wheels。
+1. 下载当前目标平台的 CPython 3.11 wheels；对 RPA for Python 的两个锁定 sdist执行受控纯 Python wheel 构建。
 2. 构建 DRPA Python adapter wheel。
 3. 安装受控 CPython，复制固定 uv，下载固定 Chrome。
 4. 使用空 uv cache、`UV_OFFLINE=1`、`--offline --no-index --find-links` 创建全新环境。
 5. 运行依赖一致性检查。
 6. 用 DrissionPage 启动内置 Chrome 并访问本地 HTML。
-7. 导入 runtime、浏览器、数据、Excel、`ipykernel`、`jupyter_client`、`zmq` 和 `nbformat`。
+7. 导入 runtime、浏览器、数据、Excel、`rpa`、`tagui`、Python Flow、`ipykernel`、`jupyter_client`、`zmq` 和 `nbformat`，并确认 Host 管理的 RPA 路径生效。
 8. 启动真实 Jupyter/ZMQ Kernel，连续执行两个单元并验证状态和输出。
 9. 生成逐文件散列、wheelhouse lock、归档并上传 Actions artifact；Windows runtime workflow另行发布 prerelease。
 10. desktop build 再在最终安装/AppImage 解包结构中执行一次 bootstrap 和关键 import；Linux 还检查 Python、uv 与 Chrome 的可执行位。

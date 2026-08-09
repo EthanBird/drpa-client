@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "version": "1.50.0",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/tebelorg/RPA-Python",
+  "sourceDistributions": [
+    {
+      "name": "rpa",
+      "filename": "rpa-1.50.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/bd/47/95fb6e104741a873024dc1ad94b51fe52f903adc494e4b26102b0567494e/rpa-1.50.0.tar.gz",
+      "sha256": "28090ab66b930b0c7a604586714bdc6f6efc7b4df70cf4aa6f4e9c66409dbd24"
+    },
+    {
+      "name": "tagui",
+      "filename": "tagui-1.50.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/5f/83/40c6649935d6bd3a3f1ca8fec7711819514575a9cc4128fa253658abc9eb/tagui-1.50.0.tar.gz",
+      "sha256": "5ae59f774cb5f267ceeebd5c0738128154933009dc60bfe8deae76b27dd68cd2"
+    }
+  ],
+  "engineAssets": {
+    "windows-x86_64": {
+      "filename": "TagUI_Windows.zip",
+      "url": "https://github.com/tebelorg/Tump/releases/download/v1.0.0/TagUI_Windows.zip",
+      "bytes": 173968969,
+      "sha256": "a3f15c80506bcb3ff786997c5fe1de283be51cc1ff37a65f84f33825e9079953",
+      "taguiDirectory": "tagui",
+      "includeVcredist": true
+    },
+    "linux-x86_64": {
+      "filename": "TagUI_Linux.zip",
+      "url": "https://github.com/tebelorg/Tump/releases/download/v1.0.0/TagUI_Linux.zip",
+      "bytes": 158979569,
+      "sha256": "0f9d55291949cc4fcd76220030ed17ed44e48613b424572e91aab5f17dcd7119",
+      "taguiDirectory": "tagui",
+      "includeVcredist": false
+    },
+    "macos-arm64": {
+      "filename": "TagUI_macOS.zip",
+      "url": "https://github.com/tebelorg/Tump/releases/download/v1.0.0/TagUI_macOS.zip",
+      "bytes": 150471126,
+      "sha256": "f61bfbf35b692bf2721c4f5eb4bc9cb57b98bd698bdca4343caaac0d739dbc1e",
+      "taguiDirectory": "tagui",
+      "includeVcredist": false
+    },
+    "macos-x86_64": {
+      "filename": "TagUI_macOS.zip",
+      "url": "https://github.com/tebelorg/Tump/releases/download/v1.0.0/TagUI_macOS.zip",
+      "bytes": 150471126,
+      "sha256": "f61bfbf35b692bf2721c4f5eb4bc9cb57b98bd698bdca4343caaac0d739dbc1e",
+      "taguiDirectory": "tagui",
+      "includeVcredist": false
+    }
+  },
+  "deltaCommit": "b39e10b3b136ebfaf54460c2891ab0554b3aef93",
+  "deltaFiles": [
+    { "source": "TagUI-Python/tagui", "target": "src/tagui", "sha256": "ad511825090410192531b874567a42c6d5db48de491036103152365b323c4f0e", "executable": true },
+    { "source": "TagUI-Python/tagui.cmd", "target": "src/tagui.cmd", "sha256": "fbc3a194ee43d25afc12d23624451b907005d1d401785716d1ad48434c12cf11" },
+    { "source": "TagUI-Python/end_processes", "target": "src/end_processes", "sha256": "8f3a4f4abf8a18fad17ef8a0029bfc3fd2df5caa8b61fc87c77ce4de107cf14f", "executable": true },
+    { "source": "TagUI-Python/end_processes.cmd", "target": "src/end_processes.cmd", "sha256": "1c5ea3ed1d20dd0028329c7f61205a1dd9c70e951400b55428cb47136bc5f401" },
+    { "source": "TagUI-Python/tagui_header.js", "target": "src/tagui_header.js", "sha256": "c95be9261f8c3cbfbcf077e276829b28ab0203eb2ff81e07db53601f89ad89fa" },
+    { "source": "TagUI-Python/tagui_parse.php", "target": "src/tagui_parse.php", "sha256": "181ea04495cb705735af8fb80c80e539fcd65f8576e91bde1eb54605d06c0500" },
+    { "source": "TagUI-Python/tagui.sikuli/tagui.py", "target": "src/tagui.sikuli/tagui.py", "sha256": "340be1ac1536c595bf6bd55ceac0a50a04ca2625902d14803782c58485b58cdc" }
+  ],
+  "vcredist": {
+    "source": "vcredist_x86.exe",
+    "target": "vcredist_x86.exe",
+    "bytes": 5073240,
+    "sha256": "8162b2d665ca52884507ede19549e99939ce4ea4a638c537fa653539819138c8"
+  }
+}

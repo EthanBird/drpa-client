@@ -7,7 +7,7 @@ RPaz 是一个根目录包含 `manifest.yaml` 的 ZIP 文件。DRPA Next 的开�
 1. 打开“开发工作室”。
 2. 只输入项目名称。内部项目 ID 与清单 package ID 会自动由名称和随机盐计算，不需要手工遵守包名格式。
 3. 点击“新建项目”。
-4. 编辑 `main.py`、`manifest.yaml` 或 Jupyter 兼容的 `notebook.ipynb`。
+4. 先阅读自动生成的 `README.md`，再编辑 `main.py`、`manifest.yaml` 或 Jupyter 兼容的 `notebook.ipynb`。README 包含面向 AI Agent 的入口顺序、RPAZ 约束、`ctx` 能力、离线依赖和测试约定。
 5. 展开“运行参数”，填写 JSON 后点击“直接运行”；这会运行当前工作副本，不需要先构建或安装。
 6. 需要分发时点击“导出 RPAZ”。
 
@@ -19,8 +19,10 @@ RPaz 是一个根目录包含 `manifest.yaml` 的 ZIP 文件。DRPA Next 的开�
 
 ```text
 my-task/
+├── README.md
 ├── manifest.yaml
-└── main.py
+├── main.py
+└── notebook.ipynb
 ```
 
 `manifest.yaml`：
@@ -84,7 +86,44 @@ def main(ctx):
 
 完整说明见 [数据工作台与 `ctx.sql`](DATA_WORKBENCH.md)。
 
-脚本不应写死工作目录、解释器路径或浏览器路径，也不应自行调用 pip。离线依赖只能来自平台 sealed runtime 或包内经过锁定和校验的 wheel 集合。
+脚本不应写死工作目录、解释器路径或浏览器路径，也不应自行调用 pip。schema 2 项目只使用平台 sealed runtime 中经过锁定和验证的 wheelhouse；增加平台级依赖需要更新离线运行时构建锁并重新发布全量运行时。
+
+## RPA for Python
+
+sealed runtime 提供 [RPA for Python](https://github.com/tebelorg/RPA-Python)，项目使用官方导入方式：
+
+```python
+import rpa as r
+
+
+def main(ctx):
+    target = str(ctx.params.get("target", "https://example.test"))
+    r.init()
+    try:
+        r.url(target)
+        ctx.log.info("已打开：%s", target)
+        ctx.progress(100, "RPA for Python 流程完成")
+    finally:
+        r.close()
+```
+
+`rpa`/TagUI 与 `ctx.browser()`/DrissionPage 是两套并列的自动化 Adapter。前者适合采用 `click/type/read/snap` 等简洁动作的既有脚本，后者使用 DRPA 管理的持久 Chrome 会话。一个任务优先选择同一浏览器 Adapter，数据、参数、日志、进度和产物仍通过 `ctx` 进入 Host。
+
+最终用户环境按离线方式运行。项目代码不执行 `pip`、`r.pack()` 或在线 bootstrap；依赖和平台资产由 DRPA 全量 sealed runtime 的构建锁统一管理。
+
+## Python Flow（Beta）
+
+Python 文件页签右侧可在“代码”和“Python Flow”之间切换。Flow 使用 sealed Python 的 `ast` 静态解析当前 Monaco 内存缓冲区，识别：
+
+- 赋值、普通函数调用和返回；
+- `ctx.*`、`ctx.sql.*` 与 `ctx.browser(...)`；
+- `import rpa as r` 后的 `r.*` 调用；
+- `if`、`for`、`while`、`try/except/finally`；
+- 其他 Python 语句的原始代码节点。
+
+流程图支持节点拖拽、连线、自动布局、属性 JSON、撤销/重做、结构校验和源码预览。点击应用后先校验 Flow，再生成普通 Python 写回当前页签；使用 `Ctrl+S` 保存，随后继续“直接运行”或“导出 RPAZ”。源码是执行行为的唯一事实源，流程图不会建立另一套解释器。
+
+若在生成流程图后又修改了源码，界面会标记漂移；先从代码刷新流程，避免用旧图覆盖新代码。语法错误会返回文件名和行列。`with`、`match`、装饰器和其他首期未结构化语句作为原始代码整体保留。详细边界见 [Python Flow 架构](architecture/PYTHON_FLOW.md)。
 
 ## 手工构建
 

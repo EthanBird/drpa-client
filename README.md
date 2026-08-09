@@ -8,9 +8,10 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 
 - 中文默认界面，支持正常移动、缩放、最大化、最小化和关闭窗口。
 - 引导式、无注册表写入的 Windows NSIS 安装器；应用和用户数据均可放在非系统盘安装目录。
-- 内置 CPython 3.11、完整离线 wheels、Chrome for Testing、Fixed Version WebView2 和真实 Jupyter Kernel 依赖。
+- 内置 CPython 3.11、完整离线 wheels、RPA for Python/TagUI 平台闭包、Chrome for Testing、Fixed Version WebView2 和真实 Jupyter Kernel 依赖。
 - 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
-- 工作室可新建项目、通过 VS Code 风格多文件页签编辑源码和 Notebook，支持保存/全部保存/关闭/切换快捷键、脏页签确认、直接运行工作副本和导出 `.rpaz`，也可将已安装包复制为可编辑项目。
+- 工作室可新建项目、通过 VS Code 风格多文件页签编辑源码和 Notebook，支持保存/全部保存/关闭/切换快捷键、脏页签确认、直接运行工作副本和导出 `.rpaz`，也可将已安装包复制为可编辑项目；每个新项目自动生成面向 AI 协作的 `README.md`。
+- Python Flow（Beta）把 `main.py` 静态投影为可拖拽、连线、自动布局、校验和属性编辑的流程图，识别 `ctx`、RPA for Python、普通调用、条件、循环和异常；图形修改会生成普通 Python 并写回同一 Monaco 页签，原有运行与 RPAZ 导出链路保持唯一。
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路，并通过标准 `complete_request` / `inspect_request` 为 Python 文件和 Notebook 提供离线补全、悬停文档与参数提示。
 - 运行记录持久化到 Host SQLite；可进入详情查看完整时间线、筛选/复制日志、参数、产物、错误回溯和重启中断状态。
 - 内置自有数据工作台：工作区 SQLite、外部 SQLite、PostgreSQL/MySQL 与只读 Excel 工作簿数据源，对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；Excel sheet 会映射为可查询表，RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
@@ -102,6 +103,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - [UOS 20 构建与打包手册](docs/UOS20_PACKAGING.md)：glibc 2.28 兼容层、私有依赖、ELF 修补、容器门禁、故障复盘和实体机验收。
 - [功能扩展路线](docs/ROADMAP.md)：离线基础环境、自动化任务和 AI Agent 辅助开发。
 - [RPAZ 开发](docs/RPAZ_DEVELOPMENT.md)：schema v2、Runtime Context、直接运行和示例包。
+- [Python Flow 架构](docs/architecture/PYTHON_FLOW.md)：AST 投影、节点模型、源码往返、RPA for Python Adapter 与 RPAZ 演进边界。
 - [Jupyter 集成](docs/JUPYTER_INTEGRATION.md)：真实能力、VS Code Jupyter 对照和明确边界。
 - [数据工作台与 `ctx.sql`](docs/DATA_WORKBENCH.md)：SQLite 存储分层、Host API、脚本 API 与扩展约定。
 - [BI 主页架构](docs/architecture/BI_DASHBOARD.md)：仪表盘定义、数据适配器、只读查询和响应式栅格扩展约定。

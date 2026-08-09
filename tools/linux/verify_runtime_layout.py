@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path, PurePosixPath
 
 
@@ -57,14 +58,42 @@ def verify_runtime_layout(root: Path) -> list[str]:
         except ValueError as error:
             errors.append(str(error))
             continue
-        if not os.access(target, os.X_OK):
+        mode_is_executable = bool(target.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+        if not os.access(target, os.X_OK) or (os.name != "nt" and not mode_is_executable):
             errors.append(f"runtime executable lost its mode bits: {relative}")
 
-    for relative in ("bootstrap_runtime.py", "locks/runtime.txt"):
+    for relative in (
+        "bootstrap_runtime.py",
+        "locks/runtime.txt",
+        "locks/rpa-for-python.json",
+        "rpa/rpa_python.zip",
+        "rpa/asset-lock.json",
+    ):
         try:
             resolve_file(root, relative)
         except ValueError as error:
             errors.append(str(error))
+
+    try:
+        rpa_lock = json.loads((root / "rpa/asset-lock.json").read_text(encoding="utf-8"))
+        rpa_bundle = resolve_file(root, "rpa/rpa_python.zip")
+        if rpa_lock.get("platform") != "linux-x86_64":
+            errors.append("RPA asset lock platform must be linux-x86_64")
+        if rpa_lock.get("bundle", {}).get("bytes") != rpa_bundle.stat().st_size:
+            errors.append("RPA offline bundle size mismatch")
+        if rpa_lock.get("bundle", {}).get("sha256") != sha256(rpa_bundle):
+            errors.append("RPA offline bundle hash mismatch")
+    except (OSError, ValueError, json.JSONDecodeError, AttributeError) as error:
+        errors.append(f"invalid RPA for Python asset lock: {error}")
+
+    source_builds = wheel_lock.get("sourceBuilds")
+    source_names = {
+        item.get("name")
+        for item in source_builds
+        if isinstance(item, dict)
+    } if isinstance(source_builds, list) else set()
+    if not {"rpa", "tagui"}.issubset(source_names):
+        errors.append("wheelhouse lock is missing RPA for Python source provenance")
 
     wheels = wheel_lock.get("wheels")
     if not isinstance(wheels, list) or not wheels:

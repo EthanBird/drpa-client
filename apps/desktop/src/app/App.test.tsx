@@ -976,6 +976,32 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByRole("tab", { name: "main.py" })).toHaveAttribute("aria-selected", "true");
   });
 
+  it("opens Python Flow for the active Python buffer and applies the graph back to the editor", async () => {
+    const project = { id: "project-python-flow", name: "Python Flow 项目", files: ["main.py"] };
+    const source = "import rpa as r\n\ndef main(ctx):\n    r.url('https://example.com')\n    return {'ok': True}\n";
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
+    vi.spyOn(desktopGateway, "readProjectFile").mockResolvedValue(source);
+    const parseFlow = vi.spyOn(desktopGateway, "parsePythonFlow");
+    const renderFlow = vi.spyOn(desktopGateway, "renderPythonFlow");
+    const validateFlow = vi.spyOn(desktopGateway, "validatePythonFlow");
+    render(<StudioPage />);
+
+    expect(await screen.findByLabelText("mock-editor")).toHaveValue(source);
+    fireEvent.click(screen.getByRole("button", { name: /Python Flow Beta/ }));
+
+    expect(await screen.findByLabelText("Python Flow 可视化编辑器")).toBeVisible();
+    expect(screen.getByText("节点目录")).toBeVisible();
+    expect(parseFlow).toHaveBeenCalledWith(source, "main.py");
+
+    fireEvent.click(screen.getByRole("button", { name: /代码同步/ }));
+    fireEvent.click(screen.getByRole("button", { name: /流程图 → 代码/ }));
+
+    await waitFor(() => expect(validateFlow).toHaveBeenCalledOnce());
+    await waitFor(() => expect(renderFlow).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: /^代码$/ }));
+    expect(await screen.findByLabelText("mock-editor")).toHaveValue(source);
+  });
+
   it("keeps an unsaved Studio editor mounted while navigating to another workspace", async () => {
     const project = { id: "project-navigation-state", name: "状态保留项目", files: ["main.py"] };
     useAppStore.setState({ activeNavigation: "studio" });

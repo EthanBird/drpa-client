@@ -48,6 +48,51 @@ export interface StudioProject {
   files: string[];
 }
 
+export interface PythonFlowSourceSpan {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+}
+
+export interface PythonFlowPosition {
+  x: number;
+  y: number;
+}
+
+export interface PythonFlowNode {
+  id: string;
+  type: "start" | "end" | "assign" | "call" | "ctx-call" | "rpa-call" | "if" | "for" | "while" | "try" | "return" | "raw-code";
+  label: string;
+  code: string;
+  span: PythonFlowSourceSpan;
+  data: Record<string, unknown>;
+  position?: PythonFlowPosition;
+}
+
+export interface PythonFlowEdge {
+  id?: string;
+  source: string;
+  target: string;
+  kind: string;
+  label?: string;
+}
+
+export interface PythonFlowGraph {
+  schemaVersion: 1;
+  kind: "drpa.python-flow";
+  source: { name: string; sha256: string };
+  entrypoint: string;
+  nodes: PythonFlowNode[];
+  edges: PythonFlowEdge[];
+  metadata: Record<string, unknown>;
+}
+
+export interface PythonFlowValidationResult {
+  ok: true;
+  valid: true;
+}
+
 export interface StudioVariable {
   name: string;
   typeName: string;

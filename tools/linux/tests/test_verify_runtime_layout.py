@@ -18,6 +18,8 @@ class LinuxRuntimeLayoutTests(unittest.TestCase):
             "tools/uv": b"uv",
             "bootstrap_runtime.py": b"bootstrap",
             "locks/runtime.txt": b"demo==1.0\n",
+            "locks/rpa-for-python.json": b"{}",
+            "rpa/rpa_python.zip": b"rpa-engine",
             "wheelhouse/demo-1.0-py3-none-any.whl": b"wheel",
         }
         for relative, content in files.items():
@@ -28,6 +30,14 @@ class LinuxRuntimeLayoutTests(unittest.TestCase):
             path = root / relative
             path.chmod(path.stat().st_mode | 0o100)
         wheel = root / "wheelhouse/demo-1.0-py3-none-any.whl"
+        rpa_bundle = root / "rpa/rpa_python.zip"
+        (root / "rpa/asset-lock.json").write_text(json.dumps({
+            "platform": "linux-x86_64",
+            "bundle": {
+                "bytes": rpa_bundle.stat().st_size,
+                "sha256": hashlib.sha256(rpa_bundle.read_bytes()).hexdigest(),
+            },
+        }), encoding="utf-8")
         (root / "manifest.json").write_text(json.dumps({
             "platform": "linux-x86_64",
             "pythonVersion": "3.11.9",
@@ -42,6 +52,7 @@ class LinuxRuntimeLayoutTests(unittest.TestCase):
                 "bytes": wheel.stat().st_size,
                 "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
             }],
+            "sourceBuilds": [{"name": "rpa"}, {"name": "tagui"}],
         }), encoding="utf-8")
 
     def test_accepts_complete_glibc_runtime(self) -> None:
@@ -50,6 +61,7 @@ class LinuxRuntimeLayoutTests(unittest.TestCase):
             self.make_runtime(root)
             self.assertEqual(verify_runtime_layout(root), [])
 
+    @unittest.skipIf(os.name == "nt", "Windows does not preserve POSIX executable mode bits")
     def test_rejects_lost_executable_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

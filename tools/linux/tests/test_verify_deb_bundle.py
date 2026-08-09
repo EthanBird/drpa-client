@@ -49,6 +49,8 @@ class DebianBundleTests(unittest.TestCase):
             "tools/uv": b"uv",
             "bootstrap_runtime.py": b"bootstrap",
             "locks/runtime.txt": b"demo==1.0\n",
+            "locks/rpa-for-python.json": b"{}",
+            "rpa/rpa_python.zip": b"rpa-engine",
             "wheelhouse/demo-1.0-py3-none-any.whl": b"wheel",
         }
         for relative, content in files.items():
@@ -63,6 +65,19 @@ class DebianBundleTests(unittest.TestCase):
             path = runtime_root / relative
             path.chmod(os.stat(path).st_mode | 0o111)
         wheel = runtime_root / "wheelhouse/demo-1.0-py3-none-any.whl"
+        rpa_bundle = runtime_root / "rpa/rpa_python.zip"
+        (runtime_root / "rpa/asset-lock.json").write_text(
+            json.dumps(
+                {
+                    "platform": "linux-x86_64",
+                    "bundle": {
+                        "bytes": rpa_bundle.stat().st_size,
+                        "sha256": hashlib.sha256(rpa_bundle.read_bytes()).hexdigest(),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
         (runtime_root / "manifest.json").write_text(
             json.dumps(
                 {
@@ -86,6 +101,7 @@ class DebianBundleTests(unittest.TestCase):
                             "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
                         }
                     ],
+                    "sourceBuilds": [{"name": "rpa"}, {"name": "tagui"}],
                 }
             ),
             encoding="utf-8",

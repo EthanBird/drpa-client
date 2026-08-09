@@ -64,6 +64,8 @@ import type {
   StudioCellResult,
   StudioCompletionResult,
   StudioInspectResult,
+  PythonFlowGraph,
+  PythonFlowValidationResult,
   StudioProject,
   WindowsUpdateSession,
   WindowsUpdateStatus,
@@ -117,6 +119,9 @@ export interface DesktopGateway {
   executeStudioCell(projectId: string, code: string): Promise<StudioCellResult>;
   completeStudioPython(projectId: string, code: string, cursorPos: number): Promise<StudioCompletionResult>;
   inspectStudioPython(projectId: string, code: string, cursorPos: number, detailLevel: number): Promise<StudioInspectResult>;
+  parsePythonFlow(source: string, sourceName?: string): Promise<PythonFlowGraph>;
+  renderPythonFlow(flow: PythonFlowGraph): Promise<string>;
+  validatePythonFlow(flow: PythonFlowGraph): Promise<PythonFlowValidationResult>;
   prepareStudioKernel(projectId: string): Promise<void>;
   restartStudioKernel(projectId: string): Promise<void>;
   getWorkspaceDatabaseInfo(): Promise<DatabaseInfo>;
@@ -672,12 +677,155 @@ function addMockProject(project: StudioProject): StudioProject {
   if (!existing) mockStudioProjects.push(project);
   if (!mockStudioContents.has(project.id)) {
     mockStudioContents.set(project.id, new Map([
-      ["manifest.yaml", "schema: 2\nid: local.browser-preview\nname: Browser Preview\nversion: 0.1.0\nentrypoint:\n  runtime: python\n  module: main.py\n  callable: main\n"],
+      ["README.md", studioProjectReadme(project.name)],
+      ["manifest.yaml", `schema: 2\nid: local.browser-preview\nname: ${JSON.stringify(project.name.trim())}\nversion: 0.1.0\nentrypoint:\n  runtime: python\n  module: main.py\n  callable: main\n`],
       ["main.py", "def main(ctx):\n    ctx.log.info('你好，DRPA')\n"],
       ["notebook.ipynb", '{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}\n'],
     ]));
   }
   return structuredClone(existing ?? project);
+}
+
+function studioProjectReadme(projectName: string): string {
+  const safeProjectName = escapeMarkdownText(projectName);
+  return `# ${safeProjectName}
+
+> DRPA Studio 为本项目生成的 AI 开发入口。代码、清单与本文档共同构成项目上下文。
+
+## AI 开发入口
+
+开始分析或修改前，按顺序阅读：\`manifest.yaml\` → \`main.py\` → \`README.md\`。先确认包契约和入口，再规划实现；不要只根据文件名猜测行为。
+
+## RPAZ schema 2 约定
+
+- \`manifest.yaml\` 必须保留 \`schema: 2\`，并维护稳定的 \`id\`、\`version\`、Python \`entrypoint\`、\`capabilities\` 与 \`parameters\`。
+- \`main.py\` 必须提供清单声明的 callable，默认签名为 \`main(ctx)\`；模块导入阶段避免执行网络、浏览器、数据库或文件写入。
+- 参数来自 manifest，代码通过 \`ctx.params\` 读取；新增能力时同步收紧或补充 capabilities。
+
+## ctx 默认能力
+
+- \`ctx.params\`：读取任务配置参数。
+- \`ctx.log\`：输出结构化运行日志。
+- \`ctx.progress(...)\`：实时报告 0–100 的进度和当前阶段。
+- \`ctx.output_file(...)\`：在隔离输出目录创建并登记产物。
+- \`ctx.open_output_directory()\`：按任务参数决定是否展示输出目录。
+- \`ctx.sql\`：访问工作区 SQLite，使用参数化 SQL 和事务。
+- \`ctx.browser(...)\`：连接 DRPA 管理的可复用 DrissionPage 浏览器会话。
+- \`ctx.invoke(...)\`：按包 ID 调用已安装 RPAZ 包；保持参数和返回值可序列化。
+
+## 离线依赖
+
+- 目标用户环境默认离线。代码只使用 DRPA sealed runtime 中已经锁定并随平台交付的依赖，不在运行代码中调用 pip，也不依赖系统 Python。
+- RPA for Python 已由平台运行时提供，自动化代码使用 \`import rpa as r\` 引入；项目自身不执行在线安装。
+- 新增平台级 Python 依赖时，更新 DRPA 源码仓库中的 \`offline/requirements/runtime.txt\` 与对应运行时构建锁，然后重新构建、验证并发布全量 sealed runtime。
+- Windows 与 UOS/Linux 均需验证 Python 3.11 ABI，代码应避免写死解释器、浏览器及工作区绝对路径。
+
+## 测试与导出
+
+1. 在 Studio 使用“直接运行”验证当前工作副本，修复 manifest、入口和参数问题。
+2. 运行最小参数、边界参数与失败路径，检查实时日志、进度、产物和工作区 SQLite 变更。
+3. 对纯函数和外部接口适配层补充测试；外部服务使用可替换夹具，确保离线测试可重复。
+4. 点击“导出 RPAZ”，安装生成包；再到运行工作台创建任务配置，执行“预检并保存”和试运行。
+
+## Python Flow 协作约定
+
+- Python 源码是业务逻辑和执行行为的唯一事实源（SSOT）；Python Flow 只承载可视化编排、节点位置和源码映射元数据，不维护第二套隐式业务逻辑。
+- 把可视化步骤拆成命名稳定、输入输出显式的函数，由 \`main(ctx)\` 负责薄编排；避免隐藏全局状态、动态 \`exec\` 和导入期副作用。
+- AI 修改函数名、参数或返回结构时，同步更新对应节点映射；可视化编辑回写代码后，重新格式化、预检并运行测试。
+- 手写代码与生成代码都应保留清晰边界。遇到无法映射的 Python 语义时保留为“代码节点”，不要静默丢弃行为。
+`;
+}
+
+function escapeMarkdownText(value: string): string {
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  return normalized.replace(/[\\`*_{}[\]<>()#+.!|\-]/g, "\\$&");
+}
+
+function mockPythonFlow(source: string, sourceName = "main.py"): PythonFlowGraph {
+  const lines = source.split(/\r?\n/);
+  const functionLine = lines.findIndex((line) => /^\s*(?:async\s+)?def\s+main\s*\(/.test(line));
+  if (functionLine < 0) throw new Error("RPAZ 源码需要定义 main(ctx) 入口");
+  const semantic = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line, index }) => index > functionLine && /^\s+\S/.test(line));
+  const nodes: PythonFlowGraph["nodes"] = [{
+    id: "start-preview",
+    type: "start",
+    label: "Start",
+    code: "",
+    span: { startLine: functionLine + 1, startColumn: 0, endLine: functionLine + 1, endColumn: 0 },
+    data: { entrypoint: "main" },
+  }];
+  const body: string[] = [];
+  for (const { line, index } of semantic) {
+    const code = line.trim();
+    const id = `node-preview-${index + 1}`;
+    const callName = code.match(/^(?:[A-Za-z_]\w*\s*=\s*)?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(/)?.[1] ?? "";
+    const type: PythonFlowGraph["nodes"][number]["type"] = code.startsWith("return")
+      ? "return"
+      : callName.startsWith("ctx.")
+        ? "ctx-call"
+        : callName.startsWith("r.") || callName.startsWith("rpa.")
+          ? "rpa-call"
+          : callName
+            ? "call"
+            : /^[A-Za-z_]\w*\s*=/.test(code)
+              ? "assign"
+              : "raw-code";
+    nodes.push({
+      id,
+      type,
+      label: callName || code.slice(0, 72),
+      code,
+      span: { startLine: index + 1, startColumn: line.length - line.trimStart().length, endLine: index + 1, endColumn: line.length },
+      data: { statement: code, callName, arguments: [], keywords: [], assignTargets: [] },
+    });
+    body.push(id);
+  }
+  nodes.push({
+    id: "end-preview",
+    type: "end",
+    label: "End",
+    code: "",
+    span: { startLine: lines.length, startColumn: 0, endLine: lines.length, endColumn: 0 },
+    data: {},
+  });
+  const sequence = ["start-preview", ...body, "end-preview"];
+  const edges = sequence.slice(0, -1).map((id, index) => ({
+    id: `edge-preview-${index}`,
+    source: id,
+    target: sequence[index + 1],
+    kind: nodes.find((node) => node.id === id)?.type === "return" ? "return" : "next",
+    label: "",
+  }));
+  let hash = 2166136261;
+  for (const character of source) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return {
+    schemaVersion: 1,
+    kind: "drpa.python-flow",
+    source: { name: sourceName.split(/[\\/]/).at(-1) || "main.py", sha256: `preview-${(hash >>> 0).toString(16)}` },
+    entrypoint: "main",
+    nodes,
+    edges,
+    metadata: {
+      body,
+      moduleBefore: lines.slice(0, functionLine).join("\n") + (functionLine > 0 ? "\n" : ""),
+      moduleAfter: "\n",
+      functionHeader: lines[functionLine].trimEnd(),
+      indent: "    ",
+    },
+  };
+}
+
+function renderMockPythonFlow(flow: PythonFlowGraph): string {
+  const byId = new Map(flow.nodes.map((node) => [node.id, node]));
+  const body = Array.isArray(flow.metadata.body) ? flow.metadata.body.filter((id): id is string => typeof id === "string") : [];
+  const indent = typeof flow.metadata.indent === "string" ? flow.metadata.indent : "    ";
+  const lines = body.map((id) => byId.get(id)?.code || "pass").flatMap((code) => code.split("\n").map((line) => `${indent}${line}`));
+  return `${String(flow.metadata.moduleBefore ?? "")}${String(flow.metadata.functionHeader ?? `def ${flow.entrypoint}(ctx):`)}\n${(lines.length ? lines : [`${indent}pass`]).join("\n")}${String(flow.metadata.moduleAfter ?? "\n")}`;
 }
 
 function dashboardMetric(
@@ -844,7 +992,7 @@ const mockGateway: DesktopGateway = {
     return structuredClone(mockStudioProjects);
   },
   async createStudioProject(name) {
-    return addMockProject({ id: `project-${Date.now().toString(16).padStart(24, "0").slice(-24)}`, name, files: ["main.py", "manifest.yaml", "notebook.ipynb"] });
+    return addMockProject({ id: `project-${Date.now().toString(16).padStart(24, "0").slice(-24)}`, name, files: ["README.md", "main.py", "manifest.yaml", "notebook.ipynb"] });
   },
   async renameStudioProject(projectId, name) {
     const project = mockStudioProjects.find((item) => item.id === projectId);
@@ -857,7 +1005,7 @@ const mockGateway: DesktopGateway = {
   },
   async openInstalledPackage(packageId) {
     const item = mockSnapshot.packages.find((candidate) => candidate.id === packageId);
-    return addMockProject({ id: `project-${Date.now().toString(16).padStart(24, "0").slice(-24)}`, name: item?.name ?? packageId, files: ["main.py", "manifest.yaml", "notebook.ipynb"] });
+    return addMockProject({ id: `project-${Date.now().toString(16).padStart(24, "0").slice(-24)}`, name: item?.name ?? packageId, files: ["README.md", "main.py", "manifest.yaml", "notebook.ipynb"] });
   },
   async readProjectFile(projectId, relativePath) {
     return mockStudioContents.get(projectId)?.get(relativePath) ?? "";
@@ -937,6 +1085,19 @@ const mockGateway: DesktopGateway = {
   },
   async inspectStudioPython() {
     return { found: true, data: { "text/plain": "Signature: ctx.progress(value: int, message: str = '')\n\n更新当前任务的进度。" }, metadata: {}, status: "ok" };
+  },
+  async parsePythonFlow(source, sourceName) {
+    return mockPythonFlow(source, sourceName);
+  },
+  async renderPythonFlow(flow) {
+    return renderMockPythonFlow(flow);
+  },
+  async validatePythonFlow(flow) {
+    const ids = new Set(flow.nodes.map((node) => node.id));
+    if (flow.nodes.filter((node) => node.type === "start").length !== 1) throw new Error("流程需要一个入口节点");
+    if (flow.nodes.filter((node) => node.type === "end").length !== 1) throw new Error("流程需要一个结束节点");
+    if (flow.edges.some((edge) => !ids.has(edge.source) || !ids.has(edge.target))) throw new Error("流程中存在悬空连线");
+    return { ok: true, valid: true };
   },
   async prepareStudioKernel() {},
   async restartStudioKernel() {},
@@ -1865,6 +2026,9 @@ const tauriGateway: DesktopGateway = {
   executeStudioCell: (projectId, code) => invoke<StudioCellResult>("execute_studio_cell", { projectId, code }),
   completeStudioPython: (projectId, code, cursorPos) => invoke<StudioCompletionResult>("complete_studio_python", { projectId, code, cursorPos }),
   inspectStudioPython: (projectId, code, cursorPos, detailLevel) => invoke<StudioInspectResult>("inspect_studio_python", { projectId, code, cursorPos, detailLevel }),
+  parsePythonFlow: (source, sourceName) => invoke<PythonFlowGraph>("parse_python_flow", { source, sourceName }),
+  renderPythonFlow: (flow) => invoke<string>("render_python_flow", { flow }),
+  validatePythonFlow: (flow) => invoke<PythonFlowValidationResult>("validate_python_flow", { flow }),
   prepareStudioKernel: (projectId) => invoke<void>("prepare_studio_kernel", { projectId }),
   restartStudioKernel: (projectId) => invoke<void>("restart_studio_kernel", { projectId }),
   getWorkspaceDatabaseInfo: () => invoke<DatabaseInfo>("get_workspace_database_info"),

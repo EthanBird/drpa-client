@@ -26,6 +26,7 @@ import {
   TerminalSquare,
   Trash2,
   Upload,
+  Workflow,
   X,
 } from "lucide-react";
 import type { DragEvent } from "react";
@@ -36,6 +37,13 @@ import remarkGfm from "remark-gfm";
 import { useAppStore } from "../app/store";
 import { useNavigationSurfaceActive } from "../app/NavigationSurface";
 import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
+import {
+  PythonFlowDesigner,
+  autoLayoutPythonFlow,
+  type PythonFlowGraph as PythonFlowCanvasGraph,
+  type PythonFlowValidationIssue,
+} from "../components/PythonFlowDesigner";
+import { canvasFlowToCore, coreFlowToCanvas } from "../components/pythonFlowAdapter";
 import type { StudioProject, StudioVariable } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 import { AgentPage } from "./AgentPage";
@@ -293,6 +301,11 @@ interface PendingClose {
   path: string;
 }
 
+interface PythonFlowSession {
+  graph: PythonFlowCanvasGraph;
+  baseSource: string;
+}
+
 export function StudioPage() {
   const pageActive = useNavigationSurfaceActive();
   const projectsCollapsed = useSidebarCollapsed("studio-projects");
@@ -318,6 +331,10 @@ export function StudioPage() {
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
   const [agentOpen, setAgentOpen] = useState(true);
+  const [editorModes, setEditorModes] = useState<Record<string, "code" | "flow">>({});
+  const [pythonFlowSessions, setPythonFlowSessions] = useState<Record<string, PythonFlowSession>>({});
+  const [pythonFlowErrors, setPythonFlowErrors] = useState<Record<string, string>>({});
+  const [pythonFlowBusyKey, setPythonFlowBusyKey] = useState("");
 
   const selected = useMemo(() => projects.find((item) => item.id === selectedId), [projects, selectedId]);
   const packages = snapshot?.packages ?? [];
@@ -331,6 +348,10 @@ export function StudioPage() {
   const activeDocument = openDocuments.find((document) => document.projectId === selectedId && document.path === selectedFile);
   const projectDocuments = openDocuments.filter((document) => document.projectId === selectedId);
   const content = activeDocument?.content ?? "";
+  const activeDocumentKey = selectedId && selectedFile ? `${selectedId}:${selectedFile}` : "";
+  const pythonFlowSession = activeDocumentKey ? pythonFlowSessions[activeDocumentKey] : undefined;
+  const pythonFlowError = activeDocumentKey ? pythonFlowErrors[activeDocumentKey] : "";
+  const pythonFlowActive = selectedFile.endsWith(".py") && editorModes[activeDocumentKey] === "flow";
 
   const updateOpenDocuments = useCallback((updater: (current: OpenStudioDocument[]) => OpenStudioDocument[]) => {
     const next = updater(openDocumentsRef.current);
@@ -695,6 +716,61 @@ export function StudioPage() {
     }
   };
 
+  const refreshPythonFlow = async (source = content) => {
+    if (!activeDocumentKey || !selectedFile.endsWith(".py")) return;
+    const key = activeDocumentKey;
+    setPythonFlowBusyKey(key);
+    setPythonFlowErrors((current) => ({ ...current, [key]: "" }));
+    try {
+      const sourceName = selectedFile.split(/[\\/]/).at(-1) || "main.py";
+      const coreGraph = await desktopGateway.parsePythonFlow(source, sourceName);
+      const graph = autoLayoutPythonFlow(coreFlowToCanvas(coreGraph));
+      setPythonFlowSessions((current) => ({ ...current, [key]: { graph, baseSource: source } }));
+      setNotice(`Python Flow 已从 ${selectedFile} 刷新 · ${coreGraph.nodes.length} 个节点`);
+    } catch (error) {
+      const message = String(error);
+      setPythonFlowErrors((current) => ({ ...current, [key]: message }));
+      setNotice(`Python Flow 解析失败：${message}`);
+      throw error;
+    } finally {
+      setPythonFlowBusyKey((current) => current === key ? "" : current);
+    }
+  };
+
+  const openPythonFlow = async () => {
+    if (!activeDocumentKey || !selectedFile.endsWith(".py")) return;
+    setEditorModes((current) => ({ ...current, [activeDocumentKey]: "flow" }));
+    if (!pythonFlowSession || pythonFlowSession.baseSource !== content) {
+      try { await refreshPythonFlow(content); } catch { /* error is rendered in the Flow surface */ }
+    }
+  };
+
+  const applyPythonFlow = async (graph: PythonFlowCanvasGraph) => {
+    if (!activeDocumentKey) return;
+    const key = activeDocumentKey;
+    setPythonFlowBusyKey(key);
+    try {
+      const coreGraph = canvasFlowToCore(graph);
+      await desktopGateway.validatePythonFlow(coreGraph);
+      const generated = await desktopGateway.renderPythonFlow(coreGraph);
+      const normalized = await desktopGateway.parsePythonFlow(generated, selectedFile.split(/[\\/]/).at(-1) || "main.py");
+      setContent(generated);
+      setPythonFlowSessions((current) => ({
+        ...current,
+        [key]: { graph: autoLayoutPythonFlow(coreFlowToCanvas(normalized)), baseSource: generated },
+      }));
+      setPythonFlowErrors((current) => ({ ...current, [key]: "" }));
+      setNotice("Python Flow 已校验并写回当前代码页签，使用 Ctrl+S 保存");
+    } finally {
+      setPythonFlowBusyKey((current) => current === key ? "" : current);
+    }
+  };
+
+  const validatePythonFlowCanvas = async (graph: PythonFlowCanvasGraph): Promise<PythonFlowValidationIssue[]> => {
+    await desktopGateway.validatePythonFlow(canvasFlowToCore(graph));
+    return [];
+  };
+
   const language = selectedFile.endsWith(".py") ? "python" : selectedFile.endsWith(".yaml") ? "yaml" : selectedFile.endsWith(".json") ? "json" : "plaintext";
   const notebook = selectedFile.endsWith(".ipynb");
 
@@ -849,10 +925,40 @@ export function StudioPage() {
                 <button type="button" className="studio-tab-close" aria-label={`关闭 ${document.path}`} onClick={() => closeDocument(document.projectId, document.path)}><X size={12} /></button>
               </div>;
             })}
+            {activeDocument && selectedFile.endsWith(".py") && (
+              <div className="studio-editor-view-switch" aria-label="Python 编辑视图">
+                <button type="button" className={!pythonFlowActive ? "active" : ""} onClick={() => setEditorModes((current) => ({ ...current, [activeDocumentKey]: "code" }))}><Code2 size={12} /> 代码</button>
+                <button type="button" className={pythonFlowActive ? "active" : ""} onClick={() => void openPythonFlow()}><Workflow size={12} /> Python Flow <em>Beta</em></button>
+              </div>
+            )}
             {projectDocuments.length > 0 && <span className="studio-tab-shortcuts">Ctrl+S 保存 · Ctrl+W 关闭 · Ctrl+Tab 切换</span>}
           </div>
           {!activeDocument ? <div className="studio-editor-empty"><Code2 size={32} /><strong>打开文件开始编辑</strong><span>从左侧文件树选择文件，已打开内容会保留在页签中。</span></div> : activeDocument.loading ? <div className="studio-editor-empty"><LoaderCircle className="spin" size={24} /><strong>正在读取 {selectedFile}</strong></div> : activeDocument.error ? <div className="studio-editor-empty error"><FileCode2 size={28} /><strong>文件读取失败</strong><span>{activeDocument.error}</span><button className="button secondary small" type="button" onClick={() => { updateOpenDocuments((current) => current.filter((document) => document !== activeDocument)); void activateFile(selectedId, selectedFile); }}>重试</button></div> : notebook ? (
             <NotebookWorkspace projectId={selectedId} filePath={selectedFile} content={content} onChange={setContent} onPersist={(value) => void persistDocument({ ...activeDocument, content: value })} onNotice={setNotice} theme={theme} />
+          ) : pythonFlowActive ? pythonFlowSession ? (
+            <PythonFlowDesigner
+              key={activeDocumentKey}
+              graph={pythonFlowSession.graph}
+              source={content}
+              sourceStale={pythonFlowSession.baseSource !== content}
+              busy={busy || pythonFlowBusyKey === activeDocumentKey}
+              onGraphChange={(graph) => setPythonFlowSessions((current) => ({ ...current, [activeDocumentKey]: { ...pythonFlowSession, graph } }))}
+              onApplyToCode={applyPythonFlow}
+              onRefreshFromCode={refreshPythonFlow}
+              onNotice={setNotice}
+              onValidate={validatePythonFlowCanvas}
+              onOpenSource={(binding) => {
+                setEditorModes((current) => ({ ...current, [activeDocumentKey]: "code" }));
+                if (binding.startLine) setNotice(`已切换到源码视图 · ${selectedFile}:${binding.startLine}`);
+              }}
+            />
+          ) : (
+            <div className={`studio-editor-empty ${pythonFlowError ? "error" : ""}`}>
+              {pythonFlowBusyKey === activeDocumentKey ? <LoaderCircle className="spin" size={24} /> : <Workflow size={30} />}
+              <strong>{pythonFlowError ? "Python Flow 解析失败" : "正在生成 Python Flow"}</strong>
+              {pythonFlowError && <span>{pythonFlowError}</span>}
+              {pythonFlowError && <button className="button secondary small" type="button" onClick={() => void refreshPythonFlow(content)}>重新解析</button>}
+            </div>
           ) : (
             <Editor beforeMount={ensurePythonCompletionProvider} path={language === "python" && selectedId ? pythonModelPath(selectedId, selectedFile) : undefined} height="100%" language={language} value={content} onChange={(value) => setContent(value ?? "")} theme={theme === "dark" ? "vs-dark" : "light"} options={{ fontSize: 14, minimap: { enabled: false }, automaticLayout: true, tabSize: 4, wordWrap: "on", quickSuggestions: { other: true, comments: false, strings: false }, suggestOnTriggerCharacters: true }} />
           )}
