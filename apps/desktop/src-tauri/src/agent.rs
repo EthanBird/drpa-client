@@ -723,7 +723,7 @@ where
                 .to_owned();
             let arguments = parse_tool_arguments(call.pointer("/function/arguments"))?;
             tool_calls_count = tool_calls_count.saturating_add(1);
-            let fingerprint = format!("{name}:{}", arguments);
+            let fingerprint = format!("{name}:{arguments}");
             let repeat_count = repeated_calls.entry(fingerprint).or_insert(0);
             *repeat_count = repeat_count.saturating_add(1);
             let executed = if *repeat_count > 3 {

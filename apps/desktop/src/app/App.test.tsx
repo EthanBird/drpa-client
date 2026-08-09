@@ -409,7 +409,7 @@ describe("DRPA Next desktop shell", () => {
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(await screen.findByRole("heading", { name: "关于 DRPA Next" })).toBeVisible();
-    expect(screen.getByText("v2.0.3")).toBeVisible();
+    expect(screen.getByText("v2.0.4")).toBeVisible();
     const darkTheme = await screen.findByRole("radio", { name: "暗色" });
     fireEvent.click(darkTheme);
 

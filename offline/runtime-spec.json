@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "bundleVersion": "2.0.3-dev",
+  "bundleVersion": "2.0.4-dev",
   "pythonVersion": "3.11.9",
   "uvVersion": "0.11.28",
   "chromeForTestingVersion": "150.0.7871.115",

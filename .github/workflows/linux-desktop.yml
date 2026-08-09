@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Upload the verified Linux/UOS assets to desktop-v2.0.3
+        description: Upload the verified Linux/UOS assets to desktop-v2.0.4
         required: true
         default: false
         type: boolean
@@ -40,10 +40,10 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 2.0.3
-      DRPA_DEB_VERSION: 2.0.3-1
-      DRPA_UOS20_DEB_VERSION: 2.0.3-1+uos20.3
-      DRPA_RELEASE_TAG: desktop-v2.0.3
+      DRPA_VERSION: 2.0.4
+      DRPA_DEB_VERSION: 2.0.4-1
+      DRPA_UOS20_DEB_VERSION: 2.0.4-1+uos20.3
+      DRPA_RELEASE_TAG: desktop-v2.0.4
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux desktop and smoke-test libraries
@@ -363,11 +363,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DRPA_RELEASE_NOTES: |
-            DRPA Next 2.0.3 Windows x64 与 Linux/UOS x86_64 全量离线桌面版。
+            DRPA Next 2.0.4 Windows x64 与 Linux/UOS x86_64 全量离线桌面版。
 
-            2.0.3 修复手动新增凭据时输入导致页面白屏的问题，并为 BI 主页增加组件自适应拖拽、占位交换、最近空位让位、删除后压缩、响应式无重叠投影和轻量动画。
+            2.0.4 将 BI 主页调整为按组件排序关系驱动的自适应填充，保留跨页面切换时的开发与文档现场，并统一 AI Agent 的运行、会话、工具和浏览器生命周期。
 
-            Windows 提供完整离线 Setup、封装 Python 3.11/Chrome、Fixed Version WebView2、安装库存和 Bing 每日一图示例。Linux/UOS 资产由 Ubuntu 22.04 原生 runner 重新构建并完成密封运行时 air-gap、离线 bootstrap、DrissionPage/Jupyter/ZMQ、X11、deb 安装卸载和用户数据保留门禁。UOS 专用 deb 版本为 2.0.3-1+uos20.3，固定安装到 /opt/drpa-next-uos20，面向 x86_64、glibc 2.28 基线，携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层，并继续执行 Debian 10 与 Deepin 20.8 输入、IPC、WebKitWebProcess 和非白屏截图验证。
+            UOS 端修复页面导航卡顿，并让内置 Dify2API 服务脱离 Python 初始化、用户数据目录 noexec 挂载和系统代理影响。Windows 提供完整离线 Setup、封装 Python 3.11/Chrome、Fixed Version WebView2、安装库存和 Bing 每日一图示例。Linux/UOS 资产由 Ubuntu 22.04 原生 runner 构建并完成密封运行时 air-gap、离线 bootstrap、DrissionPage/Jupyter/ZMQ、真实 Dify2API 健康检查、X11、deb 安装卸载和用户数据保留门禁。UOS 专用 deb 版本为 2.0.4-1+uos20.3，固定安装到 /opt/drpa-next-uos20，面向 x86_64、glibc 2.28 基线，并执行 Debian 10 与 Deepin 20.8 输入、IPC、WebKitWebProcess 和非白屏截图验证。
         shell: bash
         run: |
           mapfile -t assets < <(find "${{ runner.temp }}/linux-assets" -maxdepth 1 -type f -print | sort)
@@ -378,7 +378,7 @@ jobs:
             -f sha="$GITHUB_SHA" -F force=true >/dev/null
           gh release edit "$DRPA_RELEASE_TAG" \
             --target "$GITHUB_SHA" \
-            --title "DRPA Next 2.0.3 Windows x64 + Linux/UOS x86_64 全量离线包" \
+            --title "DRPA Next 2.0.4 Windows x64 + Linux/UOS x86_64 全量离线包" \
             --notes "$DRPA_RELEASE_NOTES"
           published_assets="$(gh release view "$DRPA_RELEASE_TAG" --json assets --jq '.assets[].name')"
           for asset in "${assets[@]}"; do
