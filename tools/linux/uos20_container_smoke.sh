@@ -182,9 +182,11 @@ runuser -u drpa-smoke -- timeout 15s "$dify_sidecar" \
   >"$diagnostics/drpa-uos20-dify2api.log" 2>&1 &
 dify_pid=$!
 dify_ready=0
+: >"$diagnostics/drpa-uos20-dify2api-health-errors.log"
 for _ in $(seq 1 100); do
-  if python3 -c 'import urllib.request; print(urllib.request.build_opener(urllib.request.ProxyHandler({})).open("http://127.0.0.1:39423/healthz", timeout=1).read().decode())' \
-      >"$diagnostics/drpa-uos20-dify2api-health.json" 2>/dev/null; then
+  if "$runtime_python" -I -c 'import urllib.request; print(urllib.request.build_opener(urllib.request.ProxyHandler({})).open("http://127.0.0.1:39423/healthz", timeout=1).read().decode())' \
+      >"$diagnostics/drpa-uos20-dify2api-health.json" \
+      2>>"$diagnostics/drpa-uos20-dify2api-health-errors.log"; then
     dify_ready=1
     break
   fi

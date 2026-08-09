@@ -49,6 +49,8 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn("plugins/dify2api/service/dify2api-server", source)
         self.assertIn("http://127.0.0.1:39423/healthz", source)
         self.assertIn("drpa-uos20-dify2api-health.json", source)
+        self.assertIn('"$runtime_python" -I -c', source)
+        self.assertIn("drpa-uos20-dify2api-health-errors.log", source)
 
     def test_x86_64_elf_detection_rejects_other_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
