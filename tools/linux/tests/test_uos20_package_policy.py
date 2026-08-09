@@ -65,6 +65,7 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn("GTK_MODULES=gail:atk-bridge", source)
         self.assertIn("GTK3_MODULES=atk-bridge", source)
         self.assertIn("drpa-uos20-host-environment.txt", source)
+        self.assertIn('runuser -u drpa-smoke -- cat "/proc/$host_pid/environ"', source)
         self.assertIn("GTK_IM_MODULE=gtk-im-context-simple", source)
         self.assertIn("GDK_CORE_DEVICE_EVENTS=1", source)
         self.assertIn("NO_AT_BRIDGE=1", source)

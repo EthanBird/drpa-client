@@ -170,7 +170,11 @@ cp "$ui_ready" "$diagnostics/drpa-uos20-ui-ready.json"
 # private Ubuntu GTK starts; otherwise focus and pointer events can deadlock.
 host_pid="$(pgrep -u drpa-smoke -f '/opt/drpa-next-uos20/usr/bin/drpa-desktop' | head -n 1)"
 test -n "$host_pid"
-tr '\0' '\n' <"/proc/$host_pid/environ" | sort >"$host_environment"
+# Some CI/container kernels deny cross-credential reads of procfs even to the
+# container's root user. Read the Host environment as its owning desktop user.
+runuser -u drpa-smoke -- cat "/proc/$host_pid/environ" \
+  | tr '\0' '\n' \
+  | sort >"$host_environment"
 grep -Fxq 'GTK_IM_MODULE=gtk-im-context-simple' "$host_environment"
 grep -Fxq 'GDK_CORE_DEVICE_EVENTS=1' "$host_environment"
 grep -Fxq 'NO_AT_BRIDGE=1' "$host_environment"
