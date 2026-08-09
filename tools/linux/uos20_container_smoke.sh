@@ -190,7 +190,9 @@ fi
 dify_sidecar=""
 for _ in $(seq 1 200); do
   dify_sidecar="$(find /tmp/drpa-uos20-data -type f -path '*/plugins/dify2api/service/dify2api-server' -print -quit)"
-  if [ -n "$dify_sidecar" ]; then
+  # The Host writes the sidecar and then applies its executable mode. Do not
+  # observe the file in that short in-between state as a package failure.
+  if [ -n "$dify_sidecar" ] && [ -x "$dify_sidecar" ]; then
     break
   fi
   sleep 0.1
