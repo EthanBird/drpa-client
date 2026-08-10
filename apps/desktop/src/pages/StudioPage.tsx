@@ -909,29 +909,30 @@ export function StudioPage() {
           )}
         </aside>}
         <section className={notebook ? "studio-editor notebook-editor" : "studio-editor"}>
-          <div className="studio-editor-tabs" role="tablist" aria-label="已打开文件">
-            {projectDocuments.map((document) => {
-              const active = document.path === selectedFile;
-              const dirty = document.content !== document.savedContent;
-              return <div className={`studio-editor-tab ${active ? "active" : ""}`} key={`${document.projectId}:${document.path}`}>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  title={`${document.path}${dirty ? " · 尚未保存" : ""}`}
-                  onClick={() => void activateFile(document.projectId, document.path)}
-                  onAuxClick={(event) => { if (event.button === 1) closeDocument(document.projectId, document.path); }}
-                ><FileCode2 size={13} /><span>{document.path.split("/").at(-1)}</span>{dirty && <i aria-label="尚未保存" />}</button>
-                <button type="button" className="studio-tab-close" aria-label={`关闭 ${document.path}`} onClick={() => closeDocument(document.projectId, document.path)}><X size={12} /></button>
-              </div>;
-            })}
+          <div className="studio-editor-head">
+            <div className="studio-editor-tabs" role="tablist" aria-label="已打开文件">
+              {projectDocuments.map((document) => {
+                const active = document.path === selectedFile;
+                const dirty = document.content !== document.savedContent;
+                return <div className={`studio-editor-tab ${active ? "active" : ""}`} key={`${document.projectId}:${document.path}`}>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    title={`${document.path}${dirty ? " · 尚未保存" : ""}`}
+                    onClick={() => void activateFile(document.projectId, document.path)}
+                    onAuxClick={(event) => { if (event.button === 1) closeDocument(document.projectId, document.path); }}
+                  ><FileCode2 size={13} /><span>{document.path.split("/").at(-1)}</span>{dirty && <i aria-label="尚未保存" />}</button>
+                  <button type="button" className="studio-tab-close" aria-label={`关闭 ${document.path}`} onClick={() => closeDocument(document.projectId, document.path)}><X size={12} /></button>
+                </div>;
+              })}
+            </div>
             {activeDocument && selectedFile.endsWith(".py") && (
               <div className="studio-editor-view-switch" aria-label="Python 编辑视图">
-                <button type="button" className={!pythonFlowActive ? "active" : ""} onClick={() => setEditorModes((current) => ({ ...current, [activeDocumentKey]: "code" }))}><Code2 size={12} /> 代码</button>
-                <button type="button" className={pythonFlowActive ? "active" : ""} onClick={() => void openPythonFlow()}><Workflow size={12} /> Python Flow <em>Beta</em></button>
+                <button type="button" title="显示 Python 源码" className={!pythonFlowActive ? "active" : ""} onClick={() => setEditorModes((current) => ({ ...current, [activeDocumentKey]: "code" }))}><Code2 size={12} /> 代码</button>
+                <button type="button" aria-label="打开 Python Flow Beta 流程图" title="从当前 Python 代码生成流程图" className={pythonFlowActive ? "active" : ""} onClick={() => void openPythonFlow()}><Workflow size={12} /> 流程图 <em>Python Flow · Beta</em></button>
               </div>
             )}
-            {projectDocuments.length > 0 && <span className="studio-tab-shortcuts">Ctrl+S 保存 · Ctrl+W 关闭 · Ctrl+Tab 切换</span>}
           </div>
           {!activeDocument ? <div className="studio-editor-empty"><Code2 size={32} /><strong>打开文件开始编辑</strong><span>从左侧文件树选择文件，已打开内容会保留在页签中。</span></div> : activeDocument.loading ? <div className="studio-editor-empty"><LoaderCircle className="spin" size={24} /><strong>正在读取 {selectedFile}</strong></div> : activeDocument.error ? <div className="studio-editor-empty error"><FileCode2 size={28} /><strong>文件读取失败</strong><span>{activeDocument.error}</span><button className="button secondary small" type="button" onClick={() => { updateOpenDocuments((current) => current.filter((document) => document !== activeDocument)); void activateFile(selectedId, selectedFile); }}>重试</button></div> : notebook ? (
             <NotebookWorkspace projectId={selectedId} filePath={selectedFile} content={content} onChange={setContent} onPersist={(value) => void persistDocument({ ...activeDocument, content: value })} onNotice={setNotice} theme={theme} />

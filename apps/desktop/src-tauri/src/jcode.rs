@@ -43,6 +43,7 @@ struct SessionState {
 
 #[derive(Debug, Default)]
 struct StreamState {
+    raw_message: String,
     message: String,
     session_id: String,
     usage: AgentUsage,
@@ -451,10 +452,16 @@ where
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            state.message.push_str(text);
-            if stream && !text.is_empty() {
+            state.raw_message.push_str(text);
+            let visible = crate::provider::visible_assistant_content(&state.raw_message);
+            let visible_delta = visible
+                .strip_prefix(&state.message)
+                .unwrap_or_default()
+                .to_owned();
+            state.message = visible;
+            if stream && !visible_delta.is_empty() {
                 emit(AgentStreamEvent::Delta {
-                    content: text.to_owned(),
+                    content: visible_delta,
                 });
             }
         }
@@ -463,10 +470,11 @@ where
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            state.message = text.to_owned();
+            state.raw_message = text.to_owned();
+            state.message = crate::provider::visible_assistant_content(text);
             if stream {
                 emit(AgentStreamEvent::ContentReplace {
-                    content: text.to_owned(),
+                    content: state.message.clone(),
                 });
             }
         }
@@ -625,6 +633,21 @@ fn write_provider_config(home: &Path, request: &AgentTurnRequest) -> Result<(), 
     }
     let base_url = json_string(base_url)?;
     let model = json_string(request.model.trim())?;
+    let reasoning_split = if request
+        .model
+        .trim()
+        .to_ascii_lowercase()
+        .contains("minimax")
+        || request
+            .base_url
+            .trim()
+            .to_ascii_lowercase()
+            .contains("minimax")
+    {
+        "reasoning_split = true\n"
+    } else {
+        ""
+    };
     let (auth, key, required) = if request.api_key.trim().is_empty() {
         ("none", String::new(), "false")
     } else {
@@ -646,6 +669,7 @@ fn write_provider_config(home: &Path, request: &AgentTurnRequest) -> Result<(), 
          default_model = {model}\n\
          requires_api_key = {required}\n\n\
          [providers.{JCODE_PROFILE}.extra_body]\n\
+         {reasoning_split}\
          temperature = {}\n\
          max_tokens = {}\n\n\
          [[providers.{JCODE_PROFILE}.models]]\n\
@@ -898,6 +922,19 @@ mod tests {
     }
 
     #[test]
+    fn provider_config_separates_minimax_reasoning_from_answer_text() {
+        let root = env::temp_dir().join(format!("drpa-jcode-config-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let mut minimax = request("token");
+        minimax.model = "minimax-m3".to_owned();
+        write_provider_config(&root, &minimax).unwrap();
+        let config = fs::read_to_string(root.join("config.toml")).unwrap();
+
+        assert!(config.contains("reasoning_split = true"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn mcp_config_uses_bundled_python_chrome_and_host_bridge() {
         let root = env::temp_dir().join(format!("drpa-jcode-mcp-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
@@ -982,6 +1019,28 @@ mod tests {
         assert_eq!(state.usage.prompt_tokens, 12);
         assert_eq!(state.tools["1"].status, "completed");
         assert_eq!(emitted.len(), 2);
+    }
+
+    #[test]
+    fn ndjson_thinking_tags_are_kept_out_of_visible_text_events() {
+        let mut state = StreamState::default();
+        let mut emitted = Vec::new();
+        for text in ["<thi", "nk>private plan", "</think>Final answer"] {
+            consume_event(
+                &serde_json::json!({"type":"text_delta","text":text}),
+                true,
+                &mut state,
+                &mut |event| emitted.push(event),
+            )
+            .unwrap();
+        }
+
+        assert_eq!(state.message, "Final answer");
+        assert_eq!(emitted.len(), 1);
+        assert!(matches!(
+            &emitted[0],
+            AgentStreamEvent::Delta { content } if content == "Final answer"
+        ));
     }
 
     #[test]

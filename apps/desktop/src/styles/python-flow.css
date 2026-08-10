@@ -227,10 +227,10 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-  margin-left: auto;
   padding: 4px;
   border-left: 1px solid var(--border-subtle);
   background: var(--surface-2);
+  box-shadow: -8px 0 14px color-mix(in srgb, var(--surface-2) 88%, transparent);
 }
 
 .studio-editor-view-switch button {

@@ -99,6 +99,16 @@ function visibleMessageContent(content: string): string {
   return marker < 0 ? content : content.slice(0, marker);
 }
 
+export function visibleAssistantMessageContent(content: string): string {
+  let visible = content.replace(
+    /<(?:mm:)?think\b[^>]*>[\s\S]*?<\/(?:mm:)?think\s*>/gi,
+    "",
+  );
+  const unclosed = /<(?:mm:)?think\b[^>]*>/i.exec(visible);
+  if (unclosed) visible = visible.slice(0, unclosed.index);
+  return visible.replace(/<\/?(?:mm:)?think\b[^>]*>/gi, "");
+}
+
 function replaceVisibleMessageContent(original: string, visible: string): string {
   const marker = original.indexOf(DOCUMENT_CONTEXT_MARKER);
   return marker < 0 ? visible : `${visible}${original.slice(marker)}`;
@@ -995,7 +1005,7 @@ export function AgentPage({
                     <textarea aria-label="编辑最新用户消息" autoFocus value={editingDraft} onChange={(event) => setEditingDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void submitEditedMessage(); } }} />
                     <footer><button className="button ghost small" type="button" onClick={() => setEditingMessageId("")}>取消</button><button className="button primary small" type="button" onClick={() => void submitEditedMessage()} disabled={!editingDraft.trim()}>重新生成</button></footer>
                   </div>
-                ) : <AgentMarkdown content={visibleMessageContent(message.content)} />}
+                ) : <AgentMarkdown content={visibleMessageContent(message.content)} hideReasoning={message.role === "assistant"} />}
               </div>
             </article>
           ))}
@@ -1005,7 +1015,7 @@ export function AgentPage({
               <div className="agent-message-body">
                 <header><strong>{agentMode === "developer" ? "JCode Agent" : "DRPA Agent"}</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
                 {streamingTools.length > 0 && <div className="agent-tool-events">{streamingTools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
-                {streamingContent ? <AgentMarkdown content={streamingContent} streaming /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
+                {streamingContent ? <AgentMarkdown content={streamingContent} streaming hideReasoning /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
               </div>
             </article>
           )}
@@ -1175,7 +1185,7 @@ export function AgentPage({
                       <textarea aria-label="编辑最新用户消息" autoFocus value={editingDraft} onChange={(event) => setEditingDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void submitEditedMessage(); } }} />
                       <footer><span>提交后会从这条消息重新生成</span><button className="button ghost small" type="button" onClick={() => setEditingMessageId("")}>取消</button><button className="button primary small" type="button" onClick={() => void submitEditedMessage()} disabled={!editingDraft.trim()}>保存并重新生成</button></footer>
                     </div>
-                  ) : <AgentMarkdown content={visibleMessageContent(message.content)} />}
+                  ) : <AgentMarkdown content={visibleMessageContent(message.content)} hideReasoning={message.role === "assistant"} />}
                 </div>
               </article>
             ))}
@@ -1185,7 +1195,7 @@ export function AgentPage({
                 <div className="agent-message-body">
                   <header><strong>{agentMode === "developer" ? "JCode Agent" : "DRPA Agent"}</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
                   {streamingTools.length > 0 && <div className="agent-tool-events">{streamingTools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
-                  {streamingContent ? <AgentMarkdown content={streamingContent} streaming /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
+                  {streamingContent ? <AgentMarkdown content={streamingContent} streaming hideReasoning /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
                 </div>
               </article>
             )}
@@ -1456,6 +1466,7 @@ function ToolEvent({ event }: { event: AgentToolEvent }) {
   );
 }
 
-function AgentMarkdown({ content, streaming = false }: { content: string; streaming?: boolean }) {
-  return <div className={`agent-message-content agent-markdown ${streaming ? "streaming" : ""}`}><Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>{streaming && <span className="agent-stream-caret" aria-hidden="true" />}</div>;
+function AgentMarkdown({ content, streaming = false, hideReasoning = false }: { content: string; streaming?: boolean; hideReasoning?: boolean }) {
+  const visible = hideReasoning ? visibleAssistantMessageContent(content) : content;
+  return <div className={`agent-message-content agent-markdown ${streaming ? "streaming" : ""}`}><Markdown remarkPlugins={[remarkGfm]}>{visible}</Markdown>{streaming && <span className="agent-stream-caret" aria-hidden="true" />}</div>;
 }

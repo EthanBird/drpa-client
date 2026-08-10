@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parsePythonSignature, StudioPage } from "../pages/StudioPage";
-import { AgentPage } from "../pages/AgentPage";
+import { AgentPage, visibleAssistantMessageContent } from "../pages/AgentPage";
 import { WorkbenchPage } from "../pages/WorkbenchPage";
 import { RuntimePage } from "../pages/RuntimePage";
 import { SecretsPage } from "../pages/SecretsPage";
@@ -40,6 +40,12 @@ vi.mock("qrcode", () => ({ default: { toDataURL: vi.fn().mockResolvedValue("data
 
 
 describe("DRPA Next desktop shell", () => {
+  it("keeps reasoning tags out of assistant markdown, including old sessions", () => {
+    expect(visibleAssistantMessageContent("<think>private</think>Final answer")).toBe("Final answer");
+    expect(visibleAssistantMessageContent("<mm:think>private</mm:think>Visible")).toBe("Visible");
+    expect(visibleAssistantMessageContent("prefix<think>still streaming")).toBe("prefix");
+  });
+
   afterEach(() => {
     cleanup();
     delete (window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
@@ -987,7 +993,10 @@ describe("DRPA Next desktop shell", () => {
     render(<StudioPage />);
 
     expect(await screen.findByLabelText("mock-editor")).toHaveValue(source);
-    fireEvent.click(screen.getByRole("button", { name: /Python Flow Beta/ }));
+    const flowButton = screen.getByRole("button", { name: /Python Flow Beta/ });
+    expect(within(screen.getByRole("tablist", { name: "已打开文件" })).queryByRole("button", { name: /Python Flow Beta/ })).not.toBeInTheDocument();
+    expect(flowButton.closest(".studio-editor-head")).toBeInTheDocument();
+    fireEvent.click(flowButton);
 
     expect(await screen.findByLabelText("Python Flow 可视化编辑器")).toBeVisible();
     expect(screen.getByText("节点目录")).toBeVisible();

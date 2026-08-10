@@ -27,7 +27,7 @@ def test_install_extracts_only_the_pinned_executable(tmp_path: Path) -> None:
 
     assert executable.name == "jcode.exe"
     assert executable.read_bytes() == b"synthetic-jcode-executable"
-    assert (tmp_path / "stage" / "VERSION.txt").read_text(encoding="utf-8") == "jcode v0.67.1\n"
+    assert (tmp_path / "stage" / "VERSION.txt").read_text(encoding="utf-8") == "jcode v0.74.0\n"
     assert "MIT License" in (tmp_path / "stage" / "LICENSE.txt").read_text(encoding="utf-8")
 
 

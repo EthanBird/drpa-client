@@ -111,12 +111,14 @@ Host 对参数执行 required、类型、enum、数组元素、嵌套对象和 `
 RPAZ Agent 和 Local Dify 共用 `provider.rs`：
 
 - 统一 `/v1` 与 `/chat/completions` endpoint 规范化；
-- 统一 OpenAI-compatible 请求头、超时和连接池；
+- 统一 OpenAI-compatible 请求头、分阶段网络时限和连接池；
 - 统一普通 JSON 与 SSE 增量解析；
 - 统一配置、HTTP、协议、取消和超时错误分类；
 - Provider 调用在阻塞工作线程执行，协调线程轮询 `AgentRunControl`，因此 UI 取消不等待长 HTTP 超时。
 
-JCode 使用相同的请求 profile 生成 session 配置，但进程协议仍由 JCode adapter 负责。Provider key 只通过进程环境传入，不写入 JCode 配置文件或运行日志。
+Provider 的连接、发送和首个响应阶段使用握手时限；响应正文使用当前 Agent Run 的剩余预算。固定握手时限不得作为整个 SSE 的 `global` 时限，否则持续输出的长任务会在固定秒数处被误杀。MiniMax OpenAI-compatible 请求启用 `reasoning_split`，解析器保留 `reasoning_content`/`reasoning_details` 供工具回合续接，但只向 `Delta` 和最终 Markdown 投影可见答案；`<think>` 与 `<mm:think>` 是兼容兜底，不进入正文。
+
+JCode 使用相同的请求 profile 生成 session 配置，但进程协议仍由 JCode adapter 负责。MiniMax profile 同样写入 `reasoning_split = true`，NDJSON adapter 再执行一次可见内容分流。Provider key 只通过进程环境传入，不写入 JCode 配置文件或运行日志。
 
 ## 7. 附件、产物与外部进程
 
@@ -149,6 +151,8 @@ npm run build
 - stale revision 保存失败，已删除会话不会复活。
 - 同会话运行互斥，不同会话 JCode 不受全局锁影响。
 - 取消信号能被 Provider 和子进程观察。
+- 首个流事件出现后，即使总流时长超过握手时限，Provider 仍持续接收直至 Run 预算结束。
+- MiniMax 累积式 reasoning/content 快照不会重复，推理字段和分片 `<think>` 标签不会进入正文事件。
 - 上下文裁剪不会拆开 tool-call/tool-result 组。
 - 工具 schema 计入 token 预算，禁用工具既不可见也不可执行。
 - 附件可在重启后恢复，删除会话时文件和索引一致清理。

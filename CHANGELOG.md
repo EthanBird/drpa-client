@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### AI Agent
+
+- Provider 网络超时改为分阶段握手时限与 Agent Run 总预算：持续产生事件的长流不再被固定 120 秒 `global` 时限中断，取消与最大运行时长继续由统一 `AgentRunControl` 管理。
+- MiniMax Token Plan/OpenAI-compatible 请求自动启用 `reasoning_split`；SSE 与普通 JSON 会把 `reasoning_content`、`reasoning_details` 及 `<think>` 标签内容保留在模型上下文通道，同时只把最终答案送入 Markdown 正文。
+- JCode sidecar 更新至 `0.74.0`，并在 DRPA 的 NDJSON adapter 增加推理标签隔离，覆盖旧 Provider 输出和已有兼容接口差异。
+
+### 开发工作室
+
+- Python 文件的“代码 / 流程图”切换器移出可横向滚动的文件页签区，固定显示在编辑区右上角；入口明确标记为 `Python Flow · Beta`，多页签时仍保持可见。
+
 ## [2.1.0] - 2026-08-10
 
 ### 开发工作室与 Python Flow

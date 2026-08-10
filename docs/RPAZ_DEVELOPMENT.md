@@ -113,7 +113,7 @@ def main(ctx):
 
 ## Python Flow（Beta）
 
-Python 文件页签右侧可在“代码”和“Python Flow”之间切换。Flow 使用 sealed Python 的 `ast` 静态解析当前 Monaco 内存缓冲区，识别：
+在开发工作室打开任意 `.py` 文件后，编辑区右上角固定显示“代码 / 流程图”切换器；点击带有 `Python Flow · Beta` 标记的“流程图”即可生成当前代码的可视化视图。该入口独立于可横向滚动的文件页签，多文件同时打开时仍保持可见。Flow 使用 sealed Python 的 `ast` 静态解析当前 Monaco 内存缓冲区，识别：
 
 - 赋值、普通函数调用和返回；
 - `ctx.*`、`ctx.sql.*` 与 `ctx.browser(...)`；

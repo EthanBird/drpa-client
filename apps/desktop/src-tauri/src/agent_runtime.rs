@@ -86,6 +86,14 @@ impl AgentRunControl {
         Ok(())
     }
 
+    pub(crate) fn remaining(&self) -> Result<Duration, String> {
+        self.check()?;
+        Ok(self
+            .deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1)))
+    }
+
     pub(crate) fn elapsed_ms(&self) -> u64 {
         u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
     }

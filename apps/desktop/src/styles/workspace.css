@@ -508,7 +508,8 @@
 .studio-save-dialog > svg { background: var(--accent-soft); color: var(--accent-strong); }
 .empty-hint { padding: 10px; color: var(--text-3); font-size: calc(9px * var(--font-scale)); line-height: 1.5; }
 .studio-editor, .studio-editor.notebook-editor { display: grid; grid-template-rows: 36px minmax(0, 1fr); overflow: hidden; }
-.studio-editor-tabs { display: flex; min-width: 0; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--border); background: var(--surface-2); scrollbar-width: thin; }
+.studio-editor-head { display: flex; min-width: 0; overflow: hidden; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.studio-editor-tabs { display: flex; min-width: 0; flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; background: var(--surface-2); scrollbar-width: thin; }
 .studio-editor-tab { position: relative; display: grid; flex: 0 0 auto; grid-template-columns: minmax(0, 1fr) 25px; min-width: 112px; max-width: 220px; border-right: 1px solid var(--border-subtle); background: var(--surface-2); }
 .studio-editor-tab.active { background: var(--surface-1); box-shadow: inset 0 2px 0 var(--accent); }
 .studio-editor-tab > button { min-width: 0; height: 35px; padding: 0 3px 0 9px; border: 0; background: transparent; color: var(--text-3); cursor: pointer; }
