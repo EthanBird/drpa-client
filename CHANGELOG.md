@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-10
+
+### 开发工作室与 Python Flow
+
+- 新建开发项目和从 RPAZ 包创建的开发副本会补齐 `README.md`，记录 manifest、`ctx`、离线依赖、测试、导出及 AI 协作顺序；已有用户 README 保持原内容。
+- 新增 Python Flow Beta：通过静态 AST 把 `main(ctx)` 投影为开始、调用、`ctx`、RPA、条件、循环、异常、返回和原始代码节点，支持画布拖拽、自动布局、撤销重做、属性编辑、源码定位与结构校验。
+- Python 源码继续作为唯一事实源；流程图写回当前 Monaco 页签并复用保存、直接运行、运行记录和 RPAZ 导出链路。未编辑往返保留关键字参数、RPA 别名、返回表达式、注释和空行。
+
+### 离线自动化运行时
+
+- sealed runtime 固定内置 `rpa==1.50.0`、`tagui==1.50.0` 和 Windows/Linux/macOS 平台 TagUI 引擎，运行任务时通过 Host 管理的 `DRPA_RPA_HOME` 与 `DRPA_RPA_BUNDLE` 完成离线初始化。
+- 新增 RPA 源码包、平台资产、Delta 文件、生成 wheel 与最终引擎包的 SHA-256、字节数和提交锁；Windows 和 Linux 发布门禁验证安装布局、来源清单及 RPA/Python Flow 导入。
+
+### 发布
+
+- 产品版本提升至 `2.1.0`，发布 Windows x64 Setup、Linux runtime-complete AppImage、现代 deb 与 UOS Desktop 20 专用 deb 全量离线包。
+- 继续采用全量升级策略，不生成 `.drpa-update`。
+
 ### UOS 交互与插件服务
 
 - UOS 固定根启动器彻底隔离目标系统的 GTK/Fcitx/AT-SPI 动态模块，使用 GTK 内置简单输入上下文与 X11 core events，修复 UOS 20 Professional 1070 中输入框、弹窗、工作区菜单及多数自定义控件聚焦后页面停滞的问题。

@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-desktop"
-version = "2.0.4"
+version = "2.1.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -1006,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-host"
-version = "2.0.4"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "drpa-package",
@@ -1023,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-package"
-version = "2.0.4"
+version = "2.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-protocol"
-version = "2.0.4"
+version = "2.1.0"
 dependencies = [
  "serde",
  "serde_json",

@@ -36,7 +36,7 @@ jobs:
     runs-on: windows-latest
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 2.0.4
+      DRPA_VERSION: 2.1.0
       WEBVIEW2_VERSION: 150.0.4078.65
       WEBVIEW2_URL: https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c00b9782-0422-4114-be27-8eec079b394d/Microsoft.WebView2.FixedVersionRuntime.150.0.4078.65.x64.cab
       WEBVIEW2_SHA256: ca01385bc232dea83242c35ed78e98403866a36b1a0952e97fa7fd870fc39ab4
@@ -103,7 +103,7 @@ jobs:
           $smokeEnvironment = Join-Path $portable "data/runtime-environment/environment"
           & $runtimePython "$portable/runtime/bootstrap_runtime.py" --environment $smokeEnvironment
           if ($LASTEXITCODE -ne 0) { throw "Installed-layout runtime bootstrap failed" }
-          & "$smokeEnvironment/Scripts/python.exe" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat, docx, openpyxl, pptx, pypdf, reportlab; from drpa_runner import agent_mcp, document_worker; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert document_worker.PROTOCOL_VERSION == 1; assert len(agent_mcp.TOOL_DEFINITIONS) >= 11; print('DRPA_WINDOWS_RUNTIME_OK')"
+          & "$smokeEnvironment/Scripts/python.exe" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat, docx, openpyxl, pptx, pypdf, reportlab, rpa, tagui; from drpa_runner import agent_mcp, document_worker, python_flow; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert document_worker.PROTOCOL_VERSION == 1; assert python_flow.SCHEMA_VERSION == 1; assert len(agent_mcp.TOOL_DEFINITIONS) >= 11; print('DRPA_WINDOWS_RUNTIME_OK')"
           if ($LASTEXITCODE -ne 0) { throw "Installed-layout Python/Jupyter/Agent import smoke failed" }
           Remove-Item (Join-Path $portable "data") -Recurse -Force
 
@@ -129,11 +129,11 @@ jobs:
           retention-days: 30
 
   publish:
-    name: Publish Windows v2.0.4 full release
+    name: Publish Windows v2.1.0 full release
     needs: build
     runs-on: ubuntu-latest
     env:
-      DRPA_VERSION: 2.0.4
+      DRPA_VERSION: 2.1.0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -157,7 +157,7 @@ jobs:
           mapfile -t assets < <(find artifacts -type f | sort)
           tag="desktop-v${DRPA_VERSION}"
           title="DRPA Next ${DRPA_VERSION} Windows x64 + UOS full offline release"
-          notes="$(printf 'DRPA Next %s full offline release.\n\nThis release changes the BI dashboard to order-driven adaptive packing, preserves active workspace state across navigation, centralizes Agent run/session ownership, fixes UOS navigation stalls, and makes the built-in Dify2API service independent from Python initialization, noexec workspace mounts, and system proxy settings.\n\nWindows assets contain the complete x64 Setup installer, install inventory and Bing example RPAZ. Verified Linux/UOS assets are added by the Linux packaging workflow. Incremental update packages are not produced.' "$DRPA_VERSION")"
+          notes="$(printf 'DRPA Next %s full offline release.\n\nThis release adds Python Flow Beta to Studio with static AST projection, visual low-code editing, validation and source round-tripping. New Studio projects include an AI-oriented README, and the sealed runtime now bundles RPA for Python 1.50.0 plus the platform TagUI engine for offline execution.\n\nWindows assets contain the complete x64 Setup installer, install inventory and Bing example RPAZ. Verified Linux/UOS assets are added by the Linux packaging workflow. Incremental update packages are not produced.' "$DRPA_VERSION")"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" -f sha="$GITHUB_SHA" -F force=true >/dev/null
