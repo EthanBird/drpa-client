@@ -47,3 +47,31 @@ export function renderOpticalQrGrid(canvas: HTMLCanvasElement, frames: readonly 
   });
   context.putImageData(image, 0, 0);
 }
+
+export function renderOpticalWebEntryQr(canvas: HTMLCanvasElement, url: string): void {
+  const code = QRCode.create([{ mode: "byte", data: new TextEncoder().encode(url) }], { errorCorrectionLevel: "M", maskPattern: 2 });
+  const margin = 4;
+  const scale = 3;
+  const moduleCount = code.modules.size;
+  const side = (moduleCount + margin * 2) * scale;
+  canvas.width = side;
+  canvas.height = side;
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("无法创建网页版入口二维码");
+  const image = context.createImageData(side, side);
+  const pixels = new Uint32Array(image.data.buffer);
+  pixels.fill(WHITE);
+  const modules = code.modules.data;
+  for (let y = 0; y < moduleCount; y += 1) {
+    for (let x = 0; x < moduleCount; x += 1) {
+      if (!modules[y * moduleCount + x]) continue;
+      const originX = (x + margin) * scale;
+      const originY = (y + margin) * scale;
+      for (let dy = 0; dy < scale; dy += 1) {
+        const row = (originY + dy) * side + originX;
+        for (let dx = 0; dx < scale; dx += 1) pixels[row + dx] = BLACK;
+      }
+    }
+  }
+  context.putImageData(image, 0, 0);
+}

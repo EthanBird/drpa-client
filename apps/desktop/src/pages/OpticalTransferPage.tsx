@@ -1,4 +1,4 @@
-import { Camera, CheckCircle2, CircleStop, FileUp, Gauge, LoaderCircle, Play, QrCode, RadioTower, RefreshCw, Save, ShieldAlert } from "lucide-react";
+import { Camera, CheckCircle2, CircleStop, Copy, FileUp, Gauge, LoaderCircle, Play, QrCode, RadioTower, RefreshCw, Save, ShieldAlert, Smartphone } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { OpticalDecodePool, type OpticalDecodedSymbol } from "../features/optical/opticalDecodePool";
@@ -13,9 +13,14 @@ import {
   type OpticalReceivedFile,
   type OpticalTransfer,
 } from "../features/optical/opticalProtocol";
-import { renderOpticalQrGrid } from "../features/optical/opticalQr";
+import { renderOpticalQrGrid, renderOpticalWebEntryQr } from "../features/optical/opticalQr";
 
 export type OpticalFileSaver = (file: OpticalReceivedFile) => Promise<string | null>;
+
+interface OpticalTransferPageProps {
+  saveFile?: OpticalFileSaver;
+  webEntryUrl?: string;
+}
 
 interface TrackedRegion {
   x: number;
@@ -58,7 +63,27 @@ function formatRate(bytesPerSecond: number): string {
   return `${(bytesPerSecond / 1024).toFixed(bytesPerSecond >= 1024 * 100 ? 0 : 1)} KB/s`;
 }
 
-export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver } = {}) {
+function MobileWebEntry({ url, onCopy }: { url: string; onCopy: () => void }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    if (canvasRef.current) renderOpticalWebEntryQr(canvasRef.current, url);
+  }, [url]);
+
+  return (
+    <section className="optical-mobile-entry" aria-label="手机网页版入口">
+      <div className="optical-mobile-entry-qr"><canvas ref={canvasRef} aria-label="扫码打开 DRPA 光学传输网页版" /></div>
+      <div className="optical-mobile-entry-copy">
+        <strong><Smartphone size={15} /> 手机零安装</strong>
+        <p>扫码打开网页版，手机可直接发送或接收。</p>
+        <button className="button secondary" type="button" onClick={onCopy}><Copy size={13} /> 复制网址</button>
+      </div>
+      <small>网络仅用于加载应用，文件数据不上传服务器。</small>
+    </section>
+  );
+}
+
+export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPageProps = {}) {
   const [mode, setMode] = useState<"send" | "receive">("send");
   const [transfer, setTransfer] = useState<OpticalTransfer | null>(null);
   const [preparing, setPreparing] = useState(false);
@@ -408,6 +433,15 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
   };
 
   const theoreticalRate = transfer ? transfer.blockBytes * fps * codeCount : (frameBytes - 30) * fps * codeCount;
+  const copyWebEntryUrl = async () => {
+    if (!webEntryUrl) return;
+    try {
+      await navigator.clipboard.writeText(webEntryUrl);
+      setNotice("已复制手机网页版地址");
+    } catch {
+      setNotice(`请在手机浏览器打开：${webEntryUrl}`);
+    }
+  };
 
   return (
     <div className="page optical-page">
@@ -424,6 +458,7 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
       {mode === "send" ? (
         <main className="optical-layout send-layout">
           <section className="optical-control-panel">
+            {webEntryUrl && <MobileWebEntry url={webEntryUrl} onCopy={() => void copyWebEntryUrl()} />}
             <div className="optical-section-title"><RadioTower size={17} /><div><strong>高速发送设置</strong><span>单文件最大 {formatBytes(MAX_OPTICAL_FILE_BYTES)}</span></div></div>
             <label className="optical-dropzone" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void selectFile(event.dataTransfer.files[0]); }}>
               <input type="file" onChange={(event) => { void selectFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
@@ -452,6 +487,7 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
             {receivedFile && <div className="optical-received"><CheckCircle2 size={54} /><h2>文件校验完成</h2><p>{receivedFile.name} · {formatBytes(receivedFile.bytes.byteLength)}</p><code>{receivedFile.sha256}</code></div>}
           </section>
           <aside className="optical-control-panel receive-controls">
+            {webEntryUrl && <MobileWebEntry url={webEntryUrl} onCopy={() => void copyWebEntryUrl()} />}
             <div className="optical-section-title"><Camera size={17} /><div><strong>Fountain 接收进度</strong><span>{receiveProgress.name}</span></div></div>
             {cameraDevices.length > 1 && <label className="optical-setting"><span>接收摄像头</span><select value={selectedDeviceId} onChange={(event) => { const deviceId = event.target.value; setSelectedDeviceId(deviceId); if (scanning) void startCamera(deviceId, true); }}><option value="">自动选择后置镜头</option>{cameraDevices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `摄像头 ${index + 1}`}</option>)}</select></label>}
             {scanning && <div className="optical-runtime-grid"><div><span>解码器</span><strong>{runtimeStats.engine}</strong></div><div><span>捕获</span><strong>{runtimeStats.captureFps.toFixed(1)} FPS</strong></div><div><span>解码</span><strong>{runtimeStats.decodeFps.toFixed(1)} FPS</strong></div><div><span>跟踪区</span><strong>{runtimeStats.regions}</strong></div><div><span>Worker</span><strong>{runtimeStats.workers}</strong></div><div><span>忙丢帧</span><strong>{runtimeStats.dropped}</strong></div><small>{runtimeStats.resolution} · 新相机帧驱动</small></div>}

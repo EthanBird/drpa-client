@@ -4,6 +4,8 @@
 
 光学传输用于两台不能建立网络连接的设备：发送端将文件变成持续更新的二维码，接收端通过摄像头恢复文件。整个过程不访问网络，也不要求管理员权限。
 
+桌面端额外提供固定的手机网页版入口二维码。手机可以联网加载 GitHub Pages 上的静态 PWA，从而零安装加入传输；网络只承载应用代码，文件数据仍只经过屏幕与摄像头组成的光学通道。
+
 吞吐架构参考 [`decimen-optical-transfer`](https://github.com/bashalarmistalt/decimen-optical-transfer) 的公开[协议](https://github.com/bashalarmistalt/decimen-optical-transfer/blob/main/docs/technical/protocol.md)和[架构](https://github.com/bashalarmistalt/decimen-optical-transfer/blob/main/docs/technical/architecture.md)设计：高密度帧、系统帧加修复帧、固定 QR 掩码、Worker 解码池、忙时丢弃旧画面。该项目当前版本使用 AGPL-3.0-or-later，DRPA 没有复制或链接其代码及 WASM 解码器，而是独立实现 `DRPA2` 协议和浏览器流水线。
 
 ## DRPA2 帧协议

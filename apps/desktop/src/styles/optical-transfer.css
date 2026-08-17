@@ -7,9 +7,19 @@
 .optical-security-note > svg { flex: 0 0 auto; color: var(--warning); }
 .optical-layout { display: grid; min-width: 0; min-height: 0; }
 .optical-layout.send-layout { grid-template-columns: minmax(290px, 340px) minmax(0, 1fr); }
-.optical-layout.receive-layout { grid-template-columns: minmax(0, 1fr) minmax(290px, 350px); }
+.optical-layout.receive-layout { grid-template-columns: minmax(290px, 350px) minmax(0, 1fr); }
 .optical-control-panel { display: flex; flex-direction: column; gap: 13px; min-width: 0; overflow: auto; padding: 20px; border-right: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--surface-1) 94%, transparent); }
-.receive-controls { border-right: 0; border-left: 1px solid var(--border-subtle); }
+.receive-controls { grid-column: 1; grid-row: 1; }
+.receive-layout .optical-camera-stage { grid-column: 2; grid-row: 1; }
+.optical-mobile-entry { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px 11px; padding: 10px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); border-radius: 11px; background: linear-gradient(145deg, var(--surface-2), color-mix(in srgb, var(--accent-soft) 55%, var(--surface-2))); }
+.optical-mobile-entry-qr { display: grid; place-items: center; align-self: start; padding: 5px; border: 1px solid var(--border-subtle); border-radius: 8px; background: #fff; box-shadow: 0 5px 16px rgba(20, 30, 50, .08); }
+.optical-mobile-entry-qr canvas { display: block; width: 111px; height: 111px; image-rendering: pixelated; }
+.optical-mobile-entry-copy { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-width: 0; gap: 6px; }
+.optical-mobile-entry-copy strong { display: flex; align-items: center; gap: 6px; color: var(--text-1); font-size: calc(10px * var(--font-scale)); }
+.optical-mobile-entry-copy strong svg { color: var(--accent-strong); }
+.optical-mobile-entry-copy p { margin: 0; color: var(--text-2); font-size: calc(8px * var(--font-scale)); line-height: 1.45; }
+.optical-mobile-entry-copy .button { min-height: 27px; padding: 0 9px; font-size: calc(8px * var(--font-scale)); }
+.optical-mobile-entry > small { grid-column: 1 / -1; color: var(--text-3); font-size: calc(7px * var(--font-scale)); line-height: 1.4; }
 .optical-section-title { display: flex; align-items: center; gap: 9px; color: var(--accent-strong); }
 .optical-section-title > div { display: grid; min-width: 0; gap: 2px; }
 .optical-section-title strong { color: var(--text-1); font-size: calc(12px * var(--font-scale)); }
@@ -78,7 +88,7 @@
 
 @media (max-width: 1120px) {
   .optical-layout.send-layout { grid-template-columns: 300px minmax(0, 1fr); }
-  .optical-layout.receive-layout { grid-template-columns: minmax(0, 1fr) 310px; }
+  .optical-layout.receive-layout { grid-template-columns: 310px minmax(0, 1fr); }
   .optical-control-panel { padding: 15px; }
   .optical-qr-shell { width: min(60vh, 500px); }
 }

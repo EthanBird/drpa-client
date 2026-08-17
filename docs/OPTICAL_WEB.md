@@ -4,6 +4,8 @@
 
 Web 版是纯静态 Vite 应用，可以直接托管到 GitHub Pages。文件压缩、Fountain 编码、二维码生成、摄像头识别、CRC32 与 SHA-256 都在浏览器中执行，不需要 API、数据库或服务端函数。
 
+DRPA 桌面端的光学传输页会在左侧显示“手机零安装”二维码，指向 `https://ethanbird.github.io/drpa-client/`。手机联网只用于加载并缓存静态应用；选择的文件、摄像头画面和传输帧不会上传到 GitHub 或其他服务器。扫码后手机可以自行选择发送或接收方向，与桌面端使用相同的 DRPA2 协议。
+
 GitHub Pages 默认提供 HTTPS，而 `getUserMedia()` 摄像头接口只在 HTTPS 或 localhost 安全上下文中可用，因此 Pages 的托管模型与接收端要求匹配。浏览器仍会在首次接收时要求用户明确授予摄像头权限。
 
 默认地址为：
