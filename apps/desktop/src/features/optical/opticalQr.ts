@@ -14,10 +14,10 @@ function gridDimensions(count: number): { columns: number; rows: number } {
  * Pinning the mask skips the QR library's eight-mask scoring pass and avoids
  * rebuilding a 520×520 raster for every optical frame.
  */
-export function renderOpticalQrGrid(canvas: HTMLCanvasElement, frames: readonly string[], margin = 2): void {
+export function renderOpticalQrGrid(canvas: HTMLCanvasElement, frames: readonly (string | Uint8Array)[], margin = 2): void {
   if (!frames.length) return;
   const codes = frames.map((frame) => QRCode.create(
-    [{ mode: "alphanumeric", data: frame }],
+    [typeof frame === "string" ? { mode: "alphanumeric" as const, data: frame } : { mode: "byte" as const, data: frame }],
     { errorCorrectionLevel: "L", maskPattern: 2 },
   ));
   const moduleCount = codes[0]!.modules.size;
@@ -47,4 +47,3 @@ export function renderOpticalQrGrid(canvas: HTMLCanvasElement, frames: readonly 
   });
   context.putImageData(image, 0, 0);
 }
-

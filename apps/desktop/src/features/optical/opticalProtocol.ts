@@ -2,9 +2,9 @@ export const OPTICAL_PROTOCOL = "DRPA2";
 export const OPTICAL_WIRE_PREFIX = "DRPA2:";
 export const MAX_OPTICAL_FILE_BYTES = 64 * 1024 * 1024;
 export const MIN_OPTICAL_FRAME_BYTES = 480;
-export const MAX_OPTICAL_FRAME_BYTES = 2860;
-export const DEFAULT_OPTICAL_FRAME_BYTES = 2200;
-export const OPTICAL_FRAME_BYTE_OPTIONS = [900, 1465, 2200, MAX_OPTICAL_FRAME_BYTES] as const;
+export const MAX_OPTICAL_FRAME_BYTES = 2953;
+export const DEFAULT_OPTICAL_FRAME_BYTES = 1465;
+export const OPTICAL_FRAME_BYTE_OPTIONS = [900, DEFAULT_OPTICAL_FRAME_BYTES, 1850, 2331, MAX_OPTICAL_FRAME_BYTES] as const;
 
 const FRAME_MAGIC = new Uint8Array([0x44, 0x52, 0x50, 0x41]); // DRPA
 const FRAME_VERSION = 2;
@@ -317,6 +317,11 @@ export function decodeOpticalFrameText(value: string): Uint8Array | null {
   } catch {
     return null;
   }
+}
+
+export function isOpticalFrame(encoded: string | Uint8Array): boolean {
+  const bytes = typeof encoded === "string" ? decodeOpticalFrameText(encoded) : encoded;
+  return Boolean(bytes && parseFrame(bytes));
 }
 
 export async function createOpticalTransfer(

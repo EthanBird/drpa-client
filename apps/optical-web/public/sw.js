@@ -1,4 +1,4 @@
-const CACHE_NAME = "drpa-optical-v2";
+const CACHE_NAME = "drpa-optical-v3";
 const APP_SHELL = new URL("./", self.registration.scope).href;
 
 self.addEventListener("install", (event) => {
@@ -10,7 +10,12 @@ self.addEventListener("install", (event) => {
     const assets = [...html.matchAll(/(?:src|href)="([^"]+)"/g)]
       .map((match) => new URL(match[1], APP_SHELL).href)
       .filter((url) => new URL(url).origin === self.location.origin);
-    await cache.addAll([...new Set(assets)]);
+    const manifestUrl = new URL("precache-manifest.json", APP_SHELL).href;
+    const manifest = await fetch(manifestUrl, { cache: "no-cache" }).then((result) => result.json());
+    const generated = Array.isArray(manifest.files)
+      ? manifest.files.map((file) => new URL(file, APP_SHELL).href)
+      : [];
+    await cache.addAll([...new Set([...assets, manifestUrl, ...generated])]);
   })());
   self.skipWaiting();
 });

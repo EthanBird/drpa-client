@@ -40,6 +40,11 @@
 .optical-throughput span, .optical-throughput small { color: var(--text-3); font-size: calc(8px * var(--font-scale)); }
 .optical-throughput strong { color: var(--accent-strong); font-size: calc(11px * var(--font-scale)); }
 .optical-throughput small { grid-column: 2; line-height: 1.4; }
+.optical-runtime-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--border-subtle); }
+.optical-runtime-grid > div { display: grid; gap: 3px; min-width: 0; padding: 8px; background: var(--surface-2); }
+.optical-runtime-grid span { color: var(--text-3); font-size: calc(7px * var(--font-scale)); }
+.optical-runtime-grid strong { overflow: hidden; color: var(--text-1); font-size: calc(9px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }
+.optical-runtime-grid > small { grid-column: 1 / -1; padding: 6px 8px; background: var(--surface-1); color: var(--text-3); font-size: calc(7px * var(--font-scale)); }
 .optical-stage-status { display: flex; align-items: center; gap: 8px; min-height: 34px; margin-top: 12px; padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--surface-1) 92%, transparent); color: var(--text-3); font-size: calc(8px * var(--font-scale)); box-shadow: 0 5px 18px rgba(20, 30, 50, .07); }
 .optical-stage-status > span:first-child { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
 .optical-stage-status > span.live { background: var(--success); box-shadow: 0 0 0 4px var(--success-soft); animation: optical-pulse 1.3s infinite; }

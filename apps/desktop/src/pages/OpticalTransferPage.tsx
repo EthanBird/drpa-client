@@ -7,6 +7,7 @@ import {
   MAX_OPTICAL_FILE_BYTES,
   OPTICAL_FRAME_BYTE_OPTIONS,
   OpticalReceiver,
+  isOpticalFrame,
   prepareOpticalTransfer,
   type OpticalReceiveProgress,
   type OpticalReceivedFile,
@@ -16,14 +17,25 @@ import { renderOpticalQrGrid } from "../features/optical/opticalQr";
 
 export type OpticalFileSaver = (file: OpticalReceivedFile) => Promise<string | null>;
 
-interface NativeBarcodeDetector {
-  detect(source: CanvasImageSource): Promise<Array<{ rawValue: string; boundingBox?: DOMRectReadOnly }>>;
+interface TrackedRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  lastSeen: number;
 }
 
-interface NativeBarcodeDetectorConstructor {
-  new(options: { formats: string[] }): NativeBarcodeDetector;
-  getSupportedFormats(): Promise<string[]>;
+interface ReceiverRuntimeStats {
+  engine: "WASM" | "JS 兼容" | "正在加载";
+  captureFps: number;
+  decodeFps: number;
+  workers: number;
+  regions: number;
+  dropped: number;
+  resolution: string;
 }
+
+type VideoFrameElement = HTMLVideoElement;
 
 const emptyProgress: OpticalReceiveProgress = {
   sessionId: "",
@@ -50,35 +62,47 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
   const [transfer, setTransfer] = useState<OpticalTransfer | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [sending, setSending] = useState(false);
-  const [fps, setFps] = useState(30);
+  const [fps, setFps] = useState(24);
   const [frameBytes, setFrameBytes] = useState(DEFAULT_OPTICAL_FRAME_BYTES);
-  const [codeCount, setCodeCount] = useState(2);
+  const [codeCount, setCodeCount] = useState(1);
   const [currentFrame, setCurrentFrame] = useState({ sequence: 0, cycle: 0 });
   const [notice, setNotice] = useState("选择文件后，DRPA 会生成可丢帧恢复的高速二维码流。");
   const [scanning, setScanning] = useState(false);
   const [receiveProgress, setReceiveProgress] = useState<OpticalReceiveProgress>(emptyProgress);
   const [receivedFile, setReceivedFile] = useState<OpticalReceivedFile | null>(null);
   const [saving, setSaving] = useState(false);
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState("");
+  const [runtimeStats, setRuntimeStats] = useState<ReceiverRuntimeStats>({ engine: "正在加载", captureFps: 0, decodeFps: 0, workers: 0, regions: 0, dropped: 0, resolution: "--" });
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scanCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const decodePoolRef = useRef<OpticalDecodePool | null>(null);
-  const nativeDetectorRef = useRef<NativeBarcodeDetector | null>(null);
-  const nativeDetectorBusyRef = useRef(false);
   const scanFrameRef = useRef(0);
+  const videoFrameRequestRef = useRef(0);
+  const statsTimerRef = useRef(0);
+  const captureGenerationRef = useRef(0);
+  const trackedRegionsRef = useRef<TrackedRegion[]>([]);
+  const cropRotationRef = useRef(0);
+  const pipelineCountersRef = useRef({ captures: 0, decodes: 0, dropped: 0, engine: "wasm" as "wasm" | "js" });
   const receiverRef = useRef(new OpticalReceiver());
   const verifyingRef = useRef(false);
   const selectedFileRef = useRef<File | null>(null);
   const lastProgressUpdateRef = useRef(0);
 
   const stopCamera = () => {
+    captureGenerationRef.current += 1;
     window.cancelAnimationFrame(scanFrameRef.current);
     scanFrameRef.current = 0;
+    const video = videoRef.current as VideoFrameElement | null;
+    if (video?.cancelVideoFrameCallback && videoFrameRequestRef.current) video.cancelVideoFrameCallback(videoFrameRequestRef.current);
+    videoFrameRequestRef.current = 0;
+    window.clearInterval(statsTimerRef.current);
+    statsTimerRef.current = 0;
     decodePoolRef.current?.terminate();
     decodePoolRef.current = null;
-    nativeDetectorRef.current = null;
-    nativeDetectorBusyRef.current = false;
+    trackedRegionsRef.current = [];
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
@@ -102,7 +126,7 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
         const spacing = Math.max(1, Math.floor(cycleLength / codeCount));
         const sequences = Array.from({ length: sending ? codeCount : 1 }, (_, index) => (sequence + index * spacing) >>> 0);
         try {
-          renderOpticalQrGrid(qrCanvasRef.current, sequences.map((value) => transfer.createFrameText(value)));
+          renderOpticalQrGrid(qrCanvasRef.current, sequences.map((value) => transfer.createFrame(value)));
         } catch (error) {
           setNotice(`二维码生成失败：${String(error)}`);
           return;
@@ -143,10 +167,39 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
     }
   };
 
-  const handleDecoded = (symbols: OpticalDecodedSymbol[]) => {
-    let accepted = 0;
+  const updateTrackedRegions = (symbols: OpticalDecodedSymbol[]) => {
+    const now = performance.now();
+    const regions = trackedRegionsRef.current.filter((region) => now - region.lastSeen < 1800);
     for (const symbol of symbols) {
-      if (receiverRef.current.accept(symbol.text)) accepted += 1;
+      if (symbol.box.width < 24 || symbol.box.height < 24) continue;
+      const centerX = symbol.box.x + symbol.box.width / 2;
+      const centerY = symbol.box.y + symbol.box.height / 2;
+      const existing = regions.find((region) => {
+        const regionCenterX = region.x + region.width / 2;
+        const regionCenterY = region.y + region.height / 2;
+        return Math.hypot(centerX - regionCenterX, centerY - regionCenterY) < Math.max(region.width, region.height) * 0.65;
+      });
+      if (existing) {
+        existing.x = symbol.box.x;
+        existing.y = symbol.box.y;
+        existing.width = symbol.box.width;
+        existing.height = symbol.box.height;
+        existing.lastSeen = now;
+      } else if (regions.length < 4) {
+        regions.push({ ...symbol.box, lastSeen: now });
+      }
+    }
+    trackedRegionsRef.current = regions;
+  };
+
+  const handleDecoded = (symbols: OpticalDecodedSymbol[], details: { engine: "wasm" | "js"; full: boolean }) => {
+    pipelineCountersRef.current.engine = details.engine;
+    pipelineCountersRef.current.decodes += symbols.length;
+    const opticalSymbols = symbols.filter((symbol) => isOpticalFrame(symbol.bytes) || isOpticalFrame(symbol.text));
+    updateTrackedRegions(opticalSymbols);
+    let accepted = 0;
+    for (const symbol of opticalSymbols) {
+      if (receiverRef.current.accept(symbol.bytes) || receiverRef.current.accept(symbol.text)) accepted += 1;
     }
     if (!accepted) return;
     const progress = receiverRef.current.progress();
@@ -183,54 +236,92 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
     if (selectedFileRef.current) void selectFile(selectedFileRef.current, value);
   };
 
-  const startCamera = async () => {
+  const startCamera = async (requestedDeviceId = selectedDeviceId, preserveReceiver = false) => {
     stopCamera();
-    setReceivedFile(null);
-    receiverRef.current.reset();
-    setReceiveProgress(emptyProgress);
+    if (!preserveReceiver) {
+      setReceivedFile(null);
+      receiverRef.current.reset();
+      setReceiveProgress(emptyProgress);
+    }
+    setRuntimeStats({ engine: "正在加载", captureFps: 0, decodeFps: 0, workers: 0, regions: 0, dropped: 0, resolution: "--" });
     try {
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
         throw new Error("摄像头只允许在 HTTPS 或 localhost 安全页面中使用");
       }
+      const videoConstraints: MediaTrackConstraints = {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30, max: 60 },
+      };
+      if (requestedDeviceId) videoConstraints.deviceId = { exact: requestedDeviceId };
+      else videoConstraints.facingMode = { ideal: "environment" };
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 60 },
-        },
+        video: videoConstraints,
         audio: false,
       });
       streamRef.current = stream;
+      const track = stream.getVideoTracks()[0]!;
+      const capabilities = track.getCapabilities() as MediaTrackCapabilities & { focusMode?: string[] };
+      if (capabilities.focusMode?.includes("continuous")) {
+        try {
+          await track.applyConstraints({ advanced: [{ focusMode: "continuous" } as unknown as MediaTrackConstraintSet] });
+        } catch {
+          // Some mobile browsers expose the capability but reject live changes.
+        }
+      }
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
-      const workerCount = Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
-      decodePoolRef.current = new OpticalDecodePool(workerCount, handleDecoded);
-      const detectorConstructor = (window as Window & { BarcodeDetector?: NativeBarcodeDetectorConstructor }).BarcodeDetector;
-      if (detectorConstructor) {
-        try {
-          const formats = await detectorConstructor.getSupportedFormats();
-          if (formats.includes("qr_code")) nativeDetectorRef.current = new detectorConstructor({ formats: ["qr_code"] });
-        } catch {
-          nativeDetectorRef.current = null;
-        }
-      }
-      setScanning(true);
-      setNotice(nativeDetectorRef.current
-        ? `摄像头已启动，正在使用浏览器原生多码解码器（${workerCount} 个 Worker 待命）。`
-        : `摄像头已启动，${workerCount} 个解码 Worker 正在并行工作。`);
+      const settings = track.getSettings();
+      const devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === "videoinput");
+      setCameraDevices(devices);
+      setSelectedDeviceId(requestedDeviceId || settings.deviceId || "");
 
-      let lastCapture = 0;
-      const capture = (time: number) => {
+      const workerCount = Math.max(1, Math.min(3, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+      decodePoolRef.current = new OpticalDecodePool(
+        workerCount,
+        handleDecoded,
+        ({ ready, total, engine }) => {
+          if (ready !== total) return;
+          setNotice(engine === "wasm"
+            ? `ZXing-C++ WASM 已就绪：${total} 个解码 Worker，已启用区域跟踪。`
+            : `WASM 初始化失败，已降级到 ${total} 个 JavaScript 解码 Worker。`);
+        },
+      );
+      pipelineCountersRef.current = { captures: 0, decodes: 0, dropped: 0, engine: "wasm" };
+      setScanning(true);
+      setNotice(`摄像头已启动，正在加载 ${workerCount} 个 ZXing-C++ WASM Worker…`);
+
+      const generation = captureGenerationRef.current;
+      let lastFullScan = 0;
+      let previousStats = { time: performance.now(), captures: 0, decodes: 0 };
+      statsTimerRef.current = window.setInterval(() => {
+        const now = performance.now();
+        const counters = pipelineCountersRef.current;
+        const seconds = Math.max(0.001, (now - previousStats.time) / 1000);
         const video = videoRef.current;
+        setRuntimeStats({
+          engine: counters.engine === "wasm" ? "WASM" : "JS 兼容",
+          captureFps: (counters.captures - previousStats.captures) / seconds,
+          decodeFps: (counters.decodes - previousStats.decodes) / seconds,
+          workers: decodePoolRef.current?.size ?? 0,
+          regions: trackedRegionsRef.current.length,
+          dropped: counters.dropped,
+          resolution: video?.videoWidth ? `${video.videoWidth}×${video.videoHeight}` : "--",
+        });
+        previousStats = { time: now, captures: counters.captures, decodes: counters.decodes };
+      }, 500);
+
+      const capture = (time: number) => {
+        if (generation !== captureGenerationRef.current) return;
+        const video = videoRef.current as VideoFrameElement | null;
         const canvas = scanCanvasRef.current;
         const pool = decodePoolRef.current;
         if (!pool || !video || !canvas) return;
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && time - lastCapture >= 25 && pool.busyCount < workerCount) {
-          lastCapture = time;
-          const scale = Math.min(1, 960 / Math.max(video.videoWidth, video.videoHeight));
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && pool.readyCount > 0) {
+          if (!pool.freeCount) pipelineCountersRef.current.dropped += 1;
+          const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
           const width = Math.max(1, Math.round(video.videoWidth * scale));
           const height = Math.max(1, Math.round(video.videoHeight * scale));
           if (canvas.width !== width || canvas.height !== height) {
@@ -239,30 +330,38 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
           }
           const context = canvas.getContext("2d", { willReadFrequently: true });
           context?.drawImage(video, 0, 0, width, height);
-          const detector = nativeDetectorRef.current;
-          if (detector && !nativeDetectorBusyRef.current) {
-            nativeDetectorBusyRef.current = true;
-            void detector.detect(canvas).then((barcodes) => {
-              handleDecoded(barcodes.map((barcode) => ({
-                text: barcode.rawValue,
-                box: barcode.boundingBox
-                  ? { x: barcode.boundingBox.x, y: barcode.boundingBox.y, width: barcode.boundingBox.width, height: barcode.boundingBox.height }
-                  : { x: 0, y: 0, width, height },
-              })));
-            }).catch(() => {
-              nativeDetectorRef.current = null;
-            }).finally(() => {
-              nativeDetectorBusyRef.current = false;
-            });
-          } else if (!detector) {
+          pipelineCountersRef.current.captures += 1;
+          const regions = trackedRegionsRef.current.filter((region) => time - region.lastSeen < 1800);
+          trackedRegionsRef.current = regions;
+          const fullScanInterval = regions.length ? 1200 : 80;
+          if (context && pool.freeCount && time - lastFullScan >= fullScanInterval) {
             const image = context?.getImageData(0, 0, width, height);
-            if (image) pool.submit(image, 4);
+            if (image && pool.submit(image, { full: true, maxSymbols: 4 })) lastFullScan = time;
+          }
+          if (context && regions.length && pool.freeCount) {
+            const start = cropRotationRef.current % regions.length;
+            for (let index = 0; index < regions.length && pool.freeCount; index += 1) {
+              const region = regions[(start + index) % regions.length]!;
+              const padding = Math.round(Math.max(region.width, region.height) * 0.32);
+              const x = Math.max(0, Math.floor(region.x - padding));
+              const y = Math.max(0, Math.floor(region.y - padding));
+              const cropWidth = Math.min(width - x, Math.ceil(region.width + padding * 2));
+              const cropHeight = Math.min(height - y, Math.ceil(region.height + padding * 2));
+              if (cropWidth < 64 || cropHeight < 64) continue;
+              const crop = context.getImageData(x, y, cropWidth, cropHeight);
+              pool.submit(crop, { originX: x, originY: y, full: false, maxSymbols: 1 });
+            }
+            cropRotationRef.current += 1;
           }
         }
-        scanFrameRef.current = window.requestAnimationFrame(capture);
+        if (video.requestVideoFrameCallback) videoFrameRequestRef.current = video.requestVideoFrameCallback(capture);
+        else scanFrameRef.current = window.requestAnimationFrame(capture);
       };
-      scanFrameRef.current = window.requestAnimationFrame(capture);
+      const video = videoRef.current as VideoFrameElement | null;
+      if (video?.requestVideoFrameCallback) videoFrameRequestRef.current = video.requestVideoFrameCallback(capture);
+      else scanFrameRef.current = window.requestAnimationFrame(capture);
     } catch (error) {
+      stopCamera();
       setNotice(`无法启动摄像头：${String(error)}`);
     }
   };
@@ -330,15 +429,15 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
               <strong>{preparing ? "正在压缩并计算摘要…" : "选择或拖入文件"}</strong>
               <span>文件只在本机内存中处理，不上传网络</span>
             </label>
-            <label className="optical-setting"><span>二维码帧率</span><select value={fps} onChange={(event) => setFps(Number(event.target.value))} disabled={sending}><option value={12}>12 FPS · 远距离</option><option value={24}>24 FPS · 兼容</option><option value={30}>30 FPS · 推荐</option><option value={45}>45 FPS · 高刷屏</option><option value={60}>60 FPS · 实验</option></select></label>
+            <label className="optical-setting"><span>二维码帧率</span><select value={fps} onChange={(event) => setFps(Number(event.target.value))} disabled={sending}><option value={12}>12 FPS · 远距离</option><option value={24}>24 FPS · 稳定推荐</option><option value={30}>30 FPS · 高速</option><option value={45}>45 FPS · 高刷屏</option><option value={60}>60 FPS · 实验</option></select></label>
             <label className="optical-setting"><span>单帧容量</span><select value={frameBytes} onChange={(event) => changeFrameBytes(Number(event.target.value))} disabled={sending || preparing}>{OPTICAL_FRAME_BYTE_OPTIONS.map((value) => <option key={value} value={value}>{value} B{value === DEFAULT_OPTICAL_FRAME_BYTES ? " · 推荐" : ""}</option>)}</select></label>
-            <label className="optical-setting"><span>同屏二维码</span><select value={codeCount} onChange={(event) => setCodeCount(Number(event.target.value))} disabled={sending}><option value={1}>1 个 · 远距离</option><option value={2}>2 个 · 推荐</option><option value={4}>4 个 · 大屏高速</option></select></label>
+            <label className="optical-setting"><span>同屏二维码</span><select value={codeCount} onChange={(event) => setCodeCount(Number(event.target.value))} disabled={sending}><option value={1}>1 个 · 稳定推荐</option><option value={2}>2 个 · 大屏高速</option><option value={4}>4 个 · 实验极速</option></select></label>
             <div className="optical-throughput"><Gauge size={16} /><div><span>理论净载荷</span><strong>{formatRate(theoreticalRate)}</strong></div><small>实际速度取决于屏幕刷新率、距离和摄像头解码率</small></div>
             {transfer && <dl className="optical-file-meta"><div><dt>文件</dt><dd>{transfer.name}</dd></div><div><dt>原始大小</dt><dd>{formatBytes(transfer.size)}</dd></div><div><dt>源块</dt><dd>{transfer.totalChunks} × {formatBytes(transfer.blockBytes)}</dd></div><div><dt>压缩</dt><dd>{transfer.compression === "gzip" ? `${formatBytes(transfer.transmittedSize)} gzip` : "未压缩"}</dd></div><div className="wide"><dt>SHA-256</dt><dd><code>{transfer.sha256}</code></dd></div></dl>}
             <button className={`button ${sending ? "danger" : "primary"} wide`} type="button" disabled={!transfer || preparing} onClick={() => setSending((value) => !value)}>{sending ? <CircleStop size={16} /> : <Play size={16} />}{sending ? "停止发送" : "开始高速发送"}</button>
           </section>
           <section className="optical-stage">
-            {transfer ? <><div className={`optical-qr-shell optical-grid-${sending ? codeCount : 1}`}><canvas ref={qrCanvasRef} aria-label="动态光学传输二维码" /></div><div className="optical-stage-status"><span className={sending ? "live" : ""} /><strong>{sending ? "高速发送中" : "已暂停"}</strong><span>序号 {currentFrame.sequence}</span><small>周期位置 {currentFrame.cycle + 1}/{transfer.totalChunks * 2}</small></div></> : <div className="optical-stage-empty"><QrCode size={54} /><h2>二维码将在这里显示</h2><p>普通显示器建议使用 30 FPS、2200 B 和双码；距离较远时降低帧大小或切换单码。</p></div>}
+            {transfer ? <><div className={`optical-qr-shell optical-grid-${sending ? codeCount : 1}`}><canvas ref={qrCanvasRef} aria-label="动态光学传输二维码" /></div><div className="optical-stage-status"><span className={sending ? "live" : ""} /><strong>{sending ? "高速发送中" : "已暂停"}</strong><span>序号 {currentFrame.sequence}</span><small>周期位置 {currentFrame.cycle + 1}/{transfer.totalChunks * 2}</small></div></> : <div className="optical-stage-empty"><QrCode size={54} /><h2>二维码将在这里显示</h2><p>默认 24 FPS、1465 B、单码以稳定为先；确认对焦稳定后再提高容量或增加同屏二维码。</p></div>}
           </section>
         </main>
       ) : (
@@ -346,12 +445,14 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
           <section className="optical-camera-stage">
             <video ref={videoRef} muted playsInline aria-label="二维码接收摄像头" />
             <canvas ref={scanCanvasRef} hidden />
-            {!scanning && !receivedFile && <div className="optical-camera-empty"><Camera size={48} /><h2>启动摄像头开始接收</h2><p>解码在本机 Worker 中并行运行，不录制、不上传。</p></div>}
+            {!scanning && !receivedFile && <div className="optical-camera-empty"><Camera size={48} /><h2>启动摄像头开始接收</h2><p>ZXing-C++ WASM 在本机 Worker 中解码，不录制、不上传。</p></div>}
             {scanning && <div className="optical-scan-guide"><span /><span /><span /><span /></div>}
             {receivedFile && <div className="optical-received"><CheckCircle2 size={54} /><h2>文件校验完成</h2><p>{receivedFile.name} · {formatBytes(receivedFile.bytes.byteLength)}</p><code>{receivedFile.sha256}</code></div>}
           </section>
           <aside className="optical-control-panel receive-controls">
             <div className="optical-section-title"><Camera size={17} /><div><strong>Fountain 接收进度</strong><span>{receiveProgress.name}</span></div></div>
+            {cameraDevices.length > 1 && <label className="optical-setting"><span>接收摄像头</span><select value={selectedDeviceId} onChange={(event) => { const deviceId = event.target.value; setSelectedDeviceId(deviceId); if (scanning) void startCamera(deviceId, true); }}><option value="">自动选择后置镜头</option>{cameraDevices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `摄像头 ${index + 1}`}</option>)}</select></label>}
+            {scanning && <div className="optical-runtime-grid"><div><span>解码器</span><strong>{runtimeStats.engine}</strong></div><div><span>捕获</span><strong>{runtimeStats.captureFps.toFixed(1)} FPS</strong></div><div><span>解码</span><strong>{runtimeStats.decodeFps.toFixed(1)} FPS</strong></div><div><span>跟踪区</span><strong>{runtimeStats.regions}</strong></div><div><span>Worker</span><strong>{runtimeStats.workers}</strong></div><div><span>忙丢帧</span><strong>{runtimeStats.dropped}</strong></div><small>{runtimeStats.resolution} · 新相机帧驱动</small></div>}
             <div className="optical-progress"><div><span style={{ width: `${receiveProgress.percent}%` }} /></div><strong>{receiveProgress.percent}%</strong></div>
             <dl className="optical-file-meta"><div><dt>有效帧</dt><dd>{receiveProgress.receivedChunks} / {receiveProgress.totalChunks || "--"}</dd></div><div><dt>净载荷</dt><dd>{formatBytes(receiveProgress.receivedBytes)} / {receiveProgress.fileSize ? formatBytes(receiveProgress.fileSize) : "--"}</dd></div><div className="wide"><dt>会话</dt><dd><code>{receiveProgress.sessionId || "等待二维码"}</code></dd></div></dl>
             {!scanning ? <button className="button primary wide" type="button" onClick={() => void startCamera()} disabled={Boolean(receivedFile)}><Camera size={16} /> 启动摄像头</button> : <button className="button danger wide" type="button" onClick={stopCamera}><CircleStop size={16} /> 停止扫描</button>}

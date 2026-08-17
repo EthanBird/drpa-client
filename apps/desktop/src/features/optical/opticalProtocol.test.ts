@@ -61,9 +61,9 @@ describe("DRPA high-speed optical transfer protocol", () => {
     expect(receiver.accept(corrupted)).toBe(false);
   });
 
-  it("fits the maximum DRPA frame into a version-40 L QR symbol", async () => {
+  it("fits the maximum binary DRPA frame into a version-40 L QR symbol", async () => {
     const transfer = await createOpticalTransfer(new Uint8Array(8_000), "capacity.bin", "application/octet-stream", MAX_OPTICAL_FRAME_BYTES);
-    const qr = QRCode.create([{ mode: "alphanumeric", data: transfer.createFrameText(0) }], { errorCorrectionLevel: "L", maskPattern: 2 });
+    const qr = QRCode.create([{ mode: "byte", data: transfer.createFrame(0) }], { errorCorrectionLevel: "L", maskPattern: 2 });
     expect(qr.version).toBeLessThanOrEqual(40);
   });
 });
