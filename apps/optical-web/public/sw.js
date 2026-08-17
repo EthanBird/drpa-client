@@ -1,4 +1,4 @@
-const CACHE_NAME = "drpa-optical-v1";
+const CACHE_NAME = "drpa-optical-v2";
 const APP_SHELL = new URL("./", self.registration.scope).href;
 
 self.addEventListener("install", (event) => {

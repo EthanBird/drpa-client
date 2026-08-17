@@ -31,7 +31,15 @@
 .optical-stage, .optical-camera-stage { position: relative; display: grid; place-items: center; min-width: 0; min-height: 0; overflow: hidden; padding: 24px; }
 .optical-stage { grid-template-rows: minmax(0, 1fr) auto; background: linear-gradient(90deg, color-mix(in srgb, var(--border-subtle) 42%, transparent) 1px, transparent 1px), linear-gradient(color-mix(in srgb, var(--border-subtle) 42%, transparent) 1px, transparent 1px); background-size: 28px 28px; }
 .optical-qr-shell { display: grid; place-items: center; width: min(66vh, 560px); max-width: 92%; aspect-ratio: 1; padding: 14px; border: 1px solid var(--border); border-radius: 18px; background: white; box-shadow: 0 22px 70px rgba(16, 31, 68, .18); }
-.optical-qr-shell canvas { display: block; width: 100% !important; height: 100% !important; image-rendering: pixelated; }
+.optical-qr-shell canvas { display: block; max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+.optical-qr-shell.optical-grid-1 canvas, .optical-qr-shell.optical-grid-4 canvas { width: 100% !important; height: 100% !important; }
+.optical-qr-shell.optical-grid-2 canvas { width: auto !important; height: 100% !important; }
+.optical-throughput { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 3px 9px; padding: 10px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); border-radius: 8px; background: var(--accent-soft); color: var(--accent-strong); }
+.optical-throughput > svg { grid-row: 1 / span 2; }
+.optical-throughput > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.optical-throughput span, .optical-throughput small { color: var(--text-3); font-size: calc(8px * var(--font-scale)); }
+.optical-throughput strong { color: var(--accent-strong); font-size: calc(11px * var(--font-scale)); }
+.optical-throughput small { grid-column: 2; line-height: 1.4; }
 .optical-stage-status { display: flex; align-items: center; gap: 8px; min-height: 34px; margin-top: 12px; padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--surface-1) 92%, transparent); color: var(--text-3); font-size: calc(8px * var(--font-scale)); box-shadow: 0 5px 18px rgba(20, 30, 50, .07); }
 .optical-stage-status > span:first-child { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
 .optical-stage-status > span.live { background: var(--success); box-shadow: 0 0 0 4px var(--success-soft); animation: optical-pulse 1.3s infinite; }

@@ -1,44 +1,69 @@
+import QRCode from "qrcode";
 import { describe, expect, it } from "vitest";
 
 import {
-  createOpticalCarousel,
   createOpticalTransfer,
-  decodeOpticalFrame,
+  decodeBase45,
+  encodeBase45,
+  MAX_OPTICAL_FRAME_BYTES,
   OpticalReceiver,
 } from "./opticalProtocol";
 
-describe("DRPA optical transfer protocol", () => {
-  it("reassembles out-of-order QR frames and verifies the file digest", async () => {
-    const source = new TextEncoder().encode("光学通道 round trip ".repeat(160));
-    const transfer = await createOpticalTransfer(source, "测试/报告.txt", "text/plain", 320);
+describe("DRPA high-speed optical transfer protocol", () => {
+  it("round-trips arbitrary bytes through Base45", () => {
+    const source = Uint8Array.from({ length: 1025 }, (_, index) => (index * 197 + 31) & 0xff);
+    expect(Array.from(decodeBase45(encodeBase45(source)))).toEqual(Array.from(source));
+  });
+
+  it("reassembles out-of-order systematic frames and verifies the file digest", async () => {
+    const source = new TextEncoder().encode("光学通道 round trip ".repeat(320));
+    const transfer = await createOpticalTransfer(source, "测试/报告.txt", "text/plain", 900);
     const receiver = new OpticalReceiver();
 
-    expect(receiver.accept(transfer.metadataFrame)).toBe(true);
-    for (const frame of [...transfer.dataFrames].reverse()) expect(receiver.accept(frame)).toBe(true);
-    expect(receiver.progress()).toMatchObject({ name: "报告.txt", receivedChunks: transfer.dataFrames.length, percent: 100 });
-
+    for (const sequence of Array.from({ length: transfer.totalChunks }, (_, index) => index).reverse()) {
+      expect(receiver.accept(transfer.createFrameText(sequence))).toBe(true);
+    }
+    expect(receiver.isComplete()).toBe(true);
     const completed = await receiver.complete();
     expect(completed?.name).toBe("报告.txt");
     expect(Array.from(completed?.bytes ?? [])).toEqual(Array.from(source));
     expect(completed?.sha256).toBe(transfer.sha256);
   });
 
-  it("ignores duplicate and corrupted data frames", async () => {
-    const transfer = await createOpticalTransfer(new Uint8Array(700).fill(23), "payload.bin", "application/octet-stream", 320);
+  it("uses repair frames to recover dropped source blocks without replaying a full cycle", async () => {
+    const source = Uint8Array.from({ length: 24_000 }, (_, index) => index % 251);
+    const transfer = await createOpticalTransfer(source, "payload.bin", "application/octet-stream", 900);
     const receiver = new OpticalReceiver();
-    receiver.accept(transfer.metadataFrame);
-    expect(receiver.accept(transfer.dataFrames[0])).toBe(true);
-    expect(receiver.accept(transfer.dataFrames[0])).toBe(false);
-    const corrupt = `${transfer.dataFrames[1].slice(0, -1)}${transfer.dataFrames[1].endsWith("A") ? "B" : "A"}`;
-    expect(receiver.accept(corrupt)).toBe(false);
-    expect(receiver.progress().receivedChunks).toBe(1);
+    const dropped = new Set([1, 4, 9, 13, 17].filter((index) => index < transfer.totalChunks));
+
+    for (let sequence = 0; sequence < transfer.totalChunks; sequence += 1) {
+      if (!dropped.has(sequence)) receiver.accept(transfer.createFrame(sequence));
+    }
+    for (let cycle = 0; cycle < 8 && !receiver.isComplete(); cycle += 1) {
+      const start = transfer.totalChunks * (cycle * 2 + 1);
+      for (let offset = 0; offset < transfer.totalChunks && !receiver.isComplete(); offset += 1) {
+        receiver.accept(transfer.createFrame(start + offset));
+      }
+    }
+
+    expect(receiver.isComplete()).toBe(true);
+    expect(Array.from((await receiver.complete())?.bytes ?? [])).toEqual(Array.from(source));
   });
 
-  it("inserts recurring metadata so a receiver can join a long carousel late", async () => {
-    const transfer = await createOpticalTransfer(new Uint8Array(5_000), "late.bin", "", 320);
-    const carousel = createOpticalCarousel(transfer, 4);
-    const metadataCount = carousel.filter((frame) => decodeOpticalFrame(frame)?.kind === "metadata").length;
-    expect(metadataCount).toBe(Math.ceil(transfer.dataFrames.length / 4));
-    expect(decodeOpticalFrame("unrelated QR content")).toBeNull();
+  it("rejects duplicate and corrupted frames", async () => {
+    const transfer = await createOpticalTransfer(new Uint8Array(2_000).fill(23), "payload.bin", "application/octet-stream", 900);
+    const receiver = new OpticalReceiver();
+    const frame = transfer.createFrame(0);
+    expect(receiver.accept(frame)).toBe(true);
+    expect(receiver.accept(frame)).toBe(false);
+    const corrupted = frame.slice();
+    corrupted[corrupted.length - 1] ^= 0xff;
+    expect(receiver.accept(corrupted)).toBe(false);
+  });
+
+  it("fits the maximum DRPA frame into a version-40 L QR symbol", async () => {
+    const transfer = await createOpticalTransfer(new Uint8Array(8_000), "capacity.bin", "application/octet-stream", MAX_OPTICAL_FRAME_BYTES);
+    const qr = QRCode.create([{ mode: "alphanumeric", data: transfer.createFrameText(0) }], { errorCorrectionLevel: "L", maskPattern: 2 });
+    expect(qr.version).toBeLessThanOrEqual(40);
   });
 });

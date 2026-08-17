@@ -1,20 +1,29 @@
-import { Camera, CheckCircle2, CircleStop, FileUp, LoaderCircle, Play, QrCode, RadioTower, RefreshCw, Save, ShieldAlert } from "lucide-react";
-import jsQR from "jsqr";
-import QRCode from "qrcode";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Camera, CheckCircle2, CircleStop, FileUp, Gauge, LoaderCircle, Play, QrCode, RadioTower, RefreshCw, Save, ShieldAlert } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
+import { OpticalDecodePool, type OpticalDecodedSymbol } from "../features/optical/opticalDecodePool";
 import {
-  createOpticalCarousel,
-  DEFAULT_OPTICAL_CHUNK_BYTES,
+  DEFAULT_OPTICAL_FRAME_BYTES,
   MAX_OPTICAL_FILE_BYTES,
+  OPTICAL_FRAME_BYTE_OPTIONS,
   OpticalReceiver,
   prepareOpticalTransfer,
   type OpticalReceiveProgress,
   type OpticalReceivedFile,
   type OpticalTransfer,
 } from "../features/optical/opticalProtocol";
+import { renderOpticalQrGrid } from "../features/optical/opticalQr";
 
 export type OpticalFileSaver = (file: OpticalReceivedFile) => Promise<string | null>;
+
+interface NativeBarcodeDetector {
+  detect(source: CanvasImageSource): Promise<Array<{ rawValue: string; boundingBox?: DOMRectReadOnly }>>;
+}
+
+interface NativeBarcodeDetectorConstructor {
+  new(options: { formats: string[] }): NativeBarcodeDetector;
+  getSupportedFormats(): Promise<string[]>;
+}
 
 const emptyProgress: OpticalReceiveProgress = {
   sessionId: "",
@@ -32,15 +41,20 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
+function formatRate(bytesPerSecond: number): string {
+  return `${(bytesPerSecond / 1024).toFixed(bytesPerSecond >= 1024 * 100 ? 0 : 1)} KB/s`;
+}
+
 export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver } = {}) {
   const [mode, setMode] = useState<"send" | "receive">("send");
   const [transfer, setTransfer] = useState<OpticalTransfer | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [sending, setSending] = useState(false);
-  const [fps, setFps] = useState(8);
-  const [chunkBytes, setChunkBytes] = useState(DEFAULT_OPTICAL_CHUNK_BYTES);
-  const [currentFrame, setCurrentFrame] = useState({ cursor: 0, total: 0, dataIndex: -1 });
-  const [notice, setNotice] = useState("选择文件后，DRPA 会生成一组循环播放的二维码。");
+  const [fps, setFps] = useState(30);
+  const [frameBytes, setFrameBytes] = useState(DEFAULT_OPTICAL_FRAME_BYTES);
+  const [codeCount, setCodeCount] = useState(2);
+  const [currentFrame, setCurrentFrame] = useState({ sequence: 0, cycle: 0 });
+  const [notice, setNotice] = useState("选择文件后，DRPA 会生成可丢帧恢复的高速二维码流。");
   const [scanning, setScanning] = useState(false);
   const [receiveProgress, setReceiveProgress] = useState<OpticalReceiveProgress>(emptyProgress);
   const [receivedFile, setReceivedFile] = useState<OpticalReceivedFile | null>(null);
@@ -49,11 +63,22 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
   const videoRef = useRef<HTMLVideoElement>(null);
   const scanCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const decodePoolRef = useRef<OpticalDecodePool | null>(null);
+  const nativeDetectorRef = useRef<NativeBarcodeDetector | null>(null);
+  const nativeDetectorBusyRef = useRef(false);
+  const scanFrameRef = useRef(0);
   const receiverRef = useRef(new OpticalReceiver());
   const verifyingRef = useRef(false);
-  const carousel = useMemo(() => transfer ? createOpticalCarousel(transfer) : [], [transfer]);
+  const selectedFileRef = useRef<File | null>(null);
+  const lastProgressUpdateRef = useRef(0);
 
   const stopCamera = () => {
+    window.cancelAnimationFrame(scanFrameRef.current);
+    scanFrameRef.current = 0;
+    decodePoolRef.current?.terminate();
+    decodePoolRef.current = null;
+    nativeDetectorRef.current = null;
+    nativeDetectorBusyRef.current = false;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
@@ -65,94 +90,97 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
   useEffect(() => {
     if (!transfer || !qrCanvasRef.current) return;
     let disposed = false;
-    let timer = 0;
-    let cursor = 0;
-    const render = async () => {
+    let animationFrame = 0;
+    let sequence = 0;
+    let nextFrameAt = 0;
+    let lastUiUpdate = 0;
+    const cycleLength = transfer.totalChunks * 2;
+
+    const draw = (time: number) => {
       if (disposed || !qrCanvasRef.current) return;
-      const encoded = sending ? carousel[cursor] : transfer.metadataFrame;
-      await QRCode.toCanvas(qrCanvasRef.current, encoded, {
-        width: 520,
-        margin: 2,
-        errorCorrectionLevel: "L",
-        color: { dark: "#0d1b3b", light: "#ffffff" },
-      });
-      if (disposed) return;
-      const dataIndex = encoded.includes("|D|") ? Number(encoded.split("|", 5)[3]) : -1;
-      setCurrentFrame({ cursor: sending ? cursor + 1 : 0, total: carousel.length, dataIndex });
-      if (sending) {
-        cursor = (cursor + 1) % carousel.length;
-        timer = window.setTimeout(() => { void render(); }, Math.round(1000 / fps));
-      }
-    };
-    void render().catch((error) => setNotice(`二维码生成失败：${String(error)}`));
-    return () => {
-      disposed = true;
-      window.clearTimeout(timer);
-    };
-  }, [carousel, fps, sending, transfer]);
-
-  useEffect(() => {
-    if (!scanning) return;
-    let disposed = false;
-    let frame = 0;
-    let lastScan = 0;
-    const scan = async (time: number) => {
-      if (disposed) return;
-      const video = videoRef.current;
-      const canvas = scanCanvasRef.current;
-      if (video && canvas && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && time - lastScan >= 90) {
-        lastScan = time;
-        const scale = Math.min(1, 960 / Math.max(video.videoWidth, video.videoHeight));
-        canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-        canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-        const context = canvas.getContext("2d", { willReadFrequently: true });
-        context?.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const image = context?.getImageData(0, 0, canvas.width, canvas.height);
-        const code = image ? jsQR(image.data, image.width, image.height, { inversionAttempts: "dontInvert" }) : null;
-        if (code && receiverRef.current.accept(code.data)) {
-          const progress = receiverRef.current.progress();
-          setReceiveProgress(progress);
-          setNotice(`已识别 ${progress.receivedChunks}/${progress.totalChunks} 个数据分片`);
-          if (progress.totalChunks > 0 && progress.receivedChunks === progress.totalChunks && !verifyingRef.current) {
-            verifyingRef.current = true;
-            try {
-              const complete = await receiverRef.current.complete();
-              if (complete) {
-                setReceivedFile(complete);
-                setNotice(`接收完成并通过 SHA-256 校验：${complete.name}`);
-                stopCamera();
-                return;
-              }
-            } catch (error) {
-              setNotice(String(error));
-            } finally {
-              verifyingRef.current = false;
-            }
-          }
+      if (!sending || time >= nextFrameAt) {
+        const spacing = Math.max(1, Math.floor(cycleLength / codeCount));
+        const sequences = Array.from({ length: sending ? codeCount : 1 }, (_, index) => (sequence + index * spacing) >>> 0);
+        try {
+          renderOpticalQrGrid(qrCanvasRef.current, sequences.map((value) => transfer.createFrameText(value)));
+        } catch (error) {
+          setNotice(`二维码生成失败：${String(error)}`);
+          return;
         }
+        if (time - lastUiUpdate >= 200 || !sending) {
+          setCurrentFrame({ sequence, cycle: sequence % cycleLength });
+          lastUiUpdate = time;
+        }
+        if (!sending) return;
+        sequence = (sequence + 1) >>> 0;
+        nextFrameAt = time + 1000 / fps;
       }
-      frame = window.requestAnimationFrame((nextTime) => { void scan(nextTime); });
+      animationFrame = window.requestAnimationFrame(draw);
     };
-    frame = window.requestAnimationFrame((time) => { void scan(time); });
+
+    animationFrame = window.requestAnimationFrame(draw);
     return () => {
       disposed = true;
-      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(animationFrame);
     };
-  }, [scanning]);
+  }, [codeCount, fps, sending, transfer]);
 
-  const selectFile = async (file?: File) => {
+  const finishIfComplete = async () => {
+    if (!receiverRef.current.isComplete() || verifyingRef.current) return;
+    verifyingRef.current = true;
+    try {
+      const complete = await receiverRef.current.complete();
+      if (complete) {
+        setReceivedFile(complete);
+        setReceiveProgress((progress) => ({ ...progress, name: complete.name, receivedBytes: complete.bytes.byteLength, fileSize: complete.bytes.byteLength, percent: 100 }));
+        setNotice(`接收完成并通过 SHA-256 校验：${complete.name}`);
+        stopCamera();
+      }
+    } catch (error) {
+      setNotice(String(error));
+    } finally {
+      verifyingRef.current = false;
+    }
+  };
+
+  const handleDecoded = (symbols: OpticalDecodedSymbol[]) => {
+    let accepted = 0;
+    for (const symbol of symbols) {
+      if (receiverRef.current.accept(symbol.text)) accepted += 1;
+    }
+    if (!accepted) return;
+    const progress = receiverRef.current.progress();
+    const now = performance.now();
+    if (now - lastProgressUpdateRef.current >= 100 || receiverRef.current.isComplete()) {
+      setReceiveProgress(progress);
+      setNotice(`已接收 ${progress.receivedChunks}/${progress.totalChunks} 个有效帧；修复帧会自动补齐丢失数据。`);
+      lastProgressUpdateRef.current = now;
+    }
+    void finishIfComplete();
+  };
+
+  const selectFile = async (file?: File, selectedFrameBytes = frameBytes) => {
     if (!file) return;
+    selectedFileRef.current = file;
     setPreparing(true);
     setSending(false);
     try {
-      const prepared = await prepareOpticalTransfer(file, chunkBytes);
+      const prepared = await prepareOpticalTransfer(file, selectedFrameBytes);
       setTransfer(prepared);
-      setNotice(`已生成 ${prepared.dataFrames.length} 个数据分片；接收端可以中途加入，元数据会周期重播。`);
+      const saving = prepared.size - prepared.transmittedSize;
+      const compression = prepared.compression === "gzip" ? `gzip 节省 ${formatBytes(Math.max(0, saving))}` : "无需压缩";
+      setNotice(`已准备 ${prepared.totalChunks} 个源块（${compression}）；系统帧后会持续发送修复帧，无需等待整轮重播。`);
     } catch (error) {
+      setTransfer(null);
       setNotice(`无法准备文件：${String(error)}`);
     } finally {
       setPreparing(false);
     }
+  };
+
+  const changeFrameBytes = (value: number) => {
+    setFrameBytes(value);
+    if (selectedFileRef.current) void selectFile(selectedFileRef.current, value);
   };
 
   const startCamera = async () => {
@@ -164,14 +192,76 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
         throw new Error("摄像头只允许在 HTTPS 或 localhost 安全页面中使用");
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 60 },
+        },
+        audio: false,
+      });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
+      const workerCount = Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+      decodePoolRef.current = new OpticalDecodePool(workerCount, handleDecoded);
+      const detectorConstructor = (window as Window & { BarcodeDetector?: NativeBarcodeDetectorConstructor }).BarcodeDetector;
+      if (detectorConstructor) {
+        try {
+          const formats = await detectorConstructor.getSupportedFormats();
+          if (formats.includes("qr_code")) nativeDetectorRef.current = new detectorConstructor({ formats: ["qr_code"] });
+        } catch {
+          nativeDetectorRef.current = null;
+        }
+      }
       setScanning(true);
-      setNotice("摄像头已启动，请让发送端二维码完整进入取景框。");
+      setNotice(nativeDetectorRef.current
+        ? `摄像头已启动，正在使用浏览器原生多码解码器（${workerCount} 个 Worker 待命）。`
+        : `摄像头已启动，${workerCount} 个解码 Worker 正在并行工作。`);
+
+      let lastCapture = 0;
+      const capture = (time: number) => {
+        const video = videoRef.current;
+        const canvas = scanCanvasRef.current;
+        const pool = decodePoolRef.current;
+        if (!pool || !video || !canvas) return;
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && time - lastCapture >= 25 && pool.busyCount < workerCount) {
+          lastCapture = time;
+          const scale = Math.min(1, 960 / Math.max(video.videoWidth, video.videoHeight));
+          const width = Math.max(1, Math.round(video.videoWidth * scale));
+          const height = Math.max(1, Math.round(video.videoHeight * scale));
+          if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+          }
+          const context = canvas.getContext("2d", { willReadFrequently: true });
+          context?.drawImage(video, 0, 0, width, height);
+          const detector = nativeDetectorRef.current;
+          if (detector && !nativeDetectorBusyRef.current) {
+            nativeDetectorBusyRef.current = true;
+            void detector.detect(canvas).then((barcodes) => {
+              handleDecoded(barcodes.map((barcode) => ({
+                text: barcode.rawValue,
+                box: barcode.boundingBox
+                  ? { x: barcode.boundingBox.x, y: barcode.boundingBox.y, width: barcode.boundingBox.width, height: barcode.boundingBox.height }
+                  : { x: 0, y: 0, width, height },
+              })));
+            }).catch(() => {
+              nativeDetectorRef.current = null;
+            }).finally(() => {
+              nativeDetectorBusyRef.current = false;
+            });
+          } else if (!detector) {
+            const image = context?.getImageData(0, 0, width, height);
+            if (image) pool.submit(image, 4);
+          }
+        }
+        scanFrameRef.current = window.requestAnimationFrame(capture);
+      };
+      scanFrameRef.current = window.requestAnimationFrame(capture);
     } catch (error) {
       setNotice(`无法启动摄像头：${String(error)}`);
     }
@@ -191,11 +281,7 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
     try {
       if (saveFile) {
         const savedPath = await saveFile(receivedFile);
-        if (!savedPath) {
-          setNotice("已取消保存，接收到的文件仍保留在当前页面。");
-          return;
-        }
-        setNotice(`文件已保存：${savedPath}`);
+        setNotice(savedPath ? `文件已保存：${savedPath}` : "已取消保存，文件仍保留在当前页面。");
       } else {
         const blob = new Blob([Uint8Array.from(receivedFile.bytes)], { type: receivedFile.mime });
         const url = URL.createObjectURL(blob);
@@ -220,35 +306,39 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
     setMode(next);
   };
 
+  const theoreticalRate = transfer ? transfer.blockBytes * fps * codeCount : (frameBytes - 30) * fps * codeCount;
+
   return (
     <div className="page optical-page">
       <header className="page-header optical-header">
-        <div><div className="eyebrow">AIR-GAPPED FILE CHANNEL</div><h1>光学文件传输</h1><p>把文件编码为动态二维码，经屏幕与摄像头跨越物理隔离边界。</p></div>
+        <div><div className="eyebrow">AIR-GAPPED FILE CHANNEL</div><h1>光学文件传输</h1><p>高速二维码流经屏幕与摄像头跨越物理隔离边界，丢帧可自动恢复。</p></div>
         <div className="optical-mode-switch" role="tablist" aria-label="传输方向">
           <button type="button" className={mode === "send" ? "active" : ""} onClick={() => switchMode("send")}><QrCode size={15} /> 发送</button>
           <button type="button" className={mode === "receive" ? "active" : ""} onClick={() => switchMode("receive")}><Camera size={15} /> 接收</button>
         </div>
       </header>
 
-      <div className="optical-security-note"><ShieldAlert size={16} /><span><strong>物理通道不等于加密。</strong> 任何能看到二维码的摄像头都可能接收文件；DRPA 使用 CRC32 检测分片错误，并用 SHA-256 校验完整文件。</span></div>
+      <div className="optical-security-note"><ShieldAlert size={16} /><span><strong>物理通道不等于加密。</strong> 任何能看到二维码的摄像头都可能接收文件；DRPA 使用单帧 CRC32、容器 CRC32 与文件 SHA-256 三级校验。</span></div>
 
       {mode === "send" ? (
         <main className="optical-layout send-layout">
           <section className="optical-control-panel">
-            <div className="optical-section-title"><RadioTower size={17} /><div><strong>发送设置</strong><span>单文件最大 {formatBytes(MAX_OPTICAL_FILE_BYTES)}</span></div></div>
+            <div className="optical-section-title"><RadioTower size={17} /><div><strong>高速发送设置</strong><span>单文件最大 {formatBytes(MAX_OPTICAL_FILE_BYTES)}</span></div></div>
             <label className="optical-dropzone" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void selectFile(event.dataTransfer.files[0]); }}>
               <input type="file" onChange={(event) => { void selectFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
               {preparing ? <LoaderCircle className="spin" size={25} /> : <FileUp size={25} />}
-              <strong>{preparing ? "正在计算文件摘要…" : "选择或拖入文件"}</strong>
-              <span>文件只在本机内存中分片，不上传网络</span>
+              <strong>{preparing ? "正在压缩并计算摘要…" : "选择或拖入文件"}</strong>
+              <span>文件只在本机内存中处理，不上传网络</span>
             </label>
-            <label className="optical-setting"><span>二维码帧率</span><select value={fps} onChange={(event) => setFps(Number(event.target.value))} disabled={sending}><option value={4}>4 FPS · 兼容</option><option value={8}>8 FPS · 推荐</option><option value={12}>12 FPS · 快速</option></select></label>
-            <label className="optical-setting"><span>单帧数据量</span><select value={chunkBytes} onChange={(event) => setChunkBytes(Number(event.target.value))} disabled={sending}><option value={320}>320 B · 远距离</option><option value={480}>480 B · 推荐</option><option value={720}>720 B · 近距离</option></select></label>
-            {transfer && <dl className="optical-file-meta"><div><dt>文件</dt><dd>{transfer.name}</dd></div><div><dt>大小</dt><dd>{formatBytes(transfer.size)}</dd></div><div><dt>数据帧</dt><dd>{transfer.dataFrames.length}</dd></div><div><dt>预计单轮</dt><dd>{Math.ceil(carousel.length / fps)} 秒</dd></div><div className="wide"><dt>SHA-256</dt><dd><code>{transfer.sha256}</code></dd></div></dl>}
-            <button className={sending ? "button danger wide" : "button primary wide"} type="button" disabled={!transfer} onClick={() => setSending((current) => !current)}>{sending ? <><CircleStop size={16} /> 停止播放</> : <><Play size={16} fill="currentColor" /> 开始循环发送</>}</button>
+            <label className="optical-setting"><span>二维码帧率</span><select value={fps} onChange={(event) => setFps(Number(event.target.value))} disabled={sending}><option value={12}>12 FPS · 远距离</option><option value={24}>24 FPS · 兼容</option><option value={30}>30 FPS · 推荐</option><option value={45}>45 FPS · 高刷屏</option><option value={60}>60 FPS · 实验</option></select></label>
+            <label className="optical-setting"><span>单帧容量</span><select value={frameBytes} onChange={(event) => changeFrameBytes(Number(event.target.value))} disabled={sending || preparing}>{OPTICAL_FRAME_BYTE_OPTIONS.map((value) => <option key={value} value={value}>{value} B{value === DEFAULT_OPTICAL_FRAME_BYTES ? " · 推荐" : ""}</option>)}</select></label>
+            <label className="optical-setting"><span>同屏二维码</span><select value={codeCount} onChange={(event) => setCodeCount(Number(event.target.value))} disabled={sending}><option value={1}>1 个 · 远距离</option><option value={2}>2 个 · 推荐</option><option value={4}>4 个 · 大屏高速</option></select></label>
+            <div className="optical-throughput"><Gauge size={16} /><div><span>理论净载荷</span><strong>{formatRate(theoreticalRate)}</strong></div><small>实际速度取决于屏幕刷新率、距离和摄像头解码率</small></div>
+            {transfer && <dl className="optical-file-meta"><div><dt>文件</dt><dd>{transfer.name}</dd></div><div><dt>原始大小</dt><dd>{formatBytes(transfer.size)}</dd></div><div><dt>源块</dt><dd>{transfer.totalChunks} × {formatBytes(transfer.blockBytes)}</dd></div><div><dt>压缩</dt><dd>{transfer.compression === "gzip" ? `${formatBytes(transfer.transmittedSize)} gzip` : "未压缩"}</dd></div><div className="wide"><dt>SHA-256</dt><dd><code>{transfer.sha256}</code></dd></div></dl>}
+            <button className={`button ${sending ? "danger" : "primary"} wide`} type="button" disabled={!transfer || preparing} onClick={() => setSending((value) => !value)}>{sending ? <CircleStop size={16} /> : <Play size={16} />}{sending ? "停止发送" : "开始高速发送"}</button>
           </section>
           <section className="optical-stage">
-            {transfer ? <><div className="optical-qr-shell"><canvas ref={qrCanvasRef} aria-label="光学传输二维码" /></div><div className="optical-stage-status"><span className={sending ? "live" : ""} /> <strong>{sending ? "正在发送" : "已暂停"}</strong><span>{currentFrame.dataIndex >= 0 ? `数据帧 ${currentFrame.dataIndex + 1}/${transfer.dataFrames.length}` : "文件信息帧"}</span><small>轮播位置 {currentFrame.cursor}/{currentFrame.total}</small></div></> : <div className="optical-stage-empty"><QrCode size={54} /><h2>二维码将在这里显示</h2><p>建议两块屏幕保持正对，关闭反光并将接收摄像头对准完整二维码。</p></div>}
+            {transfer ? <><div className={`optical-qr-shell optical-grid-${sending ? codeCount : 1}`}><canvas ref={qrCanvasRef} aria-label="动态光学传输二维码" /></div><div className="optical-stage-status"><span className={sending ? "live" : ""} /><strong>{sending ? "高速发送中" : "已暂停"}</strong><span>序号 {currentFrame.sequence}</span><small>周期位置 {currentFrame.cycle + 1}/{transfer.totalChunks * 2}</small></div></> : <div className="optical-stage-empty"><QrCode size={54} /><h2>二维码将在这里显示</h2><p>普通显示器建议使用 30 FPS、2200 B 和双码；距离较远时降低帧大小或切换单码。</p></div>}
           </section>
         </main>
       ) : (
@@ -256,14 +346,14 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
           <section className="optical-camera-stage">
             <video ref={videoRef} muted playsInline aria-label="二维码接收摄像头" />
             <canvas ref={scanCanvasRef} hidden />
-            {!scanning && !receivedFile && <div className="optical-camera-empty"><Camera size={48} /><h2>启动摄像头开始接收</h2><p>浏览器权限只用于当前取景，不录制、不上传。</p></div>}
+            {!scanning && !receivedFile && <div className="optical-camera-empty"><Camera size={48} /><h2>启动摄像头开始接收</h2><p>解码在本机 Worker 中并行运行，不录制、不上传。</p></div>}
             {scanning && <div className="optical-scan-guide"><span /><span /><span /><span /></div>}
             {receivedFile && <div className="optical-received"><CheckCircle2 size={54} /><h2>文件校验完成</h2><p>{receivedFile.name} · {formatBytes(receivedFile.bytes.byteLength)}</p><code>{receivedFile.sha256}</code></div>}
           </section>
           <aside className="optical-control-panel receive-controls">
-            <div className="optical-section-title"><Camera size={17} /><div><strong>接收进度</strong><span>{receiveProgress.name}</span></div></div>
+            <div className="optical-section-title"><Camera size={17} /><div><strong>Fountain 接收进度</strong><span>{receiveProgress.name}</span></div></div>
             <div className="optical-progress"><div><span style={{ width: `${receiveProgress.percent}%` }} /></div><strong>{receiveProgress.percent}%</strong></div>
-            <dl className="optical-file-meta"><div><dt>已接收</dt><dd>{receiveProgress.receivedChunks} / {receiveProgress.totalChunks || "--"} 帧</dd></div><div><dt>数据量</dt><dd>{formatBytes(receiveProgress.receivedBytes)} / {receiveProgress.fileSize ? formatBytes(receiveProgress.fileSize) : "--"}</dd></div><div className="wide"><dt>会话</dt><dd><code>{receiveProgress.sessionId || "等待二维码"}</code></dd></div></dl>
+            <dl className="optical-file-meta"><div><dt>有效帧</dt><dd>{receiveProgress.receivedChunks} / {receiveProgress.totalChunks || "--"}</dd></div><div><dt>净载荷</dt><dd>{formatBytes(receiveProgress.receivedBytes)} / {receiveProgress.fileSize ? formatBytes(receiveProgress.fileSize) : "--"}</dd></div><div className="wide"><dt>会话</dt><dd><code>{receiveProgress.sessionId || "等待二维码"}</code></dd></div></dl>
             {!scanning ? <button className="button primary wide" type="button" onClick={() => void startCamera()} disabled={Boolean(receivedFile)}><Camera size={16} /> 启动摄像头</button> : <button className="button danger wide" type="button" onClick={stopCamera}><CircleStop size={16} /> 停止扫描</button>}
             {receivedFile && <button className="button primary wide" type="button" onClick={() => void saveReceivedFile()} disabled={saving}>{saving ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{saving ? "正在保存…" : "保存接收文件"}</button>}
             <button className="button secondary wide" type="button" onClick={resetReceiver}><RefreshCw size={15} /> 清空并重新接收</button>

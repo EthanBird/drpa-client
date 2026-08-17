@@ -1,20 +1,39 @@
-export const OPTICAL_PROTOCOL = "DRPAO1";
+export const OPTICAL_PROTOCOL = "DRPA2";
+export const OPTICAL_WIRE_PREFIX = "DRPA2:";
 export const MAX_OPTICAL_FILE_BYTES = 64 * 1024 * 1024;
-export const DEFAULT_OPTICAL_CHUNK_BYTES = 480;
+export const MIN_OPTICAL_FRAME_BYTES = 480;
+export const MAX_OPTICAL_FRAME_BYTES = 2860;
+export const DEFAULT_OPTICAL_FRAME_BYTES = 2200;
+export const OPTICAL_FRAME_BYTE_OPTIONS = [900, 1465, 2200, MAX_OPTICAL_FRAME_BYTES] as const;
+
+const FRAME_MAGIC = new Uint8Array([0x44, 0x52, 0x50, 0x41]); // DRPA
+const FRAME_VERSION = 2;
+const FRAME_HEADER_BYTES = 30;
+const CONTAINER_MAGIC = new Uint8Array([0x44, 0x52, 0x46, 0x32]); // DRF2
+const CONTAINER_HEADER_BYTES = 49;
+const CONTAINER_FLAG_GZIP = 1;
+const MAX_SOURCE_BLOCKS = 0xffff;
+const BASE45_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+const BASE45_VALUES = new Int16Array(128).fill(-1);
+
+for (let index = 0; index < BASE45_ALPHABET.length; index += 1) {
+  BASE45_VALUES[BASE45_ALPHABET.charCodeAt(index)] = index;
+}
 
 export interface OpticalTransfer {
   sessionId: string;
   name: string;
   mime: string;
   size: number;
+  transmittedSize: number;
+  compression: "none" | "gzip";
   sha256: string;
-  metadataFrame: string;
-  dataFrames: string[];
+  frameBytes: number;
+  blockBytes: number;
+  totalChunks: number;
+  createFrame(sequence: number): Uint8Array;
+  createFrameText(sequence: number): string;
 }
-
-export type OpticalFrame =
-  | { kind: "metadata"; sessionId: string; totalChunks: number; fileSize: number; sha256: string; name: string; mime: string }
-  | { kind: "data"; sessionId: string; index: number; totalChunks: number; payload: Uint8Array };
 
 export interface OpticalReceiveProgress {
   sessionId: string;
@@ -33,39 +52,33 @@ export interface OpticalReceivedFile {
   sha256: string;
 }
 
+interface ParsedFrame {
+  sessionId: number;
+  sequence: number;
+  sourceBlocks: number;
+  blockBytes: number;
+  totalBytes: number;
+  containerCrc: number;
+  block: Uint8Array;
+}
+
+interface PackedContainer {
+  bytes: Uint8Array;
+  digest: Uint8Array;
+  compression: "none" | "gzip";
+  transmittedSize: number;
+}
+
 const crcTable = new Uint32Array(256).map((_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit += 1) value = (value & 1) ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
   return value >>> 0;
 });
 
-function crc32(bytes: Uint8Array): string {
+function crc32(bytes: Uint8Array): number {
   let checksum = 0xffffffff;
-  for (const byte of bytes) checksum = crcTable[(checksum ^ byte) & 0xff] ^ (checksum >>> 8);
-  return ((checksum ^ 0xffffffff) >>> 0).toString(16).padStart(8, "0");
-}
-
-export function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.length)));
-  }
-  return btoa(binary);
-}
-
-export function base64ToBytes(encoded: string): Uint8Array {
-  const binary = atob(encoded);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
-function textToBase64(value: string): string {
-  return bytesToBase64(new TextEncoder().encode(value));
-}
-
-function base64ToText(value: string): string {
-  return new TextDecoder("utf-8", { fatal: true }).decode(base64ToBytes(value));
+  for (const byte of bytes) checksum = crcTable[(checksum ^ byte) & 0xff]! ^ (checksum >>> 8);
+  return (checksum ^ 0xffffffff) >>> 0;
 }
 
 function safeFileName(value: string): string {
@@ -73,139 +86,437 @@ function safeFileName(value: string): string {
   return leaf.replace(/[\u0000-\u001f<>:"|?*]/g, "_").trim().slice(0, 180) || "received-file.bin";
 }
 
-async function sha256(bytes: Uint8Array): Promise<string> {
-  const input = new Uint8Array(bytes.byteLength);
-  input.set(bytes);
-  const digest = await crypto.subtle.digest("SHA-256", input);
-  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+function digestHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.byteLength; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.byteLength)));
+  }
+  return btoa(binary);
+}
+
+async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
+  const stable = new Uint8Array(bytes.byteLength);
+  stable.set(bytes);
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", stable));
+}
+
+function isAlreadyCompressed(mime: string): boolean {
+  return /^(image\/(?:avif|gif|heic|jpeg|png|webp)|video\/|audio\/(?:aac|flac|mpeg|ogg|opus)|application\/(?:gzip|pdf|vnd\.rar|x-7z-compressed|zip|zstd))/.test(mime);
+}
+
+async function gzip(bytes: Uint8Array): Promise<Uint8Array | null> {
+  if (typeof CompressionStream === "undefined" || typeof Blob.prototype.stream !== "function") return null;
+  const stream = new Blob([Uint8Array.from(bytes)]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function gunzip(bytes: Uint8Array, expectedBytes: number): Promise<Uint8Array> {
+  if (typeof DecompressionStream === "undefined" || typeof Blob.prototype.stream !== "function") throw new Error("当前浏览器不支持 gzip 解压，请关闭发送端压缩后重试");
+  const reader = new Blob([Uint8Array.from(bytes)]).stream().pipeThrough(new DecompressionStream("gzip")).getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > expectedBytes || length > MAX_OPTICAL_FILE_BYTES) {
+      await reader.cancel();
+      throw new Error("压缩数据展开后超过声明大小");
+    }
+    chunks.push(value);
+  }
+  if (length !== expectedBytes) throw new Error("压缩数据长度校验失败");
+  const output = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
+async function packContainer(bytes: Uint8Array, name: string, mime: string): Promise<PackedContainer> {
+  const encoder = new TextEncoder();
+  const nameBytes = encoder.encode(safeFileName(name));
+  const mimeBytes = encoder.encode(mime.slice(0, 128) || "application/octet-stream");
+  const shouldTryCompression = bytes.byteLength >= 768 && !isAlreadyCompressed(mime);
+  const [digest, compressed] = await Promise.all([
+    sha256(bytes),
+    shouldTryCompression ? gzip(bytes) : Promise.resolve(null),
+  ]);
+  const useGzip = compressed !== null && compressed.byteLength + 64 < bytes.byteLength;
+  const payload = useGzip ? compressed : bytes;
+  const output = new Uint8Array(CONTAINER_HEADER_BYTES + nameBytes.byteLength + mimeBytes.byteLength + payload.byteLength);
+  const view = new DataView(output.buffer);
+  output.set(CONTAINER_MAGIC, 0);
+  view.setUint8(4, useGzip ? CONTAINER_FLAG_GZIP : 0);
+  view.setUint16(5, nameBytes.byteLength, true);
+  view.setUint16(7, mimeBytes.byteLength, true);
+  view.setUint32(9, bytes.byteLength, true);
+  view.setUint32(13, payload.byteLength, true);
+  output.set(digest, 17);
+  output.set(nameBytes, CONTAINER_HEADER_BYTES);
+  output.set(mimeBytes, CONTAINER_HEADER_BYTES + nameBytes.byteLength);
+  output.set(payload, CONTAINER_HEADER_BYTES + nameBytes.byteLength + mimeBytes.byteLength);
+  return { bytes: output, digest, compression: useGzip ? "gzip" : "none", transmittedSize: payload.byteLength };
+}
+
+async function unpackContainer(container: Uint8Array): Promise<OpticalReceivedFile> {
+  if (container.byteLength < CONTAINER_HEADER_BYTES) throw new Error("文件容器不完整");
+  if (!CONTAINER_MAGIC.every((value, index) => container[index] === value)) throw new Error("文件容器版本不受支持");
+  const view = new DataView(container.buffer, container.byteOffset, container.byteLength);
+  const flags = view.getUint8(4);
+  if (flags & ~CONTAINER_FLAG_GZIP) throw new Error("文件容器包含未知特性");
+  const nameBytes = view.getUint16(5, true);
+  const mimeBytes = view.getUint16(7, true);
+  const originalBytes = view.getUint32(9, true);
+  const transmittedBytes = view.getUint32(13, true);
+  const dataOffset = CONTAINER_HEADER_BYTES + nameBytes + mimeBytes;
+  if (originalBytes > MAX_OPTICAL_FILE_BYTES || dataOffset + transmittedBytes !== container.byteLength) throw new Error("文件容器长度校验失败");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const name = safeFileName(decoder.decode(container.subarray(CONTAINER_HEADER_BYTES, CONTAINER_HEADER_BYTES + nameBytes)));
+  const mime = decoder.decode(container.subarray(CONTAINER_HEADER_BYTES + nameBytes, dataOffset)).slice(0, 128) || "application/octet-stream";
+  const transmitted = container.slice(dataOffset);
+  const bytes = flags & CONTAINER_FLAG_GZIP ? await gunzip(transmitted, originalBytes) : transmitted;
+  if (bytes.byteLength !== originalBytes) throw new Error("文件长度校验失败");
+  const expectedDigest = container.subarray(17, 49);
+  const actualDigest = await sha256(bytes);
+  if (!expectedDigest.every((value, index) => actualDigest[index] === value)) throw new Error("文件 SHA-256 校验失败");
+  return { name, mime, bytes, sha256: digestHex(actualDigest) };
+}
+
+export function encodeBase45(bytes: Uint8Array): string {
+  let output = "";
+  for (let offset = 0; offset < bytes.byteLength; offset += 2) {
+    if (offset + 1 < bytes.byteLength) {
+      const value = bytes[offset]! * 256 + bytes[offset + 1]!;
+      output += BASE45_ALPHABET[value % 45]!;
+      output += BASE45_ALPHABET[Math.floor(value / 45) % 45]!;
+      output += BASE45_ALPHABET[Math.floor(value / 2025)]!;
+    } else {
+      const value = bytes[offset]!;
+      output += BASE45_ALPHABET[value % 45]!;
+      output += BASE45_ALPHABET[Math.floor(value / 45)]!;
+    }
+  }
+  return output;
+}
+
+export function decodeBase45(encoded: string): Uint8Array {
+  if (encoded.length % 3 === 1) throw new Error("Base45 长度无效");
+  const output = new Uint8Array(Math.floor(encoded.length / 3) * 2 + (encoded.length % 3 === 2 ? 1 : 0));
+  let input = 0;
+  let offset = 0;
+  while (input < encoded.length) {
+    const first = encoded.charCodeAt(input);
+    const second = encoded.charCodeAt(input + 1);
+    const a = first < BASE45_VALUES.length ? BASE45_VALUES[first]! : -1;
+    const b = second < BASE45_VALUES.length ? BASE45_VALUES[second]! : -1;
+    if (a < 0 || b < 0) throw new Error("Base45 字符无效");
+    if (input + 2 < encoded.length) {
+      const third = encoded.charCodeAt(input + 2);
+      const c = third < BASE45_VALUES.length ? BASE45_VALUES[third]! : -1;
+      const value = a + b * 45 + c * 2025;
+      if (c < 0 || value > 0xffff) throw new Error("Base45 数值无效");
+      output[offset] = value >>> 8;
+      output[offset + 1] = value & 0xff;
+      input += 3;
+      offset += 2;
+    } else {
+      const value = a + b * 45;
+      if (value > 0xff) throw new Error("Base45 数值无效");
+      output[offset] = value;
+      input += 2;
+      offset += 1;
+    }
+  }
+  return output;
+}
+
+function splitmix32(seed: number): () => number {
+  let state = seed | 0;
+  return () => {
+    state = (state + 0x9e3779b9) | 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 16), 0x21f0aaad);
+    value = Math.imul(value ^ (value >>> 15), 0x735a2d97);
+    return (value ^ (value >>> 15)) >>> 0;
+  };
+}
+
+function repairIndices(sourceBlocks: number, sessionId: number, sequence: number): number[] {
+  const random = splitmix32(Math.imul(sessionId ^ sequence, 0x9e3779b1) ^ (sequence >>> 1));
+  const maximumDegree = Math.min(sourceBlocks, 24);
+  const minimumDegree = Math.min(sourceBlocks, 4);
+  const degree = minimumDegree + (random() % Math.max(1, maximumDegree - minimumDegree + 1));
+  const indices = new Set<number>();
+  while (indices.size < degree) indices.add(random() % sourceBlocks);
+  return [...indices];
+}
+
+export function opticalFrameComposition(sourceBlocks: number, sessionId: number, sequence: number): number[] {
+  const position = sequence % (sourceBlocks * 2);
+  return position < sourceBlocks ? [position] : repairIndices(sourceBlocks, sessionId, sequence);
+}
+
+function packFrame(
+  sessionId: number,
+  sequence: number,
+  sourceBlocks: number,
+  blockBytes: number,
+  totalBytes: number,
+  containerCrc: number,
+  block: Uint8Array,
+): Uint8Array {
+  const frame = new Uint8Array(FRAME_HEADER_BYTES + blockBytes);
+  const view = new DataView(frame.buffer);
+  frame.set(FRAME_MAGIC, 0);
+  view.setUint8(4, FRAME_VERSION);
+  view.setUint8(5, 0);
+  view.setUint32(6, sessionId, true);
+  view.setUint32(10, sequence, true);
+  view.setUint16(14, sourceBlocks, true);
+  view.setUint16(16, blockBytes, true);
+  view.setUint32(18, totalBytes, true);
+  view.setUint32(22, containerCrc, true);
+  view.setUint32(26, crc32(block), true);
+  frame.set(block, FRAME_HEADER_BYTES);
+  return frame;
+}
+
+function parseFrame(frame: Uint8Array): ParsedFrame | null {
+  if (frame.byteLength < FRAME_HEADER_BYTES || !FRAME_MAGIC.every((value, index) => frame[index] === value)) return null;
+  const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+  if (view.getUint8(4) !== FRAME_VERSION || view.getUint8(5) !== 0) return null;
+  const sourceBlocks = view.getUint16(14, true);
+  const blockBytes = view.getUint16(16, true);
+  const totalBytes = view.getUint32(18, true);
+  if (!sourceBlocks || !blockBytes || blockBytes > MAX_OPTICAL_FRAME_BYTES - FRAME_HEADER_BYTES) return null;
+  if (!totalBytes || totalBytes > MAX_OPTICAL_FILE_BYTES + 1024 || frame.byteLength !== FRAME_HEADER_BYTES + blockBytes) return null;
+  const block = frame.slice(FRAME_HEADER_BYTES);
+  if (crc32(block) !== view.getUint32(26, true)) return null;
+  return {
+    sessionId: view.getUint32(6, true),
+    sequence: view.getUint32(10, true),
+    sourceBlocks,
+    blockBytes,
+    totalBytes,
+    containerCrc: view.getUint32(22, true),
+    block,
+  };
+}
+
+export function decodeOpticalFrameText(value: string): Uint8Array | null {
+  if (!value.startsWith(OPTICAL_WIRE_PREFIX)) return null;
+  try {
+    return decodeBase45(value.slice(OPTICAL_WIRE_PREFIX.length));
+  } catch {
+    return null;
+  }
 }
 
 export async function createOpticalTransfer(
   bytes: Uint8Array,
   name: string,
   mime = "application/octet-stream",
-  chunkBytes = DEFAULT_OPTICAL_CHUNK_BYTES,
+  frameBytes = DEFAULT_OPTICAL_FRAME_BYTES,
 ): Promise<OpticalTransfer> {
+  if (!bytes.byteLength) throw new Error("不能发送空文件");
   if (bytes.byteLength > MAX_OPTICAL_FILE_BYTES) throw new Error("光学传输单文件最大为 64 MB");
-  if (!Number.isInteger(chunkBytes) || chunkBytes < 160 || chunkBytes > 960) throw new Error("二维码分片必须在 160–960 字节之间");
-  const sessionBytes = crypto.getRandomValues(new Uint8Array(8));
-  const sessionId = Array.from(sessionBytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  if (!Number.isInteger(frameBytes) || frameBytes < MIN_OPTICAL_FRAME_BYTES || frameBytes > MAX_OPTICAL_FRAME_BYTES) {
+    throw new Error(`二维码帧必须在 ${MIN_OPTICAL_FRAME_BYTES}–${MAX_OPTICAL_FRAME_BYTES} 字节之间`);
+  }
   const fileName = safeFileName(name);
   const fileMime = mime.slice(0, 128) || "application/octet-stream";
-  const digest = await sha256(bytes);
-  const totalChunks = Math.max(1, Math.ceil(bytes.byteLength / chunkBytes));
-  const metadataFrame = [OPTICAL_PROTOCOL, "M", sessionId, totalChunks, bytes.byteLength, digest, textToBase64(fileName), textToBase64(fileMime)].join("|");
-  const dataFrames = Array.from({ length: totalChunks }, (_, index) => {
-    const payload = bytes.slice(index * chunkBytes, Math.min((index + 1) * chunkBytes, bytes.byteLength));
-    return [OPTICAL_PROTOCOL, "D", sessionId, index, totalChunks, crc32(payload), bytesToBase64(payload)].join("|");
-  });
-  return { sessionId, name: fileName, mime: fileMime, size: bytes.byteLength, sha256: digest, metadataFrame, dataFrames };
-}
+  const packed = await packContainer(bytes, fileName, fileMime);
+  const blockBytes = frameBytes - FRAME_HEADER_BYTES;
+  const sourceBlocks = Math.ceil(packed.bytes.byteLength / blockBytes);
+  if (sourceBlocks > MAX_SOURCE_BLOCKS) throw new Error("文件分块数量超限，请提高单帧容量");
+  const sessionId = new DataView(crypto.getRandomValues(new Uint8Array(4)).buffer).getUint32(0, true) || 1;
+  const checksum = crc32(packed.bytes);
+  const source = new Uint8Array(sourceBlocks * blockBytes);
+  source.set(packed.bytes);
 
-export async function prepareOpticalTransfer(file: File, chunkBytes = DEFAULT_OPTICAL_CHUNK_BYTES): Promise<OpticalTransfer> {
-  return createOpticalTransfer(new Uint8Array(await file.arrayBuffer()), file.name, file.type, chunkBytes);
-}
-
-export function createOpticalCarousel(transfer: OpticalTransfer, metadataInterval = 12): string[] {
-  const frames: string[] = [];
-  transfer.dataFrames.forEach((frame, index) => {
-    if (index % metadataInterval === 0) frames.push(transfer.metadataFrame);
-    frames.push(frame);
-  });
-  return frames;
-}
-
-export function decodeOpticalFrame(value: string): OpticalFrame | null {
-  if (!value.startsWith(`${OPTICAL_PROTOCOL}|`)) return null;
-  const parts = value.split("|");
-  try {
-    if (parts[1] === "M" && parts.length === 8) {
-      const totalChunks = Number(parts[3]);
-      const fileSize = Number(parts[4]);
-      if (!/^[a-f0-9]{16}$/.test(parts[2]) || !Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 300_000) return null;
-      if (!Number.isInteger(fileSize) || fileSize < 0 || fileSize > MAX_OPTICAL_FILE_BYTES || !/^[a-f0-9]{64}$/.test(parts[5])) return null;
-      return {
-        kind: "metadata",
-        sessionId: parts[2],
-        totalChunks,
-        fileSize,
-        sha256: parts[5],
-        name: safeFileName(base64ToText(parts[6])),
-        mime: base64ToText(parts[7]).slice(0, 128) || "application/octet-stream",
-      };
+  const createFrame = (sequence: number): Uint8Array => {
+    if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > 0xffffffff) throw new Error("光学帧序号无效");
+    const block = new Uint8Array(blockBytes);
+    for (const index of opticalFrameComposition(sourceBlocks, sessionId, sequence)) {
+      const offset = index * blockBytes;
+      for (let byte = 0; byte < blockBytes; byte += 1) block[byte] ^= source[offset + byte]!;
     }
-    if (parts[1] === "D" && parts.length === 7) {
-      const index = Number(parts[3]);
-      const totalChunks = Number(parts[4]);
-      const payload = base64ToBytes(parts[6]);
-      if (!/^[a-f0-9]{16}$/.test(parts[2]) || !Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 300_000) return null;
-      if (!Number.isInteger(index) || index < 0 || index >= totalChunks || payload.byteLength > 960 || crc32(payload) !== parts[5]) return null;
-      return { kind: "data", sessionId: parts[2], index, totalChunks, payload };
-    }
-  } catch {
-    return null;
+    return packFrame(sessionId, sequence, sourceBlocks, blockBytes, packed.bytes.byteLength, checksum, block);
+  };
+
+  return {
+    sessionId: sessionId.toString(16).padStart(8, "0"),
+    name: fileName,
+    mime: fileMime,
+    size: bytes.byteLength,
+    transmittedSize: packed.transmittedSize,
+    compression: packed.compression,
+    sha256: digestHex(packed.digest),
+    frameBytes,
+    blockBytes,
+    totalChunks: sourceBlocks,
+    createFrame,
+    createFrameText: (sequence) => `${OPTICAL_WIRE_PREFIX}${encodeBase45(createFrame(sequence))}`,
+  };
+}
+
+export async function prepareOpticalTransfer(file: File, frameBytes = DEFAULT_OPTICAL_FRAME_BYTES): Promise<OpticalTransfer> {
+  return createOpticalTransfer(new Uint8Array(await file.arrayBuffer()), file.name, file.type, frameBytes);
+}
+
+interface PendingEquation {
+  indices: Set<number>;
+  bytes: Uint8Array;
+}
+
+class FountainDecoder {
+  private readonly solved: (Uint8Array | null)[];
+  private readonly pendingByBlock = new Map<number, Set<PendingEquation>>();
+  private readonly seen = new Set<number>();
+  readonly sourceBlocks: number;
+  readonly blockBytes: number;
+  readonly sessionId: number;
+  readonly totalBytes: number;
+  solvedCount = 0;
+
+  constructor(
+    sourceBlocks: number,
+    blockBytes: number,
+    sessionId: number,
+    totalBytes: number,
+  ) {
+    this.sourceBlocks = sourceBlocks;
+    this.blockBytes = blockBytes;
+    this.sessionId = sessionId;
+    this.totalBytes = totalBytes;
+    this.solved = new Array<Uint8Array | null>(sourceBlocks).fill(null);
   }
-  return null;
-}
 
-export class OpticalReceiver {
-  private sessionId = "";
-  private totalChunks = 0;
-  private metadata: Extract<OpticalFrame, { kind: "metadata" }> | null = null;
-  private readonly chunks = new Map<number, Uint8Array>();
+  get uniqueFrames(): number {
+    return this.seen.size;
+  }
 
-  accept(encoded: string): boolean {
-    const frame = decodeOpticalFrame(encoded);
-    if (!frame) return false;
-    if (this.sessionId && this.sessionId !== frame.sessionId) {
-      if (frame.kind !== "metadata") return false;
-      this.reset();
+  get complete(): boolean {
+    return this.solvedCount === this.sourceBlocks;
+  }
+
+  add(sequence: number, block: Uint8Array): boolean {
+    if (this.seen.has(sequence)) return false;
+    this.seen.add(sequence);
+    if (this.complete) return true;
+    const indices = new Set(opticalFrameComposition(this.sourceBlocks, this.sessionId, sequence));
+    const reduced = block.slice();
+    for (const index of [...indices]) {
+      const known = this.solved[index];
+      if (!known) continue;
+      for (let byte = 0; byte < reduced.byteLength; byte += 1) reduced[byte] ^= known[byte]!;
+      indices.delete(index);
     }
-    if (!this.sessionId) {
-      this.sessionId = frame.sessionId;
-      this.totalChunks = frame.totalChunks;
-    }
-    if (frame.totalChunks !== this.totalChunks) return false;
-    if (frame.kind === "metadata") {
-      this.metadata = frame;
+    if (!indices.size) return true;
+    if (indices.size === 1) {
+      this.resolve(indices.values().next().value!, reduced);
       return true;
     }
-    if (this.chunks.has(frame.index)) return false;
-    this.chunks.set(frame.index, frame.payload);
+    const equation: PendingEquation = { indices, bytes: reduced };
+    for (const index of indices) {
+      const equations = this.pendingByBlock.get(index) ?? new Set<PendingEquation>();
+      equations.add(equation);
+      this.pendingByBlock.set(index, equations);
+    }
     return true;
   }
 
+  assemble(): Uint8Array | null {
+    if (!this.complete) return null;
+    const output = new Uint8Array(this.totalBytes);
+    for (let index = 0; index < this.sourceBlocks; index += 1) {
+      const offset = index * this.blockBytes;
+      output.set(this.solved[index]!.subarray(0, Math.min(this.blockBytes, this.totalBytes - offset)), offset);
+    }
+    return output;
+  }
+
+  private resolve(index: number, bytes: Uint8Array): void {
+    const queue: Array<[number, Uint8Array]> = [[index, bytes]];
+    while (queue.length) {
+      const [resolvedIndex, resolvedBytes] = queue.pop()!;
+      if (this.solved[resolvedIndex]) continue;
+      this.solved[resolvedIndex] = resolvedBytes;
+      this.solvedCount += 1;
+      const waiting = this.pendingByBlock.get(resolvedIndex);
+      this.pendingByBlock.delete(resolvedIndex);
+      if (!waiting) continue;
+      for (const equation of waiting) {
+        for (let byte = 0; byte < equation.bytes.byteLength; byte += 1) equation.bytes[byte] ^= resolvedBytes[byte]!;
+        equation.indices.delete(resolvedIndex);
+        if (equation.indices.size === 1) {
+          const next = equation.indices.values().next().value!;
+          this.pendingByBlock.get(next)?.delete(equation);
+          if (!this.solved[next]) queue.push([next, equation.bytes]);
+        }
+      }
+    }
+  }
+}
+
+export class OpticalReceiver {
+  private streamKey = "";
+  private sessionHex = "";
+  private containerCrc = 0;
+  private decoder: FountainDecoder | null = null;
+
+  accept(encoded: string | Uint8Array): boolean {
+    const bytes = typeof encoded === "string" ? decodeOpticalFrameText(encoded) : encoded;
+    const frame = bytes ? parseFrame(bytes) : null;
+    if (!frame) return false;
+    const key = [frame.sessionId, frame.sourceBlocks, frame.blockBytes, frame.totalBytes, frame.containerCrc].join(":");
+    if (this.streamKey && this.streamKey !== key) this.reset();
+    if (!this.decoder) {
+      this.streamKey = key;
+      this.sessionHex = frame.sessionId.toString(16).padStart(8, "0");
+      this.containerCrc = frame.containerCrc;
+      this.decoder = new FountainDecoder(frame.sourceBlocks, frame.blockBytes, frame.sessionId, frame.totalBytes);
+    }
+    return this.decoder.add(frame.sequence, frame.block);
+  }
+
   progress(): OpticalReceiveProgress {
-    const receivedBytes = Array.from(this.chunks.values()).reduce((sum, chunk) => sum + chunk.byteLength, 0);
+    const decoder = this.decoder;
+    const received = decoder ? Math.min(decoder.sourceBlocks, decoder.uniqueFrames) : 0;
+    const total = decoder?.sourceBlocks ?? 0;
     return {
-      sessionId: this.sessionId,
-      name: this.metadata?.name ?? "正在等待文件信息…",
-      receivedChunks: this.chunks.size,
-      totalChunks: this.totalChunks,
-      receivedBytes,
-      fileSize: this.metadata?.fileSize ?? 0,
-      percent: this.totalChunks ? Math.min(100, Math.round(this.chunks.size / this.totalChunks * 100)) : 0,
+      sessionId: this.sessionHex,
+      name: decoder ? "正在接收文件…" : "等待扫描…",
+      receivedChunks: received,
+      totalChunks: total,
+      receivedBytes: decoder ? Math.min(decoder.totalBytes, received * decoder.blockBytes) : 0,
+      fileSize: decoder?.totalBytes ?? 0,
+      percent: total ? Math.min(99, Math.round(received / total * 100)) : 0,
     };
   }
 
   async complete(): Promise<OpticalReceivedFile | null> {
-    if (!this.metadata || this.chunks.size !== this.totalChunks) return null;
-    const bytes = new Uint8Array(this.metadata.fileSize);
-    let offset = 0;
-    for (let index = 0; index < this.totalChunks; index += 1) {
-      const chunk = this.chunks.get(index);
-      if (!chunk || offset + chunk.byteLength > bytes.byteLength) return null;
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    if (offset !== bytes.byteLength || await sha256(bytes) !== this.metadata.sha256) throw new Error("文件校验失败，请继续扫描或重新发送");
-    return { name: this.metadata.name, mime: this.metadata.mime, bytes, sha256: this.metadata.sha256 };
+    const container = this.decoder?.assemble();
+    if (!container) return null;
+    if (crc32(container) !== this.containerCrc) throw new Error("光学帧重组校验失败，请继续扫描修复帧或重新发送");
+    return unpackContainer(container);
+  }
+
+  isComplete(): boolean {
+    return this.decoder?.complete ?? false;
   }
 
   reset(): void {
-    this.sessionId = "";
-    this.totalChunks = 0;
-    this.metadata = null;
-    this.chunks.clear();
+    this.streamKey = "";
+    this.sessionHex = "";
+    this.containerCrc = 0;
+    this.decoder = null;
   }
 }
