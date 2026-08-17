@@ -40,6 +40,7 @@ type VideoFrameElement = HTMLVideoElement;
 const emptyProgress: OpticalReceiveProgress = {
   sessionId: "",
   name: "等待扫描…",
+  acceptedFrames: 0,
   receivedChunks: 0,
   totalChunks: 0,
   receivedBytes: 0,
@@ -152,6 +153,7 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
   const finishIfComplete = async () => {
     if (!receiverRef.current.isComplete() || verifyingRef.current) return;
     verifyingRef.current = true;
+    setNotice("源块已恢复，正在重组、解压并校验 SHA-256…");
     try {
       const complete = await receiverRef.current.complete();
       if (complete) {
@@ -206,7 +208,7 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
     const now = performance.now();
     if (now - lastProgressUpdateRef.current >= 100 || receiverRef.current.isComplete()) {
       setReceiveProgress(progress);
-      setNotice(`已接收 ${progress.receivedChunks}/${progress.totalChunks} 个有效帧；修复帧会自动补齐丢失数据。`);
+      setNotice(`已恢复 ${progress.receivedChunks}/${progress.totalChunks} 个源块，累计识别 ${progress.acceptedFrames} 个有效帧。`);
       lastProgressUpdateRef.current = now;
     }
     void finishIfComplete();
@@ -454,7 +456,7 @@ export function OpticalTransferPage({ saveFile }: { saveFile?: OpticalFileSaver 
             {cameraDevices.length > 1 && <label className="optical-setting"><span>接收摄像头</span><select value={selectedDeviceId} onChange={(event) => { const deviceId = event.target.value; setSelectedDeviceId(deviceId); if (scanning) void startCamera(deviceId, true); }}><option value="">自动选择后置镜头</option>{cameraDevices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `摄像头 ${index + 1}`}</option>)}</select></label>}
             {scanning && <div className="optical-runtime-grid"><div><span>解码器</span><strong>{runtimeStats.engine}</strong></div><div><span>捕获</span><strong>{runtimeStats.captureFps.toFixed(1)} FPS</strong></div><div><span>解码</span><strong>{runtimeStats.decodeFps.toFixed(1)} FPS</strong></div><div><span>跟踪区</span><strong>{runtimeStats.regions}</strong></div><div><span>Worker</span><strong>{runtimeStats.workers}</strong></div><div><span>忙丢帧</span><strong>{runtimeStats.dropped}</strong></div><small>{runtimeStats.resolution} · 新相机帧驱动</small></div>}
             <div className="optical-progress"><div><span style={{ width: `${receiveProgress.percent}%` }} /></div><strong>{receiveProgress.percent}%</strong></div>
-            <dl className="optical-file-meta"><div><dt>有效帧</dt><dd>{receiveProgress.receivedChunks} / {receiveProgress.totalChunks || "--"}</dd></div><div><dt>净载荷</dt><dd>{formatBytes(receiveProgress.receivedBytes)} / {receiveProgress.fileSize ? formatBytes(receiveProgress.fileSize) : "--"}</dd></div><div className="wide"><dt>会话</dt><dd><code>{receiveProgress.sessionId || "等待二维码"}</code></dd></div></dl>
+            <dl className="optical-file-meta"><div><dt>已恢复源块</dt><dd>{receiveProgress.receivedChunks} / {receiveProgress.totalChunks || "--"}</dd></div><div><dt>累计有效帧</dt><dd>{receiveProgress.acceptedFrames}</dd></div><div><dt>已恢复数据</dt><dd>{formatBytes(receiveProgress.receivedBytes)} / {receiveProgress.fileSize ? formatBytes(receiveProgress.fileSize) : "--"}</dd></div><div className="wide"><dt>会话</dt><dd><code>{receiveProgress.sessionId || "等待二维码"}</code></dd></div></dl>
             {!scanning ? <button className="button primary wide" type="button" onClick={() => void startCamera()} disabled={Boolean(receivedFile)}><Camera size={16} /> 启动摄像头</button> : <button className="button danger wide" type="button" onClick={stopCamera}><CircleStop size={16} /> 停止扫描</button>}
             {receivedFile && <button className="button primary wide" type="button" onClick={() => void saveReceivedFile()} disabled={saving}>{saving ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{saving ? "正在保存…" : "保存接收文件"}</button>}
             <button className="button secondary wide" type="button" onClick={resetReceiver}><RefreshCw size={15} /> 清空并重新接收</button>

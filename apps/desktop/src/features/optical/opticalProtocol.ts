@@ -38,6 +38,7 @@ export interface OpticalTransfer {
 export interface OpticalReceiveProgress {
   sessionId: string;
   name: string;
+  acceptedFrames: number;
   receivedChunks: number;
   totalChunks: number;
   receivedBytes: number;
@@ -384,7 +385,9 @@ interface PendingEquation {
 class FountainDecoder {
   private readonly solved: (Uint8Array | null)[];
   private readonly pendingByBlock = new Map<number, Set<PendingEquation>>();
+  private readonly pendingEquations = new Set<PendingEquation>();
   private readonly seen = new Set<number>();
+  private lastGaussianFrameCount = 0;
   readonly sourceBlocks: number;
   readonly blockBytes: number;
   readonly sessionId: number;
@@ -427,14 +430,17 @@ class FountainDecoder {
     if (!indices.size) return true;
     if (indices.size === 1) {
       this.resolve(indices.values().next().value!, reduced);
+      this.maybeResolveDenseTail();
       return true;
     }
     const equation: PendingEquation = { indices, bytes: reduced };
+    this.pendingEquations.add(equation);
     for (const index of indices) {
       const equations = this.pendingByBlock.get(index) ?? new Set<PendingEquation>();
       equations.add(equation);
       this.pendingByBlock.set(index, equations);
     }
+    this.maybeResolveDenseTail();
     return true;
   }
 
@@ -461,13 +467,68 @@ class FountainDecoder {
       for (const equation of waiting) {
         for (let byte = 0; byte < equation.bytes.byteLength; byte += 1) equation.bytes[byte] ^= resolvedBytes[byte]!;
         equation.indices.delete(resolvedIndex);
+        if (!equation.indices.size) {
+          this.pendingEquations.delete(equation);
+          continue;
+        }
         if (equation.indices.size === 1) {
           const next = equation.indices.values().next().value!;
           this.pendingByBlock.get(next)?.delete(equation);
+          this.pendingEquations.delete(equation);
           if (!this.solved[next]) queue.push([next, equation.bytes]);
         }
       }
     }
+  }
+
+  private maybeResolveDenseTail(): void {
+    const unresolved = this.sourceBlocks - this.solvedCount;
+    if (!unresolved || unresolved > 512 || !this.pendingEquations.size) return;
+    const cadence = unresolved <= 8 ? 2 : unresolved <= 64 ? 8 : 32;
+    if (this.uniqueFrames !== this.sourceBlocks && this.uniqueFrames - this.lastGaussianFrameCount < cadence) return;
+    this.lastGaussianFrameCount = this.uniqueFrames;
+
+    const maximumRows = Math.min(4096, Math.max(64, unresolved * 6));
+    const equations = [...this.pendingEquations]
+      .sort((left, right) => left.indices.size - right.indices.size)
+      .slice(0, maximumRows);
+    const basis = new Map<number, PendingEquation>();
+
+    for (const equation of equations) {
+      const row: PendingEquation = { indices: new Set(equation.indices), bytes: equation.bytes.slice() };
+      while (row.indices.size) {
+        const pivot = Math.min(...row.indices);
+        const existing = basis.get(pivot);
+        if (!existing) {
+          basis.set(pivot, row);
+          break;
+        }
+        for (const index of existing.indices) {
+          if (row.indices.has(index)) row.indices.delete(index);
+          else row.indices.add(index);
+        }
+        for (let byte = 0; byte < row.bytes.byteLength; byte += 1) row.bytes[byte] ^= existing.bytes[byte]!;
+      }
+    }
+
+    const recovered = new Map<number, Uint8Array>();
+    const pivots = [...basis.keys()].sort((left, right) => right - left);
+    for (const pivot of pivots) {
+      const row = basis.get(pivot)!;
+      const value = row.bytes.slice();
+      let ready = true;
+      for (const index of row.indices) {
+        if (index === pivot) continue;
+        const known = this.solved[index] ?? recovered.get(index);
+        if (!known) {
+          ready = false;
+          break;
+        }
+        for (let byte = 0; byte < value.byteLength; byte += 1) value[byte] ^= known[byte]!;
+      }
+      if (ready) recovered.set(pivot, value);
+    }
+    for (const [index, bytes] of recovered) this.resolve(index, bytes);
   }
 }
 
@@ -494,11 +555,12 @@ export class OpticalReceiver {
 
   progress(): OpticalReceiveProgress {
     const decoder = this.decoder;
-    const received = decoder ? Math.min(decoder.sourceBlocks, decoder.uniqueFrames) : 0;
+    const received = decoder?.solvedCount ?? 0;
     const total = decoder?.sourceBlocks ?? 0;
     return {
       sessionId: this.sessionHex,
       name: decoder ? "正在接收文件…" : "等待扫描…",
+      acceptedFrames: decoder?.uniqueFrames ?? 0,
       receivedChunks: received,
       totalChunks: total,
       receivedBytes: decoder ? Math.min(decoder.totalBytes, received * decoder.blockBytes) : 0,
