@@ -1324,6 +1324,36 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByText("100%")).toBeVisible();
   });
 
+  it("stops a running workbench task from the run bar", async () => {
+    const initial = await desktopGateway.getWorkspaceSnapshot();
+    useAppStore.setState({ snapshot: initial, selectedPackageId: "com.drpa.invoice-hub", selectedProfileId: "monthly" });
+    vi.spyOn(desktopGateway, "startRun").mockResolvedValue("run-stop-test");
+    vi.spyOn(desktopGateway, "getWorkspaceSnapshot").mockImplementation(() => new Promise(() => undefined));
+    const cancelRun = vi.spyOn(desktopGateway, "cancelRun").mockResolvedValue();
+    render(<WorkbenchPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "运行任务" }));
+    fireEvent.click(await screen.findByRole("button", { name: "停止任务" }));
+
+    await waitFor(() => expect(cancelRun).toHaveBeenCalledWith("run-stop-test"));
+  });
+
+  it("stops a development run from the Studio header", async () => {
+    const project = { id: "project-000000000000000000000001", name: "可停止项目", files: ["main.py"] };
+    vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValue([project]);
+    vi.spyOn(desktopGateway, "readProjectFile").mockResolvedValue("def main(ctx):\n    return {}\n");
+    vi.spyOn(desktopGateway, "writeProjectFile").mockResolvedValue();
+    vi.spyOn(desktopGateway, "runStudioProject").mockResolvedValue("studio-run-stop-test");
+    const cancelRun = vi.spyOn(desktopGateway, "cancelRun").mockResolvedValue();
+    render(<StudioPage />);
+
+    expect(await screen.findByText("可停止项目")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "直接运行" }));
+    fireEvent.click(await screen.findByRole("button", { name: "停止运行" }));
+
+    await waitFor(() => expect(cancelRun).toHaveBeenCalledWith("studio-run-stop-test"));
+  });
+
   it("deletes a Studio project from its context menu after in-app confirmation", async () => {
     const project = { id: "project-000000000000000000000001", name: "待删除项目", files: ["main.py"] };
     vi.spyOn(desktopGateway, "listStudioProjects").mockResolvedValueOnce([project]).mockResolvedValue([]);

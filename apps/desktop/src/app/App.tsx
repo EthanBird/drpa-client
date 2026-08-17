@@ -22,6 +22,7 @@ const StudioPage = lazy(() => import("../pages/StudioPage").then((module) => ({ 
 const DataPage = lazy(() => import("../pages/DataPage").then((module) => ({ default: module.DataPage })));
 const LocalDifyPage = lazy(() => import("../pages/LocalDifyPage").then((module) => ({ default: module.LocalDifyPage })));
 const KnowledgeBasePage = lazy(() => import("../pages/KnowledgeBasePage").then((module) => ({ default: module.KnowledgeBasePage })));
+const OpticalTransferPage = lazy(() => import("../pages/OpticalTransferDesktopPage").then((module) => ({ default: module.OpticalTransferDesktopPage })));
 const WorkbenchPage = lazy(() => import("../pages/WorkbenchPage").then((module) => ({ default: module.WorkbenchPage })));
 
 // These workspaces own drafts that are intentionally kept in React memory. List/status
@@ -207,6 +208,10 @@ export function App() {
           setOperationNotice(`已将 ${event.payload.paths.length} 个文件交给数据工作台`);
           return;
         }
+        if (activeNavigation === "opticalTransfer") {
+          setOperationNotice("请在光学传输页使用“选择文件”，以便在读取前明确确认文件");
+          return;
+        }
         const archives = event.payload.paths.filter((path) => path.toLowerCase().endsWith(".rpaz"));
         if (archives.length === 0) {
           setOperationNotice("拖入的文件不是 .rpaz RPAZ 包");
@@ -244,11 +249,12 @@ export function App() {
         {shouldMountNavigation("plugins") && <NavigationSurface id="plugins" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><PluginsPage /></Suspense></NavigationSurface>}
         {shouldMountNavigation("docs") && <NavigationSurface id="docs" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><DocsPage /></Suspense></NavigationSurface>}
         {shouldMountNavigation("knowledgeBase") && <NavigationSurface id="knowledgeBase" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><KnowledgeBasePage /></Suspense></NavigationSurface>}
+        {shouldMountNavigation("opticalTransfer") && <NavigationSurface id="opticalTransfer" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><OpticalTransferPage /></Suspense></NavigationSurface>}
         {shouldMountNavigation("runtimes") && <NavigationSurface id="runtimes" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><RuntimePage /></Suspense></NavigationSurface>}
         {shouldMountNavigation("secrets") && <NavigationSurface id="secrets" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><SecretsPage /></Suspense></NavigationSurface>}
         {shouldMountNavigation("settings") && <NavigationSurface id="settings" activeId={activeNavigation}><Suspense fallback={<PageFallback />}><SettingsPage /></Suspense></NavigationSurface>}
       </AppShell>
-      {dragActive && <div className="drop-overlay"><div><strong>{activeNavigation === "docs" ? "释放以导入 Markdown" : activeNavigation === "knowledgeBase" ? "释放以索引到向量知识库" : activeNavigation === "agent" ? "释放以附加到当前对话" : activeNavigation === "studio" ? "释放以添加项目文件" : activeNavigation === "data" ? "释放以创建文件数据源" : "释放以安装 RPAZ"}</strong><span>{activeNavigation === "docs" ? "支持同时导入多个 `.md` / `.markdown` 文档" : activeNavigation === "knowledgeBase" ? "支持 PDF、Word、Excel、PowerPoint 与文本资料" : activeNavigation === "agent" ? "支持 PDF、DOCX、XLSX 与 PPTX" : activeNavigation === "studio" ? "文件将添加到当前项目目录" : activeNavigation === "data" ? "支持 SQLite、XLS、XLSX、XLSB 与 ODS" : "支持同时拖入多个 `.rpaz` RPAZ 包"}</span></div></div>}
+      {dragActive && <div className="drop-overlay"><div><strong>{activeNavigation === "docs" ? "释放以导入 Markdown" : activeNavigation === "knowledgeBase" ? "释放以索引到向量知识库" : activeNavigation === "agent" ? "释放以附加到当前对话" : activeNavigation === "studio" ? "释放以添加项目文件" : activeNavigation === "data" ? "释放以创建文件数据源" : activeNavigation === "opticalTransfer" ? "请使用页面内的文件选择器" : "释放以安装 RPAZ"}</strong><span>{activeNavigation === "docs" ? "支持同时导入多个 `.md` / `.markdown` 文档" : activeNavigation === "knowledgeBase" ? "支持 PDF、Word、Excel、PowerPoint 与文本资料" : activeNavigation === "agent" ? "支持 PDF、DOCX、XLSX 与 PPTX" : activeNavigation === "studio" ? "文件将添加到当前项目目录" : activeNavigation === "data" ? "支持 SQLite、XLS、XLSX、XLSB 与 ODS" : activeNavigation === "opticalTransfer" ? "光学发送会在读取前明确确认单个文件" : "支持同时拖入多个 `.rpaz` RPAZ 包"}</span></div></div>}
       {operationNotice && <button className="global-notice" type="button" onClick={() => setOperationNotice("")}>{operationNotice}<span>×</span></button>}
       {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} />}
     </div>

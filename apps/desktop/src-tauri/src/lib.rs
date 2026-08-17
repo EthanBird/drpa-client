@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering as AtomicOrdering},
 };
 
+use base64::Engine as _;
 use drpa_host::{HostState, RunLaunch};
 use drpa_package::{Entrypoint, PackageManifest, safe_relative_path, validate_package_id};
 use drpa_protocol::{
@@ -49,6 +50,7 @@ mod workspaces;
 const WINDOWS_UPDATE_SCHEMA: u32 = 2;
 const WINDOWS_UPDATE_HOST_PROTOCOL: u32 = 2;
 const WINDOWS_UPDATE_WORKER_PROTOCOL: u32 = 2;
+const MAX_OPTICAL_TRANSFER_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct AppPaths {
@@ -66,6 +68,8 @@ struct StudioKernelManager {
 struct RunProcessManager {
     #[cfg(target_os = "linux")]
     process_groups: Arc<Mutex<HashMap<String, LinuxRunProcessGroup>>>,
+    #[cfg(windows)]
+    windows_jobs: Arc<Mutex<HashMap<String, WindowsRunJob>>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -116,6 +120,13 @@ struct LinuxRunProcessGroup {
     cancelling: bool,
 }
 
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+struct WindowsRunJob {
+    handle: usize,
+    process_id: u32,
+}
+
 impl RunProcessManager {
     fn register(&self, run_id: &str, process_group: u32) -> Result<(), String> {
         #[cfg(target_os = "linux")]
@@ -129,7 +140,66 @@ impl RunProcessManager {
                     cancelling: false,
                 },
             );
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            };
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+            };
+
+            let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if job.is_null() {
+                return Err(format!(
+                    "无法创建 Windows 任务作业：{}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let configured = unsafe {
+                SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    std::ptr::from_ref(&limits).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if configured == 0 {
+                let error = std::io::Error::last_os_error();
+                unsafe { CloseHandle(job) };
+                return Err(format!("无法配置 Windows 任务作业：{error}"));
+            }
+            let process =
+                unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, process_group) };
+            if process.is_null() {
+                let error = std::io::Error::last_os_error();
+                unsafe { CloseHandle(job) };
+                return Err(format!("无法打开运行进程：{error}"));
+            }
+            let assigned = unsafe { AssignProcessToJobObject(job, process) };
+            unsafe { CloseHandle(process) };
+            if assigned == 0 {
+                let error = std::io::Error::last_os_error();
+                unsafe { CloseHandle(job) };
+                return Err(format!("无法接管运行进程树：{error}"));
+            }
+            self.windows_jobs
+                .lock()
+                .map_err(|_| "任务进程状态已损坏".to_owned())?
+                .insert(
+                    run_id.to_owned(),
+                    WindowsRunJob {
+                        handle: job as usize,
+                        process_id: process_group,
+                    },
+                );
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         let _ = (run_id, process_group);
         Ok(())
     }
@@ -143,7 +213,17 @@ impl RunProcessManager {
         {
             groups.remove(run_id);
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        if let Ok(mut jobs) = self.windows_jobs.lock()
+            && jobs
+                .get(run_id)
+                .is_some_and(|job| job.process_id == process_group)
+            && let Some(job) = jobs.remove(run_id)
+        {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            unsafe { CloseHandle(job.handle as _) };
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         let _ = (run_id, process_group);
     }
 
@@ -185,7 +265,26 @@ impl RunProcessManager {
                 });
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+
+            let job = self
+                .windows_jobs
+                .lock()
+                .map_err(|_| "任务进程状态已损坏".to_owned())?
+                .remove(run_id);
+            if let Some(job) = job {
+                let terminated = unsafe { TerminateJobObject(job.handle as _, 130) };
+                let error = (terminated == 0).then(std::io::Error::last_os_error);
+                unsafe { CloseHandle(job.handle as _) };
+                if let Some(error) = error {
+                    return Err(format!("无法停止 Windows 运行进程树：{error}"));
+                }
+            }
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         let _ = run_id;
         Ok(())
     }
@@ -659,6 +758,78 @@ fn cancel_run(
         .cancel_run(&run_id)
         .map_err(|error| error.to_string())?;
     processes.cancel(&run_id)
+}
+
+#[tauri::command(async)]
+fn save_optical_received_file(
+    target_path: String,
+    payload_base64: String,
+) -> Result<String, String> {
+    if payload_base64.len() > MAX_OPTICAL_TRANSFER_BYTES * 4 / 3 + 16 {
+        return Err("接收文件超过 64 MB 限制".to_owned());
+    }
+    let target = PathBuf::from(target_path);
+    if !target.is_absolute() || target.file_name().is_none() {
+        return Err("保存文件必须使用完整的绝对路径".to_owned());
+    }
+    let parent = target.parent().ok_or_else(|| "保存路径无效".to_owned())?;
+    if !parent.is_dir() {
+        return Err("保存目录不存在".to_owned());
+    }
+    if let Ok(metadata) = fs::symlink_metadata(&target) {
+        if metadata.file_type().is_symlink() {
+            return Err("不允许覆盖符号链接".to_owned());
+        }
+        if !metadata.is_file() {
+            return Err("目标路径不是普通文件".to_owned());
+        }
+    }
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(payload_base64)
+        .map_err(|error| format!("接收文件编码无效：{error}"))?;
+    if payload.len() > MAX_OPTICAL_TRANSFER_BYTES {
+        return Err("接收文件超过 64 MB 限制".to_owned());
+    }
+
+    let file_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("received-file");
+    let temporary = parent.join(format!(
+        ".{file_name}.{}.optical.tmp",
+        Uuid::new_v4().simple()
+    ));
+    let result = (|| -> Result<(), String> {
+        let mut file =
+            File::create(&temporary).map_err(|error| format!("创建临时文件失败：{error}"))?;
+        file.write_all(&payload)
+            .map_err(|error| format!("写入接收文件失败：{error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("同步接收文件失败：{error}"))?;
+        drop(file);
+        if target.exists() {
+            let backup = parent.join(format!(
+                ".{file_name}.{}.optical.backup",
+                Uuid::new_v4().simple()
+            ));
+            fs::rename(&target, &backup)
+                .map_err(|error| format!("准备替换目标文件失败：{error}"))?;
+            if let Err(error) = fs::rename(&temporary, &target) {
+                let _ = fs::rename(&backup, &target);
+                return Err(format!("完成文件保存失败：{error}"));
+            }
+            let _ = fs::remove_file(backup);
+        } else {
+            fs::rename(&temporary, &target)
+                .map_err(|error| format!("完成文件保存失败：{error}"))?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result?;
+    Ok(target.display().to_string())
 }
 
 #[tauri::command(async)]
@@ -3562,6 +3733,7 @@ pub fn run() {
             uninstall_package,
             start_run,
             cancel_run,
+            save_optical_received_file,
             get_run_detail,
             open_run_output_directory,
             list_studio_projects,
@@ -3806,6 +3978,31 @@ mod tests {
         let _ = signal_linux_process_group(process_group, libc::SIGKILL);
         let _ = child.wait();
         panic!("Linux worker process group did not terminate after cancellation");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cancel_terminates_the_worker_process_tree() {
+        let processes = RunProcessManager::default();
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping -t 127.0.0.1 >NUL"])
+            .spawn()
+            .unwrap();
+        let process_id = child.id();
+        processes.register("run-test", process_id).unwrap();
+
+        processes.cancel("run-test").unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if child.try_wait().unwrap().is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("Windows worker process tree did not terminate after cancellation");
     }
 
     #[test]

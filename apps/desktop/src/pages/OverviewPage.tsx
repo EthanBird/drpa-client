@@ -7,13 +7,18 @@ import {
   Hash,
   LayoutDashboard,
   LineChart,
+  Maximize2,
+  Monitor,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
   PieChart,
   Plus,
   RefreshCw,
+  Search,
+  Smartphone,
   Table2,
+  Tablet,
   Trash2,
   Type,
   X,
@@ -112,6 +117,9 @@ export function OverviewPage() {
   const [loadError, setLoadError] = useState("");
   const [refreshTick, setRefreshTick] = useState(0);
   const [visibleColumns, setVisibleColumns] = useState(12);
+  const [builderTab, setBuilderTab] = useState<"components" | "data">("components");
+  const [componentQuery, setComponentQuery] = useState("");
+  const [viewportMode, setViewportMode] = useState<"auto" | "desktop" | "tablet" | "phone">("auto");
   const [draggingId, setDraggingId] = useState("");
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
   const [resizePreview, setResizePreview] = useState<ResizePreview | null>(null);
@@ -164,14 +172,17 @@ export function OverviewPage() {
     if (!canvas || !activeDashboard) return;
     const update = () => {
       const width = canvas.clientWidth;
-      setVisibleColumns(width >= 1060 ? activeDashboard.columns : width >= 700 ? Math.min(8, activeDashboard.columns) : Math.min(4, activeDashboard.columns));
+      if (viewportMode === "desktop") setVisibleColumns(activeDashboard.columns);
+      else if (viewportMode === "tablet") setVisibleColumns(Math.min(8, activeDashboard.columns));
+      else if (viewportMode === "phone") setVisibleColumns(Math.min(4, activeDashboard.columns));
+      else setVisibleColumns(width >= 1060 ? activeDashboard.columns : width >= 700 ? Math.min(8, activeDashboard.columns) : Math.min(4, activeDashboard.columns));
     };
     update();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(update);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [activeDashboard?.id, activeDashboard?.columns, inspectorOpen]);
+  }, [activeDashboard?.id, activeDashboard?.columns, inspectorOpen, viewportMode]);
 
   const querySignature = useMemo(() => JSON.stringify(activeDashboard?.widgets.map((widget) => ({ id: widget.id, source: widget.source })) ?? []), [activeDashboard?.widgets]);
   const refreshSignature = useMemo(() => JSON.stringify(activeDashboard?.widgets.map((widget) => ({ id: widget.id, refreshSeconds: widget.options.refreshSeconds })) ?? []), [activeDashboard?.widgets]);
@@ -469,6 +480,26 @@ export function OverviewPage() {
     setInspectorOpen(true);
   };
 
+  const addBuiltinWidget = (dataset: "workspaceSummary" | "runHistory" | "runStatus" | "packages", title: string, kind: DashboardWidgetKind) => {
+    const widget = createWidget(kind, activeDashboard);
+    widget.title = title;
+    if (kind !== "markdown") widget.source = { kind: "builtin", dataset };
+    mutateActiveDashboard((dashboard) => ({ ...dashboard, widgets: compactDashboardWidgets([...normalizeDashboardWidgetOrder(dashboard.widgets, dashboard.columns), widget], dashboard.columns) }));
+    setSelectedWidgetId(widget.id);
+    setInspectorOpen(true);
+  };
+
+  const addDatabaseWidget = (profileId: string, title: string) => {
+    const widget = createWidget("table", activeDashboard);
+    widget.title = title;
+    widget.source = profileId === "workspace"
+      ? { kind: "database", profileId, sql: "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name LIMIT 100" }
+      : { kind: "database", profileId, sql: "SELECT 1 AS value" };
+    mutateActiveDashboard((dashboard) => ({ ...dashboard, widgets: compactDashboardWidgets([...normalizeDashboardWidgetOrder(dashboard.widgets, dashboard.columns), widget], dashboard.columns) }));
+    setSelectedWidgetId(widget.id);
+    setInspectorOpen(true);
+  };
+
   const createDashboard = () => {
     const id = uniqueId("dashboard");
     const dashboard: DashboardDefinition = {
@@ -556,22 +587,36 @@ export function OverviewPage() {
         {editMode && <button className="icon-button subtle" type="button" title={inspectorOpen ? "收起属性面板" : "打开属性面板"} onClick={() => setInspectorOpen((value) => !value)}>{inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}</button>}
       </header>
 
-      {editMode && <div className="bi-component-palette" aria-label="添加 BI 组件">
-        <span>添加组件</span>
-        <PaletteButton icon={<Hash size={14} />} label="指标" onClick={() => addWidget("metric")} />
-        <PaletteButton icon={<LineChart size={14} />} label="折线图" onClick={() => addWidget("line")} />
-        <PaletteButton icon={<BarChart3 size={14} />} label="柱状图" onClick={() => addWidget("bar")} />
-        <PaletteButton icon={<PieChart size={14} />} label="饼图" onClick={() => addWidget("pie")} />
-        <PaletteButton icon={<Table2 size={14} />} label="数据表" onClick={() => addWidget("table")} />
-        <PaletteButton icon={<Type size={14} />} label="Markdown" onClick={() => addWidget("markdown")} />
-        <i />
-        <span>{activeDashboard.columns} 列栅格 · 拖动卡片调整位置 · 右下角缩放</span>
-      </div>}
+      <div className={`bi-workspace ${editMode ? "editing" : ""} ${editMode && inspectorOpen ? "with-inspector" : ""}`}>
+        {editMode && <aside className="bi-builder-sidebar" aria-label="添加 BI 组件">
+          <header><div><strong>构建器</strong><span>组件与数据</span></div></header>
+          <nav className="bi-builder-tabs" role="tablist" aria-label="BI 构建器">
+            <button type="button" className={builderTab === "components" ? "active" : ""} onClick={() => setBuilderTab("components")}>组件</button>
+            <button type="button" className={builderTab === "data" ? "active" : ""} onClick={() => setBuilderTab("data")}>数据源</button>
+          </nav>
+          {builderTab === "components" ? <>
+            <label className="bi-builder-search"><Search size={13} /><input aria-label="搜索 BI 组件" value={componentQuery} onChange={(event) => setComponentQuery(event.target.value)} placeholder="搜索组件" /></label>
+            <div className="bi-builder-list"><span className="bi-builder-group-title">可视化组件</span>{BUILDER_COMPONENTS.filter((component) => `${component.label} ${component.description}`.toLowerCase().includes(componentQuery.toLowerCase())).map((component) => { const Icon = component.icon; return <button type="button" key={component.kind} aria-label={component.label} onClick={() => addWidget(component.kind)}><span><Icon size={16} /></span><div><strong>{component.label}</strong><small>{component.description}</small></div><Plus size={13} /></button>; })}</div>
+          </> : <div className="bi-builder-data">
+            <span className="bi-builder-group-title">DRPA 内置数据</span>
+            <button type="button" onClick={() => addBuiltinWidget("workspaceSummary", "工作区概览", "metric")}><span><Hash size={15} /></span><div><strong>工作区指标</strong><small>运行、包与工作区汇总</small></div></button>
+            <button type="button" onClick={() => addBuiltinWidget("runHistory", "运行趋势", "line")}><span><LineChart size={15} /></span><div><strong>运行记录</strong><small>时间、耗时与运行结果</small></div></button>
+            <button type="button" onClick={() => addBuiltinWidget("runStatus", "运行状态", "pie")}><span><PieChart size={15} /></span><div><strong>状态汇总</strong><small>成功、失败与取消占比</small></div></button>
+            <button type="button" onClick={() => addBuiltinWidget("packages", "RPAZ 包清单", "table")}><span><Table2 size={15} /></span><div><strong>RPAZ 包</strong><small>已安装包与版本信息</small></div></button>
+            <span className="bi-builder-group-title">数据工作台连接</span>
+            <button type="button" onClick={() => addDatabaseWidget("workspace", "工作区 SQLite")}><span><Database size={15} /></span><div><strong>工作区 SQLite</strong><small>内置只读查询</small></div></button>
+            {profiles.map((profile) => <button type="button" key={profile.id} onClick={() => addDatabaseWidget(profile.id, profile.name)}><span><Database size={15} /></span><div><strong>{profile.name}</strong><small>{profile.engine.toUpperCase()} · 只读查询</small></div></button>)}
+          </div>}
+          <footer>{activeDashboard.columns} 列栅格 · 自动保存</footer>
+        </aside>}
 
-      <div className={`bi-workspace ${editMode && inspectorOpen ? "with-inspector" : ""}`}>
-        <div
+        <section className={`bi-stage ${editMode ? "editing" : ""}`}>
+          {editMode && <header className="bi-stage-toolbar"><div><strong>画布</strong><span>{visibleColumns} 列响应式预览</span></div><div className="bi-viewport-switch" role="group" aria-label="画布尺寸"><button type="button" className={viewportMode === "auto" ? "active" : ""} title="自动" onClick={() => setViewportMode("auto")}><Maximize2 size={14} /></button><button type="button" className={viewportMode === "desktop" ? "active" : ""} title="桌面" onClick={() => setViewportMode("desktop")}><Monitor size={14} /></button><button type="button" className={viewportMode === "tablet" ? "active" : ""} title="平板" onClick={() => setViewportMode("tablet")}><Tablet size={14} /></button><button type="button" className={viewportMode === "phone" ? "active" : ""} title="手机" onClick={() => setViewportMode("phone")}><Smartphone size={14} /></button></div></header>}
+          <div className="bi-stage-viewport">
+          <div
           className={`bi-canvas ${editMode ? "editing" : ""} ${draggingId ? "drag-active" : ""}`}
           ref={canvasRef}
+          data-viewport={viewportMode}
           style={{ "--bi-columns": visibleColumns, "--bi-row-height": `${activeDashboard.rowHeight}px` } as CSSProperties}
         >
           {!activeDashboard.widgets.length && <div className="bi-empty-canvas"><LayoutDashboard size={34} /><h2>这是一个空白仪表盘</h2><p>进入编辑模式，然后添加指标、图表、表格或 Markdown 描述。</p>{!editMode && <button className="button primary" type="button" onClick={() => { setEditMode(true); setInspectorOpen(true); }}>开始设计</button>}</div>}
@@ -641,7 +686,9 @@ export function OverviewPage() {
               </section>
             );
           })}
-        </div>
+          </div>
+          </div>
+        </section>
 
         {editMode && inspectorOpen && <aside className="bi-inspector">
           <header><div><strong>{selectedWidget ? "组件属性" : "仪表盘属性"}</strong><span>{selectedWidget ? widgetKindLabel(selectedWidget.kind) : "响应式栅格"}</span></div><button className="icon-button subtle" type="button" aria-label="关闭属性面板" onClick={() => setInspectorOpen(false)}><X size={15} /></button></header>
@@ -759,11 +806,16 @@ function FieldSelect({ label, value, columns, onChange }: { label: string; value
   return <label><span>{label}</span><input list={`fields-${label}`} value={value} placeholder="选择或输入字段名" onChange={(event) => onChange(event.target.value)} /><datalist id={`fields-${label}`}>{columns.map((column) => <option key={column} value={column} />)}</datalist></label>;
 }
 
-function PaletteButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
-  return <button type="button" onClick={onClick}>{icon}{label}</button>;
-}
-
 const WIDGET_KINDS: DashboardWidgetKind[] = ["metric", "line", "bar", "pie", "table", "markdown"];
+
+const BUILDER_COMPONENTS: Array<{ kind: DashboardWidgetKind; label: string; description: string; icon: typeof Hash }> = [
+  { kind: "metric", label: "指标", description: "突出显示单个关键数值", icon: Hash },
+  { kind: "line", label: "折线图", description: "观察时间序列与变化趋势", icon: LineChart },
+  { kind: "bar", label: "柱状图", description: "比较不同分类的数据", icon: BarChart3 },
+  { kind: "pie", label: "饼图", description: "展示构成与占比", icon: PieChart },
+  { kind: "table", label: "数据表", description: "浏览明细记录与字段", icon: Table2 },
+  { kind: "markdown", label: "Markdown", description: "添加标题、说明与结论", icon: Type },
+];
 
 function createWidget(kind: DashboardWidgetKind, dashboard: DashboardDefinition): DashboardWidget {
   const sizes: Record<DashboardWidgetKind, { w: number; h: number }> = {

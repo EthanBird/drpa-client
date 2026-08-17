@@ -11,6 +11,7 @@ export type NavigationId =
   | "plugins"
   | "docs"
   | "knowledgeBase"
+  | "opticalTransfer"
   | "extensionTools"
   | "runtimes"
   | "secrets"

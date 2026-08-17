@@ -8,6 +8,7 @@ import {
   BookOpen,
   Box,
   Code2,
+  CircleStop,
   FileCode2,
   FilePlus2,
   Folder,
@@ -324,6 +325,8 @@ export function StudioPage() {
   const [runParameters, setRunParameters] = useState("{}");
   const [notice, setNotice] = useState("工作室已就绪");
   const [busy, setBusy] = useState(false);
+  const [activeRunId, setActiveRunId] = useState("");
+  const [stoppingRun, setStoppingRun] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenu | null>(null);
   const [inlineDraft, setInlineDraft] = useState<InlineDraft | null>(null);
@@ -352,6 +355,33 @@ export function StudioPage() {
   const pythonFlowSession = activeDocumentKey ? pythonFlowSessions[activeDocumentKey] : undefined;
   const pythonFlowError = activeDocumentKey ? pythonFlowErrors[activeDocumentKey] : "";
   const pythonFlowActive = selectedFile.endsWith(".py") && editorModes[activeDocumentKey] === "flow";
+
+  useEffect(() => {
+    if (!activeRunId) return;
+    let disposed = false;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const next = await desktopGateway.getWorkspaceSnapshot();
+        if (disposed) return;
+        setSnapshot(next);
+        const run = next.runs.find((item) => item.id === activeRunId);
+        if (run && !["running", "queued"].includes(run.status)) {
+          setNotice(run.status === "success" ? `开发态运行完成：${activeRunId}` : `开发态运行${run.status === "cancelled" ? "已停止" : "失败"}：${activeRunId}`);
+          setActiveRunId("");
+          return;
+        }
+      } catch (error) {
+        if (!disposed) setNotice(`读取运行状态失败：${String(error)}`);
+      }
+      if (!disposed) timer = window.setTimeout(() => { void poll(); }, 250);
+    };
+    timer = window.setTimeout(() => { void poll(); }, 250);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeRunId, setSnapshot]);
 
   const updateOpenDocuments = useCallback((updater: (current: OpenStudioDocument[]) => OpenStudioDocument[]) => {
     const next = updater(openDocumentsRef.current);
@@ -661,10 +691,25 @@ export function StudioPage() {
       const parameters = JSON.parse(runParameters) as Record<string, unknown>;
       await saveProjectDocuments(selectedId);
       const runId = await desktopGateway.runStudioProject(selectedId, parameters);
+      setActiveRunId(runId);
       setSnapshot(await desktopGateway.getWorkspaceSnapshot());
-      setNotice(`开发态运行已启动：${runId}（没有构建或安装，可在运行工作台查看实时日志）`);
+      setNotice(`开发态运行已启动：${runId}（可在这里直接停止）`);
     } catch (error) { setNotice(`失败：${String(error)}`); }
     finally { setBusy(false); }
+  };
+
+  const stopProjectRun = async () => {
+    if (!activeRunId || stoppingRun) return;
+    setStoppingRun(true);
+    try {
+      await desktopGateway.cancelRun(activeRunId);
+      setSnapshot(await desktopGateway.getWorkspaceSnapshot());
+      setNotice(`已发送停止请求：${activeRunId}`);
+    } catch (error) {
+      setNotice(`停止失败：${String(error)}`);
+    } finally {
+      setStoppingRun(false);
+    }
   };
 
   const exportProject = async () => {
@@ -783,7 +828,7 @@ export function StudioPage() {
           <button className="button secondary" type="button" onClick={() => void save()} disabled={!activeDocument || activeDocument.loading || busy}><Save size={15} /> 保存</button>
           <button className="button secondary" type="button" onClick={() => void saveToPackageLibrary()} disabled={!selectedId || busy}><PackageCheck size={15} /> 保存到 RPAZ 包</button>
           <button className="button secondary" type="button" onClick={exportProject} disabled={!selectedId || busy}><PackageCheck size={15} /> 导出 RPAZ</button>
-          <button className="button primary" type="button" onClick={runProject} disabled={!selectedId || busy}><Play size={15} fill="currentColor" /> {busy ? "处理中…" : "直接运行"}</button>
+          {activeRunId ? <button className="button danger" type="button" onClick={stopProjectRun} disabled={stoppingRun}><CircleStop size={15} /> {stoppingRun ? "正在停止…" : "停止运行"}</button> : <button className="button primary" type="button" onClick={runProject} disabled={!selectedId || busy}><Play size={15} fill="currentColor" /> {busy ? "处理中…" : "直接运行"}</button>}
         </div>
       </header>
       <div className="studio-create-bar">

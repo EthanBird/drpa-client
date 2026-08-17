@@ -92,6 +92,7 @@ export interface DesktopGateway {
   uninstallPackage(packageId: string): Promise<void>;
   startRun(packageId: string, profileId: string, parameters: Record<string, unknown>): Promise<string>;
   cancelRun(runId: string): Promise<void>;
+  saveOpticalReceivedFile(targetPath: string, payloadBase64: string): Promise<string>;
   getRunDetail(runId: string): Promise<RunDetail>;
   openRunOutputDirectory(runId: string): Promise<void>;
   listAutomationPlans(): Promise<AutomationPlan[]>;
@@ -900,6 +901,9 @@ const mockGateway: DesktopGateway = {
   },
   async cancelRun() {
     await new Promise((resolve) => window.setTimeout(resolve, 180));
+  },
+  async saveOpticalReceivedFile(targetPath) {
+    return targetPath;
   },
   async getRunDetail(runId) {
     const summary = mockSnapshot.runs.find((run) => run.id === runId);
@@ -1999,6 +2003,7 @@ const tauriGateway: DesktopGateway = {
   uninstallPackage: (packageId) => invoke<void>("uninstall_package", { packageId }),
   startRun: (packageId, profileId, parameters) => invoke<string>("start_run", { packageId, profileId, parameters }),
   cancelRun: (runId) => invoke<void>("cancel_run", { runId }),
+  saveOpticalReceivedFile: (targetPath, payloadBase64) => invoke<string>("save_optical_received_file", { targetPath, payloadBase64 }),
   getRunDetail: (runId) => invoke<RunDetail>("get_run_detail", { runId }),
   openRunOutputDirectory: (runId) => invoke<void>("open_run_output_directory", { runId }),
   listAutomationPlans: () => invoke<AutomationPlan[]>("list_automation_plans"),

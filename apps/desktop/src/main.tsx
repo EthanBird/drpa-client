@@ -10,6 +10,7 @@ import "./styles/data.css";
 import "./styles/local-dify.css";
 import "./styles/local-dify-workflow.css";
 import "./styles/secrets.css";
+import "./styles/optical-transfer.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

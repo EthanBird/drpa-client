@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { Activity, Box, CheckCircle2, CircleAlert, FolderOpen, KeyRound, LoaderCircle, Pencil, Play, Plus, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Activity, Box, CheckCircle2, CircleAlert, CircleStop, FolderOpen, KeyRound, LoaderCircle, Pencil, Play, Plus, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../app/store";
@@ -22,6 +22,8 @@ export function WorkbenchPage() {
   const [values, setValues] = useState<ParameterValues>({});
   const [notice, setNotice] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [isStopping, setIsStopping] = useState(false);
   const [query, setQuery] = useState("");
   const [localProfiles, setLocalProfiles] = useState<TaskProfile[]>([]);
   const [logQuery, setLogQuery] = useState("");
@@ -39,6 +41,9 @@ export function WorkbenchPage() {
   const profiles = useMemo(() => [...(selectedPackage?.profiles ?? []), ...localProfiles], [localProfiles, selectedPackage]);
   const selectedProfile = profiles.find((item) => item.id === selectedProfileId) ?? profiles[0];
   const storageKey = selectedPackage && selectedProfile ? `drpa-profile:${selectedPackage.id}:${selectedProfile.id}` : "";
+  const activeRun = snapshot?.runs.find((item) => item.id === activeRunId)
+    ?? snapshot?.runs.find((item) => item.packageId === selectedPackage?.id && ["running", "queued"].includes(item.status));
+  const currentRunId = activeRun?.id ?? activeRunId;
   const latestRun = snapshot?.runs[0];
   const visibleLogs = useMemo(() => (snapshot?.logs ?? []).filter((entry) => {
     const matchesLevel = logFilter === "all" || entry.level === logFilter;
@@ -116,6 +121,7 @@ export function WorkbenchPage() {
     setIsStarting(true);
     try {
       const runId = await desktopGateway.startRun(selectedPackage.id, selectedProfile.runtimeProfileId ?? selectedProfile.id, values);
+      setActiveRunId(runId);
       setNotice(`任务已启动：${runId}，正在接收运行时事件`);
       let snapshotFailures = 0;
       for (;;) {
@@ -125,6 +131,7 @@ export function WorkbenchPage() {
           snapshotFailures = 0;
           const run = next.runs.find((item) => item.id === runId);
           if (run && !["running", "queued"].includes(run.status)) {
+            setActiveRunId((current) => current === runId ? null : current);
             setNotice(run.status === "success" ? `运行完成：${runId}` : `运行${run.status === "cancelled" ? "已取消" : "失败"}：${runId}`);
             break;
           }
@@ -139,6 +146,20 @@ export function WorkbenchPage() {
       try { setSnapshot(await desktopGateway.getWorkspaceSnapshot()); } catch { /* keep the original runtime error */ }
     }
     finally { setIsStarting(false); }
+  };
+
+  const stopRun = async () => {
+    if (!currentRunId || isStopping) return;
+    setIsStopping(true);
+    try {
+      await desktopGateway.cancelRun(currentRunId);
+      setNotice(`已发送停止请求：${currentRunId}`);
+      setSnapshot(await desktopGateway.getWorkspaceSnapshot());
+    } catch (error) {
+      setNotice(`停止失败：${String(error)}`);
+    } finally {
+      setIsStopping(false);
+    }
   };
 
 
@@ -208,7 +229,7 @@ export function WorkbenchPage() {
           {creatingProfile && <div className="profile-row profile-inline-edit"><span className="profile-file"><span /></span><input autoFocus aria-label="新任务配置名称" value={profileNameDraft} onChange={(event) => setProfileNameDraft(event.target.value)} onBlur={() => { if (profileNameDraft.trim()) createTaskProfile(profileNameDraft); else setCreatingProfile(false); }} onKeyDown={(event) => { if (event.key === "Enter") createTaskProfile(profileNameDraft); if (event.key === "Escape") setCreatingProfile(false); }} /></div>}
           {profiles.map((profile) => editingProfileId === profile.id ? <div key={profile.id} className="profile-row selected profile-inline-edit"><span className="profile-file"><span /></span><input autoFocus aria-label="任务配置名称" value={profileNameDraft} onChange={(event) => setProfileNameDraft(event.target.value)} onBlur={() => commitProfileRename(profile.id)} onKeyDown={(event) => { if (event.key === "Enter") commitProfileRename(profile.id); if (event.key === "Escape") setEditingProfileId(""); }} /></div> : <button key={profile.id} className={profile.id === selectedProfile.id ? "profile-row selected" : "profile-row"} type="button" onClick={() => selectProfile(profile.id)} onContextMenu={(event) => { event.preventDefault(); selectProfile(profile.id); setProfileMenu({ profileId: profile.id, x: event.clientX, y: event.clientY }); }}><span className="profile-file"><span /></span><span><strong>{profile.name}</strong><small>{profile.lastRun ?? "尚未运行"}</small></span></button>)}
         </div></aside>}
-        <section className="configuration-pane"><div className="pane-scroll"><div className="configuration-heading"><div><div className="eyebrow">任务参数</div><h2>{selectedPackage.name}</h2><p>参数来自 `manifest.yaml`，保存后用于当前任务配置。</p></div></div><div className="trust-banner verified"><ShieldCheck size={18} /><div><strong>本地 RPAZ 包</strong><span>安装时已完成路径、压缩规模和 manifest 校验。</span></div></div><section className="form-section"><header><span className="section-icon"><SlidersHorizontal size={15} /></span><div><h3>运行参数</h3><p>必填参数会在预检和运行前再次验证。</p></div></header><div className="form-section-body">{selectedPackage.parameters.length === 0 ? <div className="empty-inline">这个 RPAZ 包没有声明参数，可以直接运行。</div> : <div className="field-grid two-columns">{selectedPackage.parameters.map((parameter) => <ParameterField key={parameter.id} parameter={parameter} value={values[parameter.id]} onChange={(value) => setValues((current) => ({ ...current, [parameter.id]: value }))} />)}</div>}</div></section>{selectedPackage.parameters.some((item) => item.kind === "secret") && <section className="form-section"><header><span className="section-icon"><KeyRound size={15} /></span><div><h3>敏感参数</h3><p>密码输入不会显示明文；正式版将改为凭据句柄，不写入配置文件。</p></div></header></section>}</div><footer className="run-bar"><div className="preflight-state"><CheckCircle2 size={16} /><div><strong>等待运行</strong><span>{selectedPackage.parameters.length} 个参数 · 使用应用内封装 Python，运行日志会写入右侧</span></div></div>{notice && <div className="run-notice">{notice}</div>}<button className="button secondary" type="button" onClick={dryRun}><Save size={14} /> 预检并保存</button><button className="button primary run-button" type="button" onClick={startRun} disabled={isStarting}>{isStarting ? <LoaderCircle className="spin" size={16} /> : <Play size={15} fill="currentColor" />}{isStarting ? "正在运行…" : "运行任务"}</button></footer></section>
+        <section className="configuration-pane"><div className="pane-scroll"><div className="configuration-heading"><div><div className="eyebrow">任务参数</div><h2>{selectedPackage.name}</h2><p>参数来自 `manifest.yaml`，保存后用于当前任务配置。</p></div></div><div className="trust-banner verified"><ShieldCheck size={18} /><div><strong>本地 RPAZ 包</strong><span>安装时已完成路径、压缩规模和 manifest 校验。</span></div></div><section className="form-section"><header><span className="section-icon"><SlidersHorizontal size={15} /></span><div><h3>运行参数</h3><p>必填参数会在预检和运行前再次验证。</p></div></header><div className="form-section-body">{selectedPackage.parameters.length === 0 ? <div className="empty-inline">这个 RPAZ 包没有声明参数，可以直接运行。</div> : <div className="field-grid two-columns">{selectedPackage.parameters.map((parameter) => <ParameterField key={parameter.id} parameter={parameter} value={values[parameter.id]} onChange={(value) => setValues((current) => ({ ...current, [parameter.id]: value }))} />)}</div>}</div></section>{selectedPackage.parameters.some((item) => item.kind === "secret") && <section className="form-section"><header><span className="section-icon"><KeyRound size={15} /></span><div><h3>敏感参数</h3><p>密码输入不会显示明文；正式版将改为凭据句柄，不写入配置文件。</p></div></header></section>}</div><footer className="run-bar"><div className="preflight-state"><CheckCircle2 size={16} /><div><strong>{currentRunId ? "任务运行中" : "等待运行"}</strong><span>{currentRunId ? `${currentRunId} · 可随时停止进程树` : `${selectedPackage.parameters.length} 个参数 · 使用应用内封装 Python，运行日志会写入右侧`}</span></div></div>{notice && <div className="run-notice">{notice}</div>}<button className="button secondary" type="button" onClick={dryRun} disabled={Boolean(currentRunId)}> <Save size={14} /> 预检并保存</button>{currentRunId ? <button className="button danger run-button" type="button" onClick={stopRun} disabled={isStopping}><CircleStop size={16} />{isStopping ? "正在停止…" : "停止任务"}</button> : <button className="button primary run-button" type="button" onClick={startRun} disabled={isStarting}>{isStarting ? <LoaderCircle className="spin" size={16} /> : <Play size={15} fill="currentColor" />}{isStarting ? "正在启动…" : "运行任务"}</button>}</footer></section>
         {activityCollapsed ? <SidebarToggle id="workbench-activity" side="right" label="运行日志侧边栏" restore /> : <aside className="activity-inspector collapsible-sidebar">
           <SidebarToggle id="workbench-activity" side="right" label="运行日志侧边栏" />
           <header className="inspector-header">

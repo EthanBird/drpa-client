@@ -15,9 +15,10 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路，并通过标准 `complete_request` / `inspect_request` 为 Python 文件和 Notebook 提供离线补全、悬停文档与参数提示。
 - 运行记录持久化到 Host SQLite；可进入详情查看完整时间线、筛选/复制日志、参数、产物、错误回溯和重启中断状态。
 - 内置自有数据工作台：工作区 SQLite、外部 SQLite、PostgreSQL/MySQL 与只读 Excel 工作簿数据源，对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；Excel sheet 会映射为可查询表，RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
-- BI 主页支持低代码指标、图表、表格与 Markdown 组件；编辑时可实时拖拽、占位交换、自动让位、缩放和响应式无重叠排列。
+- BI 主页支持构建器式三栏编辑、组件搜索、内置/数据工作台数据源、指标、图表、表格与 Markdown；编辑时可实时拖拽、自动让位、缩放，并预览桌面、平板和手机布局。
 - 可编辑 BI 主页：工作区级响应式栅格、指标/折线图/柱状图/饼图/表格/Markdown 组件，既可读取 DRPA 运行数据，也可复用数据工作台连接执行只读 SQL；布局与数据适配器、组件渲染器解耦。
 - 基础设施内置双模式 AI Agent：RPAZ Agent 通过 Run Manager、CapabilityAuthority、ProviderAdapter 与 ToolRegistry 编排内置、Skills 2.0 和插件工具；JCode 开发者 Agent 提供完整文件、命令和开发工具。两种模式复用 OpenAI-compatible 配置、流式 Markdown、带 revision 的持久会话、逐会话项目绑定、统一取消和运行事件日志，开发工作室右侧可直接切换。
+- 光学文件传输通过循环动态二维码跨越物理隔离边界，支持摄像头乱序接收、CRC32 分片检测、SHA-256 完整文件校验和用户确认保存，全程不上传网络。
 - 内置 DRPA Local Dify：管理 Chat/Completion/Workflow/Chatflow 应用和 OpenAI-compatible Provider；提供可视化工作流画布、节点连线与属性、图校验、本地节点执行、流式 Markdown 调试、SQLite 运行轨迹、Dify YAML DSL 导入导出，以及带独立应用 Token 的本地 Dify Service API；通用 Provider 插件可把外部模型服务接入 AI Agent。
 - Skills 2.0 使用 `skill.yaml + instructions.md` 能力包，可携带工作流、资源、可执行 Python/Command 工具和可调用代码库；设置页提供目录树、Monaco 编辑及文件/目录创建、重命名、删除，旧版 `SKILL.md` 自动迁移。
 - 内置能力驱动的离线插件系统：支持 `.drpa-plugin` 安装、配置、启停、多服务、Provider、工具、调试端点、结构化事件和自定义面板；插件开发工作台可生成 Tool/Service/Bundle 模板并验证、构建、安装。内置 Dify2API 可把 Dify App API 转换为本地 OpenAI 兼容接口、适配 `tool_calls`，并提供服务与上游调试器。
@@ -107,6 +108,8 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 - [Jupyter 集成](docs/JUPYTER_INTEGRATION.md)：真实能力、VS Code Jupyter 对照和明确边界。
 - [数据工作台与 `ctx.sql`](docs/DATA_WORKBENCH.md)：SQLite 存储分层、Host API、脚本 API 与扩展约定。
 - [BI 主页架构](docs/architecture/BI_DASHBOARD.md)：仪表盘定义、数据适配器、只读查询和响应式栅格扩展约定。
+- [光学文件传输架构](docs/architecture/OPTICAL_TRANSFER.md)：动态二维码协议、摄像头接收、完整性校验和安全边界。
+- [光学传输 Web 版](docs/OPTICAL_WEB.md)：本地开发、离线缓存与 GitHub Pages 发布说明。
 - [凭据保险箱安全架构](docs/architecture/CREDENTIAL_VAULT.md)：密钥层级、TOTP/恢复流程、loopback API、Agent 脱敏和威胁模型。
 - [AI Agent 设计](docs/AI_AGENT_DESIGN.md)：OpenAI-compatible 对话循环、RPAZ 工具和配置边界。
 - [AI Agent 运行时架构](docs/architecture/AI_AGENT_RUNTIME.md)：会话唯一事实源、运行租约、逐轮上下文预算、工具权限、Provider 与外部进程生命周期。

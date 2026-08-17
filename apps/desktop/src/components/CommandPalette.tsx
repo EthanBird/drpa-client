@@ -1,4 +1,4 @@
-import { ArrowRight, Blocks, BookOpen, BookOpenCheck, Bot, Code2, Command, Database, Library, ListTodo, Play, PlugZap, Search, Settings, Workflow, Wrench, Zap } from "lucide-react";
+import { ArrowRight, Blocks, BookOpen, BookOpenCheck, Bot, Code2, Command, Database, Library, ListTodo, Play, PlugZap, RadioTower, Search, Settings, Workflow, Wrench, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { NavigationId } from "../domain/models";
@@ -22,6 +22,7 @@ const commands: Array<{
   { id: "plugins", label: "打开插件", detail: "服务、Provider 与工具扩展", icon: PlugZap, navigation: "plugins" },
   { id: "docs", label: "打开知识文档", detail: "本地 Markdown 知识库", icon: BookOpen, navigation: "docs" },
   { id: "knowledge-base", label: "打开知识库", detail: "面向 AI 的多源向量检索", icon: BookOpenCheck, navigation: "knowledgeBase" },
+  { id: "optical-transfer", label: "打开光学传输", detail: "用动态二维码跨物理隔离传输文件", icon: RadioTower, navigation: "opticalTransfer" },
   { id: "runs", label: "打开运行记录", detail: "执行与审计", icon: ListTodo, navigation: "runs" },
   { id: "automation", label: "打开自动化计划", detail: "任务编排", icon: Zap, navigation: "automations" },
   { id: "settings", label: "打开设置", detail: "应用配置", icon: Settings, navigation: "settings" },
