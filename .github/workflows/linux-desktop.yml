@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Upload the verified Linux/UOS assets to desktop-v2.1.0
+        description: Upload the verified Linux/UOS assets to desktop-v2.1.1
         required: true
         default: false
         type: boolean
@@ -40,10 +40,10 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 2.1.0
-      DRPA_DEB_VERSION: 2.1.0-1
-      DRPA_UOS20_DEB_VERSION: 2.1.0-1+uos20.3
-      DRPA_RELEASE_TAG: desktop-v2.1.0
+      DRPA_VERSION: 2.1.1
+      DRPA_DEB_VERSION: 2.1.1-1
+      DRPA_UOS20_DEB_VERSION: 2.1.1-1+uos20.4
+      DRPA_RELEASE_TAG: desktop-v2.1.1
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux desktop and smoke-test libraries
@@ -363,11 +363,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DRPA_RELEASE_NOTES: |
-            DRPA Next 2.1.0 Windows x64 与 Linux/UOS x86_64 全量离线桌面版。
+            DRPA Next 2.1.1 Windows x64 与 Linux/UOS x86_64 全量离线桌面版。
 
-            2.1.0 在开发工作室加入 Python Flow Beta：以 Python 源码为唯一事实源，通过静态 AST 生成可编辑流程图，并支持校验、源码映射和安全写回。
+            2.1.1 增强光学文件传输：桌面端加入手机零安装入口，接收端修复喷泉码尾部完成阶段停滞，并优化高帧率解码稳定性。
 
-            新建开发项目现在自带面向 AI 的 README。Windows、Linux/UOS sealed runtime 同步内置 RPA for Python 1.50.0 与平台 TagUI 离线引擎；发布包继续包含 Python 3.11、Chrome/Jupyter 和完整运行记录链路。UOS 专用 deb 版本为 2.1.0-1+uos20.3，固定安装到 /opt/drpa-next-uos20，面向 x86_64、glibc 2.28 基线，并执行 Debian 10 与 Deepin 20.8 输入、IPC、WebKitWebProcess、Dify2API 和非白屏截图验证。
+            新建开发项目自带面向 AI 的 README。Windows、Linux/UOS sealed runtime 同步内置 RPA for Python 1.50.0 与平台 TagUI 离线引擎；发布包继续包含 Python 3.11、Chrome/Jupyter 和完整运行记录链路。UOS 专用 deb 版本为 2.1.1-1+uos20.4，固定安装到 /opt/drpa-next-uos20，面向 x86_64、glibc 2.28 基线，并执行 Debian 10 与 Deepin 20.8 输入、IPC、WebKitWebProcess、Dify2API 和非白屏截图验证。
         shell: bash
         run: |
           mapfile -t assets < <(find "${{ runner.temp }}/linux-assets" -maxdepth 1 -type f -print | sort)
@@ -378,7 +378,7 @@ jobs:
             -f sha="$GITHUB_SHA" -F force=true >/dev/null
           gh release edit "$DRPA_RELEASE_TAG" \
             --target "$GITHUB_SHA" \
-            --title "DRPA Next 2.1.0 Windows x64 + Linux/UOS x86_64 全量离线包" \
+            --title "DRPA Next 2.1.1 Windows x64 + Linux/UOS x86_64 全量离线包" \
             --notes "$DRPA_RELEASE_NOTES"
           published_assets="$(gh release view "$DRPA_RELEASE_TAG" --json assets --jq '.assets[].name')"
           for asset in "${assets[@]}"; do

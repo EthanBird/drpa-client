@@ -12,13 +12,14 @@ Go directive: 1.26.5
 Build tags: headless
 CGO: disabled
 Flags: -mod=readonly -buildvcs=false -trimpath -ldflags="-s -w -buildid="
+Upstream TLS: certificate and hostname verification disabled for private Dify deployments
 ```
 
 Artifacts:
 
 ```text
-windows/amd64  dify2api-server.exe  CA83AA43021FFC24E742A8170DEBB685BC8C7F9054F7BED1219E466905984242
-linux/amd64    dify2api-server      E73F12531E7F30AACD0409C5028AEC6964E5DCF5D65761F06DB3D7EA2F82DAB4
+windows/amd64  dify2api-server.exe  E92B2C99A2AE0FB250C1C47A9E2157763ABAF5939888F6FFCD18B5FDB79CEA94
+linux/amd64    dify2api-server      E98B7EF47991ED82FC74FE413896511A53366FBDB5E02C305FC3D4666F5C994C
 ```
 
 The supplied project did not contain a project-level `LICENSE`,

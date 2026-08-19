@@ -4,7 +4,7 @@
 
 ## 1. 当前结论
 
-DRPA Next `2.1.0` 正式提供 Linux x86_64 runtime-complete AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb，与 Windows Setup 共用 `desktop-v2.1.0` Release。Ubuntu 22.04 workflow 负责构建 sealed runtime、三种格式打包、解包验证、断网 bootstrap、deb 安装卸载、Dify2API 健康检查和 X11 启动后上传；UOS 包还必须在 Debian 10/glibc 2.28 容器中通过完整安装与运行门禁。Ubuntu 24.04、真实 UOS 20、Wayland 和人工 GUI 验收仍是持续回归项，不能因容器测试通过而删除这些门禁。
+DRPA Next `2.1.1` 正式提供 Linux x86_64 runtime-complete AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb，与 Windows Setup 共用 `desktop-v2.1.1` Release。Ubuntu 22.04 workflow 负责构建 sealed runtime、三种格式打包、解包验证、断网 bootstrap、deb 安装卸载、Dify2API 健康检查和 X11 启动后上传；UOS 包还必须在 Debian 10/glibc 2.28 容器中通过完整安装与运行门禁。Ubuntu 24.04、真实 UOS 20、Wayland 和人工 GUI 验收仍是持续回归项，不能因容器测试通过而删除这些门禁。
 
 | 能力 | Linux 当前状态 | 证据或入口 |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ sudo apt install -y \
   xvfb
 ```
 
-依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 只属于源码构建环境。AppImage 封装桌面运行库；现代 deb `2.1.0-1` 直接复用同一 AppDir，把 WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 和 helper process 放入 `/opt/drpa-next`，`Depends` 不得再出现 `libwebkit2gtk-4.1-0` 等 WebKit/GTK 桌面包。现代包的 glibc 2.35+、libgcc、libstdc++ 与图形用户态由系统提供；UOS deb 则私有携带 ABI 运行库、NSS、GBM/libdrm，以及固定版本的 GLVND + Mesa EGL + swrast/llvmpipe 软件渲染闭包，不加载目标机的厂商 DRI。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
+依赖边界：WebKitGTK/GTK 开发包、编译器和 `patchelf` 只属于源码构建环境。AppImage 封装桌面运行库；现代 deb `2.1.1-1` 直接复用同一 AppDir，把 WebKitGTK、JavaScriptCoreGTK、GTK、GStreamer、NSS、Soup 和 helper process 放入 `/opt/drpa-next`，`Depends` 不得再出现 `libwebkit2gtk-4.1-0` 等 WebKit/GTK 桌面包。现代包的 glibc 2.35+、libgcc、libstdc++ 与图形用户态由系统提供；UOS deb 则私有携带 ABI 运行库、NSS、GBM/libdrm，以及固定版本的 GLVND + Mesa EGL + swrast/llvmpipe 软件渲染闭包，不加载目标机的厂商 DRI。FUSE 不可用时可用 AppImage 的 extract-and-run 模式。Chrome for Testing、Python、uv 和 Python wheels 不来自系统 apt。
 
 随后安装 Node.js 24、Rust stable 与 Python 3.11.9。建议用版本管理器安装，不要修改仓库中的版本约束来迁就本机旧工具。
 
@@ -263,8 +263,8 @@ chmod +x "$appimage"
 (cd "$extract_root" && "$OLDPWD/$appimage" --appimage-extract >/dev/null)
 python tools/linux/build_bundled_deb.py \
   --appdir "$extract_root/squashfs-root" \
-  --package-version 2.1.0-1 \
-  --output drpa-next-2.1.0-linux-x86_64.deb \
+  --package-version 2.1.1-1 \
+  --output drpa-next-2.1.1-linux-x86_64.deb \
   --work-dir "$extract_root/deb-work"
 ```
 
@@ -273,9 +273,9 @@ Host 启动时把 `app.path().resource_dir()/runtime` 放在运行时候选列�
 完整 AppImage 可直接联调：
 
 ```bash
-chmod +x path/to/DRPA-Next_2.1.0_amd64.AppImage
+chmod +x path/to/DRPA-Next_2.1.1_amd64.AppImage
 DRPA_DATA_DIR="$PWD/.drpa-appimage-data" \
-  path/to/DRPA-Next_2.1.0_amd64.AppImage
+  path/to/DRPA-Next_2.1.1_amd64.AppImage
 ```
 
 CI 会用 `--appimage-extract` 找到 AppImage 的最终 `runtime/manifest.json`，对解包后的真实文件再次运行布局检查和离线 bootstrap，再用 `APPIMAGE_EXTRACT_AND_RUN=1 + Xvfb` 确认 GUI 不早退。对 deb，`tools/linux/verify_deb_bundle.py` 会检查 architecture/version/Depends、`/usr/bin/drpa-next`、`/opt/drpa-next` 中的 WebKitGTK/JavaScriptCoreGTK/GTK/GStreamer/helper process、只读 runtime 与 wheel 散列，并生成机器可读 manifest。Runner 随后卸载系统 `libwebkit2gtk-4.1-0`，确认 `apt` 安装 deb 不会将其拉回，再完成 Xvfb 启动和卸载，确认 XDG 用户数据不被删除。
@@ -283,7 +283,7 @@ CI 会用 `--appimage-extract` 找到 AppImage 的最终 `runtime/manifest.json`
 deb 安装与卸载：
 
 ```bash
-sudo apt install ./drpa-next-2.1.0-linux-x86_64.deb
+sudo apt install ./drpa-next-2.1.1-linux-x86_64.deb
 sudo apt remove drpa-next
 ```
 
@@ -309,15 +309,15 @@ Ubuntu 22.04 生成的普通 AppImage 和现代 deb 不能在 UOS 20 上直接�
 ```bash
 python tools/linux/build_uos20_deb.py \
   --appdir "$extract_root/squashfs-root" \
-  --package-version '2.1.0-1+uos20.3' \
-  --output drpa-next-2.1.0-linux-x86_64-uos20.deb \
+  --package-version '2.1.1-1+uos20.4' \
+  --output drpa-next-2.1.1-linux-x86_64-uos20.deb \
   --work-dir "$extract_root/uos20-deb-work"
 
 python tools/linux/verify_uos20_deb.py \
-  --deb drpa-next-2.1.0-linux-x86_64-uos20.deb \
-  --expected-version '2.1.0-1+uos20.3' \
+  --deb drpa-next-2.1.1-linux-x86_64-uos20.deb \
+  --expected-version '2.1.1-1+uos20.4' \
   --extract-root "$extract_root/uos20-verify" \
-  --manifest-output drpa-next-2.1.0-linux-x86_64-uos20-deb-manifest.json
+  --manifest-output drpa-next-2.1.1-linux-x86_64-uos20-deb-manifest.json
 ```
 
 正式 workflow 随后使用 `tools/linux/uos20-smoke.Dockerfile` 在 Debian 10 的真实 glibc 2.28 用户态中安装包，确认系统没有 WebKitGTK 4.1，再执行：
@@ -367,7 +367,7 @@ cargo test -p drpa-desktop
 ./.venv/bin/python -m unittest discover -s tools/linux/tests -v
 ./.venv/bin/python -m compileall -q tools/offline tools/linux offline/bootstrap runtime/python/src
 ./.venv/bin/python tools/offline/validate_requirements.py offline/requirements/runtime.txt
-./.venv/bin/python tools/release/check_version_consistency.py --expected 2.1.0
+./.venv/bin/python tools/release/check_version_consistency.py --expected 2.1.1
 ```
 
 `tools/windows/tests` 在 Linux CI 主要运行安装库存、路径与 Windows WebView 配置的纯 Python策略测试，不代表 Linux 使用 Windows 安装器。
@@ -430,7 +430,7 @@ pkg-config --modversion webkit2gtk-4.1
 cargo check -p drpa-desktop
 ```
 
-正式 deb 都不应要求该系统包。若 `apt` 仍提示安装 `libwebkit2gtk-4.1-0`，先用 `dpkg-deb -f <包> Version Depends` 检查：现代包版本为 `2.1.0-1`，UOS 包版本为 `2.1.0-1+uos20.3`；UOS 用户还必须确认文件名包含 `uos20`。出现 `1.0.0`、`uos20.1` 或 `uos20.2` 说明仍在使用已被 Release 覆盖的旧 deb；`uos20.1` 可能永久白屏，`uos20.2` 的 Deepin 验证截图没有任何文字。
+正式 deb 都不应要求该系统包。若 `apt` 仍提示安装 `libwebkit2gtk-4.1-0`，先用 `dpkg-deb -f <包> Version Depends` 检查：现代包版本为 `2.1.1-1`，UOS 包版本为 `2.1.1-1+uos20.4`；UOS 用户还必须确认文件名包含 `uos20`。出现 `1.0.0`、`uos20.1` 或 `uos20.2` 说明仍在使用已被 Release 覆盖的旧 deb；`uos20.1` 可能永久白屏，`uos20.2` 的 Deepin 验证截图没有任何文字。
 
 ### 点击输入框后页面冻结，但窗口仍能移动
 
@@ -470,7 +470,7 @@ Linux GUI 应用不保证继承 `.bashrc`、`.profile` 等 shell 初始化文件
 
 - 主开发分支：`codex/drpa-next-platform`。
 - 当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。
-- Windows 与 Linux/UOS 稳定基线：`desktop-v2.1.0`，Release 同时包含 Windows x64 Setup、AppImage、现代 deb 与 UOS 20 专用 deb。
+- Windows 与 Linux/UOS 稳定基线：`desktop-v2.1.1`，Release 同时包含 Windows x64 Setup、AppImage、现代 deb 与 UOS 20 专用 deb。
 - Linux 第一优先级：保持 `Build and publish Linux x86_64 offline desktop` workflow 全绿，处理真实 Rust/Clippy/Tauri/AppImage、现代 deb 与 UOS deb 日志。
 - Linux 第二优先级：在 UOS 20/kernel 4.19 真机完成专用 deb 回归，并在 Ubuntu 22.04/24.04 干净虚拟机分别完成 X11/Wayland、断网首次启动、RPAZ、Notebook、Agent 工具、取消进程树和中文路径人工验收。
 

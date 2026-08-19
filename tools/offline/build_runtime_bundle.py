@@ -238,9 +238,14 @@ def smoke_test(stage: Path, chrome_platform: str) -> None:
         raise RuntimeError(f"Chrome for Testing is missing: {browser}")
     marker = stage.parent / "offline-smoke.html"
     marker.write_text("<title>DRPA_OFFLINE_OK</title><main>sealed runtime</main>", encoding="utf-8")
+    chrome_root_argument = (
+        ".set_argument('--no-sandbox')"
+        if hasattr(os, "geteuid") and os.geteuid() == 0
+        else ""
+    )
     smoke_script = (
         "from DrissionPage import ChromiumOptions, ChromiumPage;"
-        f"o=ChromiumOptions().set_browser_path({str(browser)!r}).auto_port().headless(True);"
+        f"o=ChromiumOptions().set_browser_path({str(browser)!r}).auto_port().headless(True){chrome_root_argument};"
         "p=ChromiumPage(o);"
         f"p.get({marker.resolve().as_uri()!r});"
         "assert p.title=='DRPA_OFFLINE_OK', p.title;"

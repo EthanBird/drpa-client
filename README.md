@@ -2,7 +2,7 @@
 
 DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包运行管理器。用户无需配置系统 Python，即可安装、开发、运行和观察 `.rpaz` 自动化脚本包。
 
-当前版本为 `2.1.0`。Windows x64 交付完整离线 Setup；Linux x86_64 同步交付 runtime-complete AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。升级时直接安装新版完整包，用户工作区数据保持在原数据目录。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
+当前版本为 `2.1.1`。Windows x64 交付完整离线 Setup；Linux x86_64 同步交付 runtime-complete AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。升级时直接安装新版完整包，用户工作区数据保持在原数据目录。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
 ## 当前能力
 
@@ -27,19 +27,19 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - Windows 版本统一使用全量离线 Setup；安装器覆盖应用与封装运行时，始终保留安装目录下的 `data/` 用户数据。
 - Windows 上 `ctx.browser()` 使用工作区级持久 Chrome/Profile；任务成功、失败或调用 `page.quit()` 都只释放当前脚本句柄，不退出浏览器，后续 Studio 与多个 RPAZ 任务可直接复用登录态和调试页面。
 
-DRPA Next 2.1.0 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.1.0>
+DRPA Next 2.1.1 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.1.1>
 
-> `2.1.0` 是当前推荐的全量离线版本。Windows 升级时退出旧版并把 Setup 安装到原目录；安装器不会覆盖 `data/`。UOS Desktop 20 使用带 `uos20` 后缀的 deb。
+> `2.1.1` 是当前推荐的全量离线版本。Windows 升级时退出旧版并把 Setup 安装到原目录；安装器不会覆盖 `data/`。UOS Desktop 20 使用带 `uos20` 后缀的 deb。
 
 ## 平台状态
 
 | 平台 | 源码开发 | CI | 正式发行 |
 | --- | --- | --- | --- |
-| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `2.1.0` 全量离线安装包 |
-| Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 构建；Debian 10 与 Deepin 20.8/glibc 2.28 实装、React/IPC 和非白屏截图门禁 | `2.1.0` AppImage、现代 deb 与 UOS 20 专用 deb |
+| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `2.1.1` 全量离线安装包 |
+| Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 构建；Debian 10 与 Deepin 20.8/glibc 2.28 实装、React/IPC 和非白屏截图门禁 | `2.1.1` AppImage、现代 deb 与 UOS 20 专用 deb |
 | macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
 
-Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage 与 deb，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录。现代 deb `2.1.0-1` 把 WebKitGTK 4.1、JavaScriptCoreGTK、GTK、GStreamer 和 helper process 私有安装到 `/opt/drpa-next`，适用于 glibc 2.35+。UOS 包修订 `2.1.0-1+uos20.3` 面向 UOS Desktop 20 Professional（eagle）/glibc 2.28：固定安装到 `/opt/drpa-next-uos20`，内置 glibc/C++/NSS、WebKitGTK、GBM/libdrm，以及隔离的 GLVND、Mesa EGL 和 swrast/llvmpipe 软件渲染闭包，不再依赖目标机的 `libwebkit2gtk-4.1-0`、EGL/GL 或 DRI 包；GTK 模块路径只允许包内目录，清除会话注入的 GTK/AT-SPI 模块，默认使用内置简单输入上下文和 X11 core events，避免聚焦输入框或点击复杂控件后页面冻结。CI 会在 Debian 10 和 Deepin 20.8 用户态真实安装，主动注入 DDE/Fcitx 风格环境，再要求离线 Python/Jupyter、Chrome、React 挂载、真实 X11 输入框点击/键入/后续按钮点击、Tauri IPC、存活的 WebKitWebProcess、Dify2API 健康检查和非白屏截图全部通过；Debian 10 额外执行可见文字像素门禁，Deepin 固定镜像无系统字体时以布局与真实交互标记验收。内核、X11 server 和系统字体仍由目标机提供；真实 UOS 20/DDE/kernel 4.19/Fantasy II-M 实体机仍需人工复核。各平台升级均替换完整安装包并保留用户数据。接手 Linux 端请先阅读 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md)；复现或维护 UOS 包请阅读 [UOS 20 构建与打包手册](docs/UOS20_PACKAGING.md)。
+Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage 与 deb，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录。现代 deb `2.1.1-1` 把 WebKitGTK 4.1、JavaScriptCoreGTK、GTK、GStreamer 和 helper process 私有安装到 `/opt/drpa-next`，适用于 glibc 2.35+。UOS 包修订 `2.1.1-1+uos20.4` 面向 UOS Desktop 20 Professional（eagle）/glibc 2.28：固定安装到 `/opt/drpa-next-uos20`，内置 glibc/C++/NSS、WebKitGTK、GBM/libdrm，以及隔离的 GLVND、Mesa EGL 和 swrast/llvmpipe 软件渲染闭包，不再依赖目标机的 `libwebkit2gtk-4.1-0`、EGL/GL 或 DRI 包；GTK 模块路径只允许包内目录，清除会话注入的 GTK/AT-SPI 模块，默认使用内置简单输入上下文和 X11 core events，避免聚焦输入框或点击复杂控件后页面冻结。CI 会在 Debian 10 和 Deepin 20.8 用户态真实安装，主动注入 DDE/Fcitx 风格环境，再要求离线 Python/Jupyter、Chrome、React 挂载、真实 X11 输入框点击/键入/后续按钮点击、Tauri IPC、存活的 WebKitWebProcess、Dify2API 健康检查和非白屏截图全部通过；Debian 10 额外执行可见文字像素门禁，Deepin 固定镜像无系统字体时以布局与真实交互标记验收。内核、X11 server 和系统字体仍由目标机提供；真实 UOS 20/DDE/kernel 4.19/Fantasy II-M 实体机仍需人工复核。各平台升级均替换完整安装包并保留用户数据。接手 Linux 端请先阅读 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md)；复现或维护 UOS 包请阅读 [UOS 20 构建与打包手册](docs/UOS20_PACKAGING.md)。
 
 ## 架构边界
 
@@ -123,7 +123,7 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 
 ## 当前限制
 
-- 当前稳定 Release 为 `desktop-v2.1.0`，包含 Windows x64 Setup、Linux runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代 Linux 包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。UOS 包固定 X11 软件渲染以换取老显卡兼容性，仍需要系统内核和 X11 server；真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
+- 当前稳定 Release 为 `desktop-v2.1.1`，包含 Windows x64 Setup、Linux runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代 Linux 包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。UOS 包固定 X11 软件渲染以换取老显卡兼容性，仍需要系统内核和 X11 server；真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
 - Windows 升级统一使用新版全量 Setup，不再发布或在界面中接受 `.drpa-update`。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
 - AI Agent 当前由工作区运行时与 Rust Run Manager 共同持有状态，已支持流式 Markdown、会话 revision CAS、逐轮上下文核算、可取消 Provider/子进程、动态 ToolRegistry、CapabilityAuthority、Skills 2.0、插件 Provider/Tool 和附件恢复；diff/checkpoint 恢复、会话导出、长期服务双向 JSON-RPC 和 Skill evaluation 仍在后续阶段。

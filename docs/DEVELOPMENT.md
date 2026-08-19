@@ -1,6 +1,6 @@
 # DRPA Next 开发与交接手册
 
-本文档描述 `codex/drpa-next-platform` 分支和 `2.1.0` 桌面基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
+本文档描述 `codex/drpa-next-platform` 分支和 `2.1.1` 桌面基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
 
 ## 1. 产品状态
 
@@ -249,7 +249,7 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 - `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查；Ubuntu 目前只做到 Host 编译，没有 GUI/runtime 最终包验收。
 - `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
 - `.github/workflows/desktop-release.yml`：仅在手工运行或 `release(windows):` 提交时组合 runtime、WebView2、Host、JCode、示例和 NSIS 全量安装器。
-- `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `2.1.0-1` 与 UOS deb `2.1.0-1+uos20.3`，验证 sealed runtime、私有 WebKitGTK/Mesa llvmpipe 闭包、GTK 模块隔离与 X11 core input，以及 Debian 10 与 Deepin 20.8/glibc 2.28 的真实输入点击/键入/后续交互、React/IPC、Dify2API 健康检查、非白屏 UI、卸载和发布资产；可见文字组件由有系统字体的 Debian 10 门禁负责。
+- `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `2.1.1-1` 与 UOS deb `2.1.1-1+uos20.4`，验证 sealed runtime、私有 WebKitGTK/Mesa llvmpipe 闭包、GTK 模块隔离与 X11 core input，以及 Debian 10 与 Deepin 20.8/glibc 2.28 的真实输入点击/键入/后续交互、React/IPC、Dify2API 健康检查、非白屏 UI、卸载和发布资产；可见文字组件由有系统字体的 Debian 10 门禁负责。
 
 发布前检查：
 
@@ -278,12 +278,12 @@ Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启�
 
 1. 阅读本文件、`ROADMAP.md`、`offline/README.md` 和 `JUPYTER_INTEGRATION.md`；Linux 开发者额外完整阅读 `LINUX_DEVELOPMENT.md`。
 2. 查看分支、PR、最新提交和工作区状态，先区分当前 Tauri 实现与冻结的 PySide6 参考代码。
-3. Windows 维护者安装 `2.1.0` 到非系统盘；Linux 维护者使用隔离的 `DRPA_DATA_DIR` 启动真实 Tauri Host，确认数据目录实际位置。
+3. Windows 维护者安装 `2.1.1` 到非系统盘；Linux 维护者使用隔离的 `DRPA_DATA_DIR` 启动真实 Tauri Host，确认数据目录实际位置。
 4. 安装并运行 Bing 每日一图示例，检查实时日志、进度、输出目录和产物。
 5. 在 Studio 新建中文名称项目，运行源码、Markdown 单元和两个 Python notebook 单元。
 6. 阅读 `apps/desktop/src/infra/gateway.ts` 与 `apps/desktop/src-tauri/src/lib.rs` 的对应 command，确认参数在 Host 重新验证。
 7. 运行第 9 节全部本地检查，并对目标平台执行原生 GUI/runtime 测试。
-8. 查看 `desktop-v2.1.0` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 Linux deb manifest 版本应分别为 `2.1.0-1` 与 `2.1.0-1+uos20.3`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
+8. 查看 `desktop-v2.1.1` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 Linux deb manifest 版本应分别为 `2.1.1-1` 与 `2.1.1-1+uos20.4`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
 9. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
 
-当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。`2.1.0` 发布基线由 `desktop-v2.1.0` 标签指向通过 Windows 全量安装器和 Linux/UOS 原生打包门禁的提交；后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。
+当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。`2.1.1` 发布基线由 `desktop-v2.1.1` 标签指向通过 Windows 全量安装器和 Linux/UOS 原生打包门禁的提交；后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。

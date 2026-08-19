@@ -1,7 +1,7 @@
 schema: 1
 id: dify2api
 name: Dify2API 网关
-version: 1.0.0
+version: 1.0.2
 description: 将 Dify Agent 转换为 OpenAI 兼容服务，并在 DRPA 内完成连通性、模型、对话与请求链路调试。
 types:
   - provider-adapter

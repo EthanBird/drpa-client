@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,7 +38,7 @@ const BUILTIN_DIFY2API_NOTICES: &str =
     include_str!("../../../../plugins/builtin/dify2api/THIRD_PARTY_NOTICES.txt");
 const BUILTIN_DIFY2API_PROVENANCE: &str =
     include_str!("../../../../plugins/builtin/dify2api/BUILD-PROVENANCE.md");
-const BUILTIN_DIFY2API_MARKER: &str = "dify2api@1.0.0;bundle=2026-07-31.1";
+const BUILTIN_DIFY2API_MARKER: &str = "dify2api@1.0.2;bundle=2026-08-18.2";
 #[cfg(target_os = "windows")]
 const BUILTIN_DIFY2API_SERVICE: &[u8] =
     include_bytes!("../../../../plugins/builtin/dify2api/service/dify2api-server.exe");
@@ -577,6 +577,8 @@ struct ResolvedPluginHealth {
 struct PluginManagerInner {
     processes: Mutex<HashMap<String, RunningPlugin>>,
     starting: Mutex<HashSet<String>>,
+    desired: Mutex<HashSet<String>>,
+    supervising: Mutex<HashSet<String>>,
     logs: Mutex<HashMap<String, Arc<Mutex<VecDeque<PluginLogLine>>>>>,
     last_errors: Mutex<HashMap<String, String>>,
 }
@@ -616,6 +618,8 @@ impl Default for PluginManager {
             inner: Arc::new(PluginManagerInner {
                 processes: Mutex::new(HashMap::new()),
                 starting: Mutex::new(HashSet::new()),
+                desired: Mutex::new(HashSet::new()),
+                supervising: Mutex::new(HashSet::new()),
                 logs: Mutex::new(HashMap::new()),
                 last_errors: Mutex::new(HashMap::new()),
             }),
@@ -1114,6 +1118,18 @@ fn start_plugin_process(
         }
         newly_started.push(service.id.clone());
     }
+    manager
+        .inner
+        .desired
+        .lock()
+        .map_err(|_| "插件期望运行状态已损坏".to_owned())?
+        .insert(manager_plugin_key);
+    ensure_plugin_supervisor(
+        workspace_root,
+        plugin_id,
+        python.map(Path::to_path_buf),
+        manager,
+    );
     Ok(())
 }
 
@@ -1627,7 +1643,7 @@ fn refresh_processes(manager: &PluginManager) -> Result<(), String> {
                     format!(
                         "服务 {} 已退出：{}，运行 {} ms",
                         process.service_id,
-                        status.code().unwrap_or(-1),
+                        describe_exit_status(status),
                         process.started_at.elapsed().as_millis()
                     ),
                 ));
@@ -1654,6 +1670,127 @@ fn refresh_processes(manager: &PluginManager) -> Result<(), String> {
             .or_insert(error);
     }
     Ok(())
+}
+
+fn ensure_plugin_supervisor(
+    workspace_root: &Path,
+    plugin_id: &str,
+    python: Option<PathBuf>,
+    manager: &PluginManager,
+) {
+    let manager_plugin_key = plugin_manager_key(workspace_root, plugin_id);
+    let Ok(mut supervising) = manager.inner.supervising.lock() else {
+        return;
+    };
+    if !supervising.insert(manager_plugin_key.clone()) {
+        return;
+    }
+    drop(supervising);
+
+    let workspace_root = workspace_root.to_path_buf();
+    let plugin_id = plugin_id.to_owned();
+    let inner = Arc::downgrade(&manager.inner);
+    thread::spawn(move || {
+        let mut retry_delay = Duration::from_secs(1);
+        loop {
+            thread::sleep(Duration::from_millis(750));
+            let Some(strong) = Weak::upgrade(&inner) else {
+                return;
+            };
+            let manager = PluginManager { inner: strong };
+            let desired = manager
+                .inner
+                .desired
+                .lock()
+                .is_ok_and(|desired| desired.contains(&manager_plugin_key));
+            if !desired {
+                retry_delay = Duration::from_secs(1);
+                continue;
+            }
+
+            let _ = refresh_processes(&manager);
+            let all_running = load_plugin(&workspace_root, &plugin_id)
+                .and_then(|(_, manifest)| resolved_plugin_services(&manifest))
+                .and_then(|services| {
+                    services.iter().try_fold(true, |running, service| {
+                        service_is_running(&workspace_root, &plugin_id, &service.id, &manager)
+                            .map(|service_running| running && service_running)
+                    })
+                })
+                .unwrap_or(false);
+            if all_running {
+                retry_delay = Duration::from_secs(1);
+                continue;
+            }
+
+            push_plugin_system_log(
+                &manager,
+                &manager_plugin_key,
+                "检测到服务异常退出，准备自动恢复。",
+            );
+            thread::sleep(retry_delay);
+            let still_desired = manager
+                .inner
+                .desired
+                .lock()
+                .is_ok_and(|desired| desired.contains(&manager_plugin_key));
+            if !still_desired {
+                continue;
+            }
+            match start_plugin_inner(&workspace_root, &plugin_id, python.as_deref(), &manager) {
+                Ok(()) => {
+                    push_plugin_system_log(&manager, &manager_plugin_key, "服务已由宿主自动恢复。");
+                    retry_delay = Duration::from_secs(1);
+                }
+                Err(error) => {
+                    push_plugin_system_log(
+                        &manager,
+                        &manager_plugin_key,
+                        &format!("自动恢复失败：{error}"),
+                    );
+                    retry_delay = (retry_delay * 2).min(Duration::from_secs(15));
+                }
+            }
+        }
+    });
+}
+
+fn push_plugin_system_log(manager: &PluginManager, manager_plugin_key: &str, message: &str) {
+    let target = manager
+        .inner
+        .logs
+        .lock()
+        .ok()
+        .and_then(|logs| logs.get(manager_plugin_key).cloned());
+    let Some(target) = target else {
+        return;
+    };
+    if let Ok(mut lines) = target.lock() {
+        lines.push_back(PluginLogLine {
+            timestamp: unix_millis(),
+            stream: "system".to_owned(),
+            message: message.to_owned(),
+            service_id: "supervisor".to_owned(),
+            event: None,
+        });
+        while lines.len() > MAX_LOG_LINES {
+            lines.pop_front();
+        }
+    }
+}
+
+fn describe_exit_status(status: ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return format!("退出码 {code}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("信号 {signal}");
+        }
+    }
+    "未知退出状态".to_owned()
 }
 
 fn wait_for_plugin_health(
@@ -1689,23 +1826,21 @@ fn wait_for_plugin_health(
                 .map_err(|error| error.to_string())?
             {
                 processes.remove(&process_key);
-                Some(status.code().unwrap_or(-1))
+                Some(describe_exit_status(status))
             } else {
                 None
             }
         };
-        if let Some(code) = exited_code {
+        if let Some(status) = exited_code {
             // stdout/stderr are drained on dedicated threads. Give a short-lived
             // process enough time to publish its final diagnostic before returning.
             thread::sleep(Duration::from_millis(80));
             let excerpt =
                 plugin_service_log_excerpt(workspace_root, plugin_id, service_id, manager);
             return Err(if excerpt.is_empty() {
-                format!("插件 {plugin_id} 的服务 {service_id} 启动失败，进程退出码 {code}")
+                format!("插件 {plugin_id} 的服务 {service_id} 启动失败，{status}")
             } else {
-                format!(
-                    "插件 {plugin_id} 的服务 {service_id} 启动失败，进程退出码 {code}；诊断：{excerpt}"
-                )
+                format!("插件 {plugin_id} 的服务 {service_id} 启动失败，{status}；诊断：{excerpt}")
             });
         }
         if health.kind == "process" || http.get(&health.endpoint).call().is_ok() {
@@ -1728,6 +1863,12 @@ fn stop_plugin_inner(
 ) -> Result<(), String> {
     validate_identifier(plugin_id, "插件")?;
     let manager_plugin_key = plugin_manager_key(workspace_root, plugin_id);
+    manager
+        .inner
+        .desired
+        .lock()
+        .map_err(|_| "插件期望运行状态已损坏".to_owned())?
+        .remove(&manager_plugin_key);
     let _lifecycle_guard = {
         let mut starting = manager
             .inner
@@ -2750,8 +2891,11 @@ fn ensure_plugins_root_uncached(workspace_root: &Path) -> Result<(), String> {
     let removed = root.join(".removed-dify2api");
     if !removed.is_file() && !builtin.join("plugin.yaml").is_file() {
         fs::create_dir_all(builtin.join("service")).map_err(|error| error.to_string())?;
-        fs::write(builtin.join(".builtin"), b"dify2api@1.0.0\n")
-            .map_err(|error| error.to_string())?;
+        fs::write(
+            builtin.join(".builtin"),
+            format!("{BUILTIN_DIFY2API_MARKER}\n"),
+        )
+        .map_err(|error| error.to_string())?;
     }
     if builtin.join(".builtin").is_file() {
         let marker = fs::read_to_string(builtin.join(".builtin")).unwrap_or_default();
@@ -4126,7 +4270,61 @@ default_config:
         let debug = run_plugin_debugger_inner(&workspace, "dify2api", "health", None).unwrap();
         assert_eq!(debug.status, 200);
 
+        let process_key = plugin_service_process_key(&workspace, "dify2api", "gateway");
+        let original_pid = {
+            let mut processes = manager.inner.processes.lock().unwrap();
+            let process = processes.get_mut(&process_key).unwrap();
+            let pid = process.child.id();
+            process.child.kill().unwrap();
+            pid
+        };
+        let restart_deadline = Instant::now() + Duration::from_secs(8);
+        let restarted_pid = loop {
+            thread::sleep(Duration::from_millis(100));
+            let pid = manager
+                .inner
+                .processes
+                .lock()
+                .unwrap()
+                .get(&process_key)
+                .map(|process| process.child.id());
+            if let Some(pid) = pid.filter(|pid| *pid != original_pid)
+                && run_plugin_debugger_inner(&workspace, "dify2api", "health", None).is_ok()
+            {
+                break pid;
+            }
+            assert!(
+                Instant::now() < restart_deadline,
+                "supervisor did not recover the terminated gateway"
+            );
+        };
+        assert_ne!(restarted_pid, original_pid);
+        let recovery_log_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let recovered = manager
+                .inner
+                .logs
+                .lock()
+                .unwrap()
+                .get(&plugin_manager_key(&workspace, "dify2api"))
+                .unwrap()
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.message.contains("服务已由宿主自动恢复"));
+            if recovered {
+                break;
+            }
+            assert!(
+                Instant::now() < recovery_log_deadline,
+                "supervisor did not record gateway recovery"
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+
         stop_plugin_inner(&workspace, "dify2api", &manager).unwrap();
+        thread::sleep(Duration::from_millis(900));
+        assert!(!service_is_running(&workspace, "dify2api", "gateway", &manager).unwrap());
 
         let mut state = read_plugin_state(&root, &manifest).unwrap();
         state.autostart = true;

@@ -6,12 +6,12 @@
 
 - 文件：`drpa-next-1.0.0-linux-x86_64-uos20.deb`
 - Debian 包名：`drpa-next`
-- Debian 版本：`2.1.0-1+uos20.3`
+- Debian 版本：`2.1.1-1+uos20.4`
 - 架构：`amd64`
 - 固定安装根：`/opt/drpa-next-uos20`
 - 最低系统用户态：glibc 2.28
 - 构建运行层：Ubuntu 22.04 / glibc 2.35
-- Release：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.1.0>
+- Release：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.1.1>
 - 构建与散列：以 Release 中 `uos20.deb.sha256` 和 `uos20-deb-manifest.json` 为准
 
 `1.0.0-2+uos20.1` 虽能安装且 Host/NetworkProcess 持续运行，但在 Fantasy II-M（PCI `1ec8:9810`）上 WebKitWebProcess 因缺少可加载的 swrast 驱动与 `EGL_NOT_INITIALIZED` 退出，造成永久白屏；旧门禁只检查进程 20 秒未退出，无法发现该问题，已禁止继续作为可用版本。
@@ -284,7 +284,7 @@ cd /tmp/drpa-uos-build/appimage-extract
 ```bash
 python tools/linux/build_uos20_deb.py \
   --appdir /tmp/drpa-uos-build/appimage-extract/squashfs-root \
-  --package-version '2.1.0-1+uos20.3' \
+  --package-version '2.1.1-1+uos20.4' \
   --output /tmp/drpa-next-1.0.0-linux-x86_64-uos20.deb \
   --work-dir /tmp/drpa-uos-build/package-work
 ```
@@ -309,7 +309,7 @@ python tools/linux/build_uos20_deb.py \
 ```bash
 python tools/linux/verify_uos20_deb.py \
   --deb /tmp/drpa-next-1.0.0-linux-x86_64-uos20.deb \
-  --expected-version '2.1.0-1+uos20.3' \
+  --expected-version '2.1.1-1+uos20.4' \
   --extract-root /tmp/drpa-uos-build/verify-root \
   --manifest-output /tmp/drpa-next-1.0.0-linux-x86_64-uos20-deb-manifest.json
 ```
