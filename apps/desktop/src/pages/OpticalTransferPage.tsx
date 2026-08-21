@@ -1,4 +1,4 @@
-import { Camera, CheckCircle2, CircleStop, Copy, FileUp, Gauge, LoaderCircle, Play, QrCode, RadioTower, RefreshCw, Save, ShieldAlert, Smartphone } from "lucide-react";
+import { Camera, CheckCircle2, CircleStop, Copy, FileUp, Gauge, LoaderCircle, Play, QrCode, RadioTower, RefreshCw, Save, Share2, ShieldAlert, Smartphone } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { OpticalDecodePool, type OpticalDecodedSymbol } from "../features/optical/opticalDecodePool";
@@ -63,6 +63,24 @@ function formatRate(bytesPerSecond: number): string {
   return `${(bytesPerSecond / 1024).toFixed(bytesPerSecond >= 1024 * 100 ? 0 : 1)} KB/s`;
 }
 
+function receivedFileAsWebFile(receivedFile: OpticalReceivedFile): File {
+  return new File([Uint8Array.from(receivedFile.bytes)], receivedFile.name, {
+    type: receivedFile.mime || "application/octet-stream",
+    lastModified: Date.now(),
+  });
+}
+
+function canUseNativeFileShare(receivedFile: OpticalReceivedFile): boolean {
+  if (typeof File === "undefined" || typeof navigator === "undefined" || !navigator.share || !navigator.canShare) return false;
+  try {
+    // A zero-byte probe avoids retaining a second copy of a received file just to render the button.
+    const probe = new File([], receivedFile.name, { type: receivedFile.mime || "application/octet-stream" });
+    return navigator.canShare({ files: [probe] });
+  } catch {
+    return false;
+  }
+}
+
 function MobileWebEntry({ url, onCopy }: { url: string; onCopy: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -97,6 +115,7 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
   const [receiveProgress, setReceiveProgress] = useState<OpticalReceiveProgress>(emptyProgress);
   const [receivedFile, setReceivedFile] = useState<OpticalReceivedFile | null>(null);
   const [saving, setSaving] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [runtimeStats, setRuntimeStats] = useState<ReceiverRuntimeStats>({ engine: "正在加载", captureFps: 0, decodeFps: 0, workers: 0, regions: 0, dropped: 0, resolution: "--" });
@@ -402,7 +421,7 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
   };
 
   const saveReceivedFile = async () => {
-    if (!receivedFile || saving) return;
+    if (!receivedFile || saving || sharing) return;
     setSaving(true);
     try {
       if (saveFile) {
@@ -425,6 +444,28 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
     }
   };
 
+  const shareReceivedFile = async () => {
+    if (!receivedFile || saveFile || saving || sharing) return;
+    setSharing(true);
+    try {
+      const file = receivedFileAsWebFile(receivedFile);
+      if (!navigator.canShare?.({ files: [file] }) || !navigator.share) {
+        setNotice("当前微信或浏览器不支持直接转发此文件，请使用“保存接收文件”。");
+        return;
+      }
+      await navigator.share({ files: [file], title: receivedFile.name });
+      setNotice(`已将 ${receivedFile.name} 交给系统分享面板。`);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setNotice("已取消转发，文件仍保留在当前页面。");
+      } else {
+        setNotice(`转发失败：${String(error)}。你仍可保存接收文件。`);
+      }
+    } finally {
+      setSharing(false);
+    }
+  };
+
   const switchMode = (next: "send" | "receive") => {
     if (next === mode) return;
     setSending(false);
@@ -433,6 +474,8 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
   };
 
   const theoreticalRate = transfer ? transfer.blockBytes * fps * codeCount : (frameBytes - 30) * fps * codeCount;
+  const nativeFileShareAvailable = Boolean(!saveFile && receivedFile && canUseNativeFileShare(receivedFile));
+  const isWeChatWebView = typeof navigator !== "undefined" && /MicroMessenger/i.test(navigator.userAgent);
   const copyWebEntryUrl = async () => {
     if (!webEntryUrl) return;
     try {
@@ -494,7 +537,9 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
             <div className="optical-progress"><div><span style={{ width: `${receiveProgress.percent}%` }} /></div><strong>{receiveProgress.percent}%</strong></div>
             <dl className="optical-file-meta"><div><dt>已恢复源块</dt><dd>{receiveProgress.receivedChunks} / {receiveProgress.totalChunks || "--"}</dd></div><div><dt>累计有效帧</dt><dd>{receiveProgress.acceptedFrames}</dd></div><div><dt>已恢复数据</dt><dd>{formatBytes(receiveProgress.receivedBytes)} / {receiveProgress.fileSize ? formatBytes(receiveProgress.fileSize) : "--"}</dd></div><div className="wide"><dt>会话</dt><dd><code>{receiveProgress.sessionId || "等待二维码"}</code></dd></div></dl>
             {!scanning ? <button className="button primary wide" type="button" onClick={() => void startCamera()} disabled={Boolean(receivedFile)}><Camera size={16} /> 启动摄像头</button> : <button className="button danger wide" type="button" onClick={stopCamera}><CircleStop size={16} /> 停止扫描</button>}
-            {receivedFile && <button className="button primary wide" type="button" onClick={() => void saveReceivedFile()} disabled={saving}>{saving ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{saving ? "正在保存…" : "保存接收文件"}</button>}
+            {receivedFile && nativeFileShareAvailable && <button className="button primary wide" type="button" onClick={() => void shareReceivedFile()} disabled={sharing || saving}>{sharing ? <LoaderCircle className="spin" size={16} /> : <Share2 size={16} />}{sharing ? "正在打开分享…" : "转发给微信 / 其他应用"}</button>}
+            {receivedFile && <button className={`button ${nativeFileShareAvailable ? "secondary" : "primary"} wide`} type="button" onClick={() => void saveReceivedFile()} disabled={saving || sharing}>{saving ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{saving ? "正在保存…" : "保存接收文件"}</button>}
+            {receivedFile && !saveFile && <div className={`optical-share-hint ${nativeFileShareAvailable ? "supported" : ""}`}><Share2 size={14} /><span>{nativeFileShareAvailable ? "点击后在系统分享面板选择微信好友，文件不会上传到 DRPA 服务器。" : isWeChatWebView ? "当前微信内置网页未开放文件附件转发，请保存后再发送。" : "当前浏览器不支持网页直接转发文件，请先保存。"}</span></div>}
             <button className="button secondary wide" type="button" onClick={resetReceiver}><RefreshCw size={15} /> 清空并重新接收</button>
           </aside>
         </main>
