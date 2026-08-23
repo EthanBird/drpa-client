@@ -82,7 +82,9 @@ flowchart TD
 6. 发出 `contextAssembled` 事件，记录估算 token、保留/省略消息数和工具数。
 7. 调用 Provider，执行并记录工具结果，然后在下一轮重新核算。
 
-达到 rounds、tool calls、wall time 或重复调用熔断条件时，不把预算耗尽伪装成普通错误。运行关闭工具定义，再请求一次最终总结；结果通过 `stopReason`、`rounds` 和 `toolCalls` 说明实际停止原因与消耗。
+达到 rounds、tool calls 或 wall time 时，不把预算耗尽伪装成普通错误。运行关闭工具定义，再请求一次最终总结；结果通过 `stopReason`、`rounds` 和 `toolCalls` 说明实际停止原因与消耗。
+
+内置 RPAZ Agent 在实际 dispatch 边界维护单轮命令幂等账本。连续出现相同工具名与规范化参数时，只执行第一次调用，后续调用复用首次 `ToolResult`；任意不同工具调用都会结束这段连续复用。工具上下文使用结构化完成信封，明确给出 `status`、`executionPerformed`、`emptyOutput`、`result` 与可选 `reusedFromCallId`。因此 exit code 为 0 且 stdout/stderr 为空仍是已完成结果，而不是再次执行的依据。
 
 完整工具 stdout、HTML、凭据和大文件不进入下一轮。持久 assistant 消息只保存工具摘要；凭据读取和文档正文类工具使用脱敏摘要。
 
@@ -120,6 +122,8 @@ Provider 的连接、发送和首个响应阶段使用握手时限；响应正�
 
 JCode 使用相同的请求 profile 生成 session 配置，但进程协议仍由 JCode adapter 负责。MiniMax profile 同样写入 `reasoning_split = true`，NDJSON adapter 再执行一次可见内容分流。Provider key 只通过进程环境传入，不写入 JCode 配置文件或运行日志。
 
+JCode 的命令工具在 sidecar 内执行，单靠 NDJSON adapter 只能在执行后观察结果。DRPA 因此为每次会话生成隔离的 `pre_tool`/`post_tool`/`turn_end`/`session_end` hook：`pre_tool` 在第二次进程启动前按规范化参数和状态屏障判重，`post_tool` 记录成功或失败；只读工具不改变屏障，写文件或其他状态变更工具允许命令再次执行，失败命令也允许重试。hook 状态只保存在当前 DRPA 运行的 JCode home，进入新 turn 或结束会话时清理。
+
 ## 7. 附件、产物与外部进程
 
 - 对话打开时从 session 附件目录恢复索引，不依赖 React 内存。
@@ -153,6 +157,8 @@ npm run build
 - 取消信号能被 Provider 和子进程观察。
 - 首个流事件出现后，即使总流时长超过握手时限，Provider 仍持续接收直至 Run 预算结束。
 - MiniMax 累积式 reasoning/content 快照不会重复，推理字段和分片 `<think>` 标签不会进入正文事件。
+- 成功但无输出的命令只真实执行一次；模型重复提交相同调用时收到明确的已完成结果。
+- JCode 在只读工具前后仍拦截同状态屏障内的重复命令；文件变更、新 turn 与失败结果会解除对应判重。
 - 上下文裁剪不会拆开 tool-call/tool-result 组。
 - 工具 schema 计入 token 预算，禁用工具既不可见也不可执行。
 - 附件可在重启后恢复，删除会话时文件和索引一致清理。

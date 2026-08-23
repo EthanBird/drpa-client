@@ -11,10 +11,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-VERSION = "0.74.0"
+VERSION = "0.79.1"
 ARCHIVE_NAME = "jcode-windows-x86_64.tar.gz"
 ARCHIVE_MEMBER = "jcode-windows-x86_64.exe"
-ARCHIVE_SHA256 = "e0dfb0d6c018d72f70977c46a1ff8729f4b019ce7e574fdc0314259d70089e30"
+ARCHIVE_SHA256 = "c2e2c1659da24e43c4761ab16f006c5fe551d8173e6ee94730bee374aa68136e"
 DOWNLOAD_URL = f"https://github.com/1jehuang/jcode/releases/download/v{VERSION}/{ARCHIVE_NAME}"
 LICENSE = ROOT / "installer" / "third-party" / "jcode-LICENSE.txt"
 OUTPUT_FILES = {"jcode.exe", "LICENSE.txt", "VERSION.txt"}

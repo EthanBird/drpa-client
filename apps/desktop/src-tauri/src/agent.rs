@@ -436,9 +436,55 @@ impl AgentHostContext {
     }
 }
 
+#[derive(Clone)]
 struct ToolResult {
     output: Value,
     summary: String,
+}
+
+#[derive(Clone)]
+struct ToolExecutionRecord {
+    fingerprint: String,
+    call_id: String,
+    result: Result<ToolResult, String>,
+}
+
+struct ToolDispatch {
+    result: Result<ToolResult, String>,
+    reused_from: Option<String>,
+}
+
+#[derive(Default)]
+struct ToolExecutionLedger {
+    last: Option<ToolExecutionRecord>,
+}
+
+impl ToolExecutionLedger {
+    fn dispatch<F>(&mut self, fingerprint: String, call_id: &str, execute: F) -> ToolDispatch
+    where
+        F: FnOnce() -> Result<ToolResult, String>,
+    {
+        if let Some(previous) = self
+            .last
+            .as_ref()
+            .filter(|previous| previous.fingerprint == fingerprint)
+        {
+            return ToolDispatch {
+                result: previous.result.clone(),
+                reused_from: Some(previous.call_id.clone()),
+            };
+        }
+        let result = execute();
+        self.last = Some(ToolExecutionRecord {
+            fingerprint,
+            call_id: call_id.to_owned(),
+            result: result.clone(),
+        });
+        ToolDispatch {
+            result,
+            reused_from: None,
+        }
+    }
 }
 
 struct ToolRegistry<'a> {
@@ -634,7 +680,7 @@ where
     let mut events = Vec::new();
     let mut usage = AgentUsage::default();
     let mut tool_calls_count = 0usize;
-    let mut repeated_calls = HashMap::<String, usize>::new();
+    let mut tool_ledger = ToolExecutionLedger::default();
     let mut rounds_completed = 0usize;
     let mut stop_reason = "round-limit".to_owned();
 
@@ -723,26 +769,44 @@ where
                 .to_owned();
             let arguments = parse_tool_arguments(call.pointer("/function/arguments"))?;
             tool_calls_count = tool_calls_count.saturating_add(1);
-            let fingerprint = format!("{name}:{arguments}");
-            let repeat_count = repeated_calls.entry(fingerprint).or_insert(0);
-            *repeat_count = repeat_count.saturating_add(1);
-            let executed = if *repeat_count > 3 {
-                Err(format!("检测到重复工具调用，已熔断：{name}"))
-            } else {
+            let fingerprint = tool_call_fingerprint(&name, &arguments);
+            let dispatched = tool_ledger.dispatch(fingerprint, &call_id, || {
                 tool_registry
                     .as_ref()
                     .ok_or_else(|| "当前 Agent 模式没有工具注册表".to_owned())?
                     .execute(&name, &arguments)
-            };
-            let (status, summary, output) = match executed {
-                Ok(result) => ("completed".to_owned(), result.summary, result.output),
+            });
+            let reused_from = dispatched.reused_from;
+            let (status, summary, output) = match dispatched.result {
+                Ok(result) => {
+                    let summary = if let Some(previous) = reused_from.as_deref() {
+                        format!(
+                            "重复调用已跳过；沿用 {previous} 的成功结果：{}",
+                            result.summary
+                        )
+                    } else {
+                        result.summary
+                    };
+                    ("completed".to_owned(), summary, result.output)
+                }
                 Err(error) => (
                     "failed".to_owned(),
-                    error.clone(),
+                    if let Some(previous) = reused_from.as_deref() {
+                        format!("重复失败调用已跳过；沿用 {previous} 的错误：{error}")
+                    } else {
+                        error.clone()
+                    },
                     json!({"ok": false, "error": error}),
                 ),
             };
-            let output_text = truncate_text(&output.to_string(), MAX_TOOL_OUTPUT_BYTES);
+            let output_text = tool_context_output(
+                &name,
+                &call_id,
+                &status,
+                &summary,
+                &output,
+                reused_from.as_deref(),
+            );
             let event_output = if tool_registry
                 .as_ref()
                 .is_some_and(|registry| registry.redact_persistent_output(&name))
@@ -1015,6 +1079,86 @@ fn parse_tool_arguments(value: Option<&Value>) -> Result<Value, String> {
     }
 }
 
+fn canonical_tool_arguments(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let mut entries = object.iter().collect::<Vec<_>>();
+            entries.sort_by_key(|(name, _)| *name);
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(name, value)| (name.clone(), canonical_tool_arguments(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(values.iter().map(canonical_tool_arguments).collect()),
+        _ => value.clone(),
+    }
+}
+
+fn tool_call_fingerprint(name: &str, arguments: &Value) -> String {
+    format!("{name}:{}", canonical_tool_arguments(arguments))
+}
+
+fn tool_output_is_empty(output: &Value) -> bool {
+    match output {
+        Value::Null => true,
+        Value::String(value) => value.trim().is_empty(),
+        Value::Array(values) => values.is_empty(),
+        Value::Object(object) => {
+            if object.contains_key("stdout") || object.contains_key("stderr") {
+                return ["stdout", "stderr"].iter().all(|name| {
+                    object
+                        .get(*name)
+                        .and_then(Value::as_str)
+                        .is_none_or(|value| value.trim().is_empty())
+                });
+            }
+            object.is_empty()
+        }
+        _ => false,
+    }
+}
+
+fn tool_context_output(
+    name: &str,
+    call_id: &str,
+    status: &str,
+    summary: &str,
+    output: &Value,
+    reused_from: Option<&str>,
+) -> String {
+    let serialized = output.to_string();
+    let bounded_result = if serialized.len() <= MAX_TOOL_OUTPUT_BYTES.saturating_sub(2_000) {
+        output.clone()
+    } else {
+        json!({
+            "truncated": true,
+            "text": truncate_text(&serialized, MAX_TOOL_OUTPUT_BYTES.saturating_sub(2_000)),
+        })
+    };
+    let empty_output = tool_output_is_empty(output);
+    let mut envelope = json!({
+        "tool": name,
+        "callId": call_id,
+        "status": status,
+        "summary": summary,
+        "executionPerformed": reused_from.is_none(),
+        "emptyOutput": empty_output,
+        "result": bounded_result,
+    });
+    if let Some(previous) = reused_from {
+        envelope["reusedFromCallId"] = Value::String(previous.to_owned());
+    }
+    if status == "completed" && empty_output {
+        envelope["observation"] = Value::String(
+            "工具已成功完成；空 stdout/stderr 是有效结果，不代表工具尚未执行。请直接继续下一步，避免自动重复调用。"
+                .to_owned(),
+        );
+    }
+    truncate_text(&envelope.to_string(), MAX_TOOL_OUTPUT_BYTES)
+}
+
 fn accumulate_usage(target: &mut AgentUsage, value: Option<&Value>) {
     let Some(value) = value else { return };
     target.prompt_tokens = target.prompt_tokens.saturating_add(
@@ -1051,6 +1195,8 @@ fn system_prompt(has_project: bool, injected_context: &str) -> String {
          已安装 RPAZ 包必须用 rpaz_run_package 启动，并用 run_get_detail 查看实时事件与 debug 日志。\n\
          凭据工具只在用户已用 Google Authenticator 验证并解锁保险箱后工作；先列出不含密文的摘要，再按需读取或写入。\n\
          只有规范化 RPAZ 项目才调用 rpaz_validate；需要交付 RPAZ 归档时调用 rpaz_build。\n\
+         工具返回 completed 后即代表调用完成；stdout/stderr 为空也是有效结果，不要因此重复相同调用。\
+         若宿主返回 executionPerformed=false，直接沿用 reusedFromCallId 的结果继续下一步。\n\
          回答使用简体中文，先给结论，再列出实际完成的文件与验证结果。\
          {injected_context}"
     )
@@ -3032,6 +3178,86 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(25)
         );
+    }
+
+    #[test]
+    fn consecutive_identical_tool_calls_execute_once_and_reuse_empty_success() {
+        let mut ledger = ToolExecutionLedger::default();
+        let arguments = json!({"code": "from pathlib import Path; Path('done').touch()"});
+        let fingerprint = tool_call_fingerprint("rpaz_python", &arguments);
+        let mut executions = 0usize;
+        let first = ledger.dispatch(fingerprint.clone(), "call-1", || {
+            executions += 1;
+            Ok(ToolResult {
+                output: json!({
+                    "ok": true,
+                    "exitCode": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "durationMs": 8,
+                }),
+                summary: "Python 执行完成，退出码 0".to_owned(),
+            })
+        });
+        let second = ledger.dispatch(fingerprint, "call-2", || {
+            executions += 1;
+            unreachable!("identical consecutive call must reuse the previous result")
+        });
+
+        assert_eq!(executions, 1);
+        assert!(first.reused_from.is_none());
+        assert_eq!(second.reused_from.as_deref(), Some("call-1"));
+        let result = second.result.unwrap();
+        let context = tool_context_output(
+            "rpaz_python",
+            "call-2",
+            "completed",
+            "重复调用已跳过",
+            &result.output,
+            second.reused_from.as_deref(),
+        );
+        let context: Value = serde_json::from_str(&context).unwrap();
+        assert_eq!(context["executionPerformed"], false);
+        assert_eq!(context["emptyOutput"], true);
+        assert_eq!(context["reusedFromCallId"], "call-1");
+        assert!(
+            context["observation"]
+                .as_str()
+                .unwrap()
+                .contains("成功完成")
+        );
+    }
+
+    #[test]
+    fn tool_fingerprint_is_stable_but_a_different_call_breaks_consecutive_reuse() {
+        assert_eq!(
+            tool_call_fingerprint("bash", &json!({"command":"echo ok","timeout":1000})),
+            tool_call_fingerprint("bash", &json!({"timeout":1000,"command":"echo ok"})),
+        );
+
+        let mut ledger = ToolExecutionLedger::default();
+        let mut executions = 0usize;
+        for (call_id, arguments) in [
+            ("call-1", json!({"command":"echo ok"})),
+            ("call-2", json!({"path":"README.md"})),
+            ("call-3", json!({"command":"echo ok"})),
+        ] {
+            let name = if call_id == "call-2" {
+                "read_file"
+            } else {
+                "bash"
+            };
+            let dispatched =
+                ledger.dispatch(tool_call_fingerprint(name, &arguments), call_id, || {
+                    executions += 1;
+                    Ok(ToolResult {
+                        output: json!({"ok":true}),
+                        summary: "done".to_owned(),
+                    })
+                });
+            assert!(dispatched.reused_from.is_none());
+        }
+        assert_eq!(executions, 3);
     }
 
     #[test]
