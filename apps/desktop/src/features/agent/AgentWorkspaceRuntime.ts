@@ -2,9 +2,11 @@ import type {
   AgentConversationProject,
   AgentConversationSession,
   AgentConversationSessionSummary,
+  AgentContextCheckpoint,
   AgentWorkspaceConfig,
   AgentStreamEvent,
   AgentToolEvent,
+  AgentRunRoundProjection,
   AgentTurnRequest,
   AgentTurnResult,
 } from "../../domain/models";
@@ -22,7 +24,13 @@ export interface AgentRunProjection {
   status: "idle" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
   content: string;
   tools: AgentToolEvent[];
+  rounds: AgentRunRoundProjection[];
+  usage: AgentTurnResult["usage"];
+  durationMs: number;
+  stopReason: string;
   error: string;
+  retries: Array<{ round: number; attempt: number; maxAttempts: number; delayMs: number; error: string }>;
+  contextCheckpoint?: AgentContextCheckpoint;
 }
 
 const IDLE_RUN: AgentRunProjection = Object.freeze({
@@ -30,8 +38,46 @@ const IDLE_RUN: AgentRunProjection = Object.freeze({
   status: "idle",
   content: "",
   tools: [],
+  rounds: [],
+  usage: { promptTokens: 0, completionTokens: 0 },
+  durationMs: 0,
+  stopReason: "",
   error: "",
+  retries: [],
 });
+
+function updateToolInPlace(tools: AgentToolEvent[], next: AgentToolEvent): AgentToolEvent[] {
+  const index = tools.findIndex((tool) => tool.callId === next.callId);
+  if (index < 0) return [...tools, next];
+  return tools.map((tool, toolIndex) => toolIndex === index ? { ...tool, ...next } : tool);
+}
+
+function startRound(rounds: AgentRunRoundProjection[], round: number): AgentRunRoundProjection[] {
+  const existing = rounds.findIndex((item) => item.round === round);
+  const completed = rounds.map((item) => ({
+    ...item,
+    status: item.round < round ? "completed" as const : item.status,
+  }));
+  if (existing >= 0) {
+    return completed.map((item) => item.round === round ? { ...item, status: "running" } : item);
+  }
+  return [...completed, { round, status: "running" }];
+}
+
+function assembleRound(
+  rounds: AgentRunRoundProjection[],
+  event: Extract<AgentStreamEvent, { type: "contextAssembled" }>,
+): AgentRunRoundProjection[] {
+  const prepared = rounds.some((item) => item.round === event.round)
+    ? rounds
+    : startRound(rounds, event.round);
+  return prepared.map((item) => item.round === event.round ? {
+    ...item,
+    estimatedTokens: event.estimatedTokens,
+    omittedMessages: event.omittedMessages,
+    omittedTools: event.omittedTools,
+  } : item);
+}
 
 function summarySession(
   summary: AgentConversationSessionSummary,
@@ -46,6 +92,7 @@ function summarySession(
     revision: summary.revision ?? body?.revision ?? 0,
     messages: body?.messages ?? [],
     selectedSkillIds: summary.selectedSkillIds ?? body?.selectedSkillIds ?? [],
+    contextFiles: body?.contextFiles ?? [],
     messageCount: summary.messageCount,
     bodyState: body ? "ready" : "summary",
   };
@@ -57,6 +104,7 @@ function sessionFingerprint(session: AgentConversationSession): string {
     projectId: session.projectId,
     messages: session.messages,
     selectedSkillIds: session.selectedSkillIds,
+    contextFiles: session.contextFiles ?? [],
   });
 }
 
@@ -185,6 +233,16 @@ export class AgentWorkspaceRuntime {
     return session;
   }
 
+  async openFileSession(selectedSkillIds: string[] = []): Promise<AgentConversationSession | null> {
+    const opened = await desktopGateway.openAgentFileSession(selectedSkillIds);
+    if (!opened) return null;
+    const session = { ...opened, bodyState: "ready" as const };
+    this.deleted.delete(session.id);
+    this.bodies.set(session.id, session);
+    useAppStore.getState().upsertAgentConversation(session);
+    return session;
+  }
+
   persistSession(sessionId: string): Promise<void> {
     return this.serialize(sessionId, async () => {
       if (this.deleted.has(sessionId)) throw new Error("会话已删除，已阻止延迟保存重新创建会话");
@@ -299,12 +357,19 @@ export class AgentWorkspaceRuntime {
       status: "running",
       content: "",
       tools: [],
+      rounds: [],
+      usage: { promptTokens: 0, completionTokens: 0 },
+      durationMs: 0,
+      stopReason: "",
       error: "",
+      retries: [],
     });
-    const unlisten = await desktopGateway.listenAgentStream(request.requestId, (event) => {
-      this.consumeRunEvent(sessionId, event);
-    });
+    let unlisten: () => void = () => undefined;
+    const startedAt = Date.now();
     try {
+      unlisten = await desktopGateway.listenAgentStream(request.requestId, (event) => {
+        this.consumeRunEvent(sessionId, event);
+      });
       const result = await desktopGateway.runAgentTurn(request);
       this.flushRunContent(sessionId);
       const latest = this.getRunProjection(sessionId);
@@ -312,6 +377,13 @@ export class AgentWorkspaceRuntime {
         ...latest,
         status: "completed",
         content: result.message,
+        tools: result.tools,
+        rounds: latest.rounds.map((round) => ({ ...round, status: "completed" })),
+        usage: result.usage,
+        durationMs: result.durationMs,
+        stopReason: result.stopReason,
+        retries: latest.retries,
+        contextCheckpoint: result.contextCheckpoint ?? latest.contextCheckpoint,
       });
       return result;
     } catch (reason) {
@@ -323,6 +395,7 @@ export class AgentWorkspaceRuntime {
         ...this.getRunProjection(sessionId),
         status: cancelled ? "cancelled" : "failed",
         error: message,
+        durationMs: Math.max(this.getRunProjection(sessionId).durationMs, Date.now() - startedAt),
       });
       throw reason;
     } finally {
@@ -348,10 +421,35 @@ export class AgentWorkspaceRuntime {
     } else if (event.type === "contentReplace") {
       this.pendingRunContent.set(sessionId, event.content);
       this.scheduleRunContent(sessionId);
+    } else if (event.type === "roundStarted") {
+      this.setRunProjection(sessionId, { ...current, rounds: startRound(current.rounds, event.round) });
+    } else if (event.type === "contextAssembled") {
+      this.setRunProjection(sessionId, { ...current, rounds: assembleRound(current.rounds, event) });
+    } else if (event.type === "retrying") {
+      this.setRunProjection(sessionId, {
+        ...current,
+        retries: [...current.retries, {
+          round: event.round,
+          attempt: event.attempt,
+          maxAttempts: event.maxAttempts,
+          delayMs: event.delayMs,
+          error: event.error,
+        }],
+      });
+    } else if (event.type === "contextCompacted") {
+      this.setRunProjection(sessionId, { ...current, contextCheckpoint: event.checkpoint });
     } else if (event.type === "tool") {
       this.setRunProjection(sessionId, {
         ...current,
-        tools: [...current.tools.filter((tool) => tool.callId !== event.tool.callId), event.tool],
+        tools: updateToolInPlace(current.tools, event.tool),
+      });
+    } else if (event.type === "completed") {
+      this.setRunProjection(sessionId, {
+        ...current,
+        rounds: current.rounds.map((round) => ({ ...round, status: "completed" })),
+        usage: event.usage,
+        durationMs: event.durationMs,
+        stopReason: event.stopReason,
       });
     } else if (event.type === "failed") {
       this.setRunProjection(sessionId, { ...current, status: "failed", error: event.error });

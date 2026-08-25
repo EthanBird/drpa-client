@@ -1,4 +1,5 @@
 import {
+  Activity,
   Bot,
   CheckCircle2,
   ChevronDown,
@@ -8,6 +9,7 @@ import {
   Cpu,
   Download,
   FileCode2,
+  FilePlus2,
   FileText,
   Folder,
   FolderCode,
@@ -44,9 +46,11 @@ import type {
   AgentConversationMessage,
   AgentConversationProject,
   AgentConversationSession,
+  AgentContextCheckpoint,
   AgentDocumentArtifact,
   AgentDocumentAttachment,
   AgentMessage,
+  AgentRunRoundProjection,
   AgentSkillSummary,
   AgentToolEvent,
   StudioProject,
@@ -76,7 +80,7 @@ const toolLabels: Record<string, string> = {
   rpaz_list_files: "列出项目文件",
   read_file: "按行读取文件",
   find_files: "快速查找文件",
-  search_text: "检索项目文本",
+  search_text: "检索文本内容",
   edit_file: "精确编辑文件",
   rpaz_write_file: "写入项目文件",
   rpaz_validate: "校验 RPAZ",
@@ -115,14 +119,23 @@ function replaceVisibleMessageContent(original: string, visible: string): string
 }
 
 function modelMessageContent(message: AgentConversationMessage): string {
-  if (!message.tools?.length) return message.content;
+  const context: string[] = [message.content];
+  if (message.run?.status === "failed" || message.run?.status === "cancelled") {
+    context.push(
+      "[DRPA_PREVIOUS_RUN_STATE_V1]",
+      `上一轮 Agent 运行状态：${message.run.status}。这是一条未完成的部分答复，不得假定任务已经完成。`,
+      message.run.error ? `失败原因：${message.run.error}` : "",
+    );
+  }
+  if (!message.tools?.length) return context.filter(Boolean).join("\n\n");
   const evidence = message.tools.slice(-24).map((tool) => {
     const output = tool.output.length > 2_000
       ? `${tool.output.slice(0, 2_000)}\n…工具输出已截断…`
       : tool.output;
     return `- ${tool.name} [${tool.status}]: ${tool.summary}\n${output}`;
   });
-  return `${message.content}\n\n[DRPA_PREVIOUS_TOOL_EVIDENCE_V1]\n${evidence.join("\n")}`;
+  context.push("[DRPA_PREVIOUS_TOOL_EVIDENCE_V1]", evidence.join("\n"));
+  return context.filter(Boolean).join("\n\n");
 }
 
 function withAttachmentContext(
@@ -186,6 +199,14 @@ function latestUserIndex(messages: AgentConversationMessage[]): number {
     if (messages[index].role === "user") return index;
   }
   return -1;
+}
+
+function latestContextCheckpoint(messages: AgentConversationMessage[]): AgentContextCheckpoint | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const checkpoint = messages[index].run?.contextCheckpoint;
+    if (checkpoint) return checkpoint;
+  }
+  return undefined;
 }
 
 interface AgentPageProps {
@@ -302,6 +323,8 @@ export function AgentPage({
   const currentRequestId = runProjection.requestId;
   const streamingContent = runProjection.content;
   const streamingTools = runProjection.tools;
+  const streamingRounds = runProjection.rounds;
+  const streamingRetries = runProjection.retries;
   const messages = activeSession?.messages ?? [];
   const agentProjectId = activeSession?.projectId ?? "";
   const attachments = activeSession ? attachmentsBySession[activeSession.id] ?? [] : [];
@@ -426,12 +449,14 @@ export function AgentPage({
       path?: string;
       files?: StudioProject["files"];
       kind: "general" | "rpaz";
+      source: "managed" | "external";
     }>();
     agentProjects.forEach((project) => merged.set(project.id, {
       id: project.id,
       name: project.name,
       path: project.path,
       kind: "general",
+      source: project.source ?? "managed",
     }));
     projects.forEach((project) => {
       const existing = merged.get(project.id);
@@ -445,6 +470,7 @@ export function AgentPage({
         name: isRpaz ? project.name : existing?.name ?? project.name,
         files: project.files,
         kind: isRpaz ? "rpaz" : "general",
+        source: existing?.source ?? "managed",
       });
     });
     if (embeddedProjectId && !merged.has(embeddedProjectId)) {
@@ -452,6 +478,7 @@ export function AgentPage({
         id: embeddedProjectId,
         name: embeddedProjectName || embeddedProjectId,
         kind: "general",
+        source: "managed",
       });
     }
     return [...merged.values()];
@@ -556,6 +583,50 @@ export function AgentPage({
       setDocumentNotice(`选择文档失败：${String(reason)}`);
     }
   };
+
+  const openFileAsProject = useCallback(async () => {
+    if (busy || sessionLoadingId === "file") return;
+    setProjectContextMenu(null);
+    setSessionLoadingId("file");
+    setError("");
+    try {
+      const session = await agentRuntime.openFileSession(activeSession?.selectedSkillIds ?? []);
+      if (!session) return;
+      setSurfaceSessionId(session.id);
+      agentRuntime.setSurfaceSelection(surfaceId, session.id);
+      if (!embedded) selectAgentConversation(session.id);
+      const projectIndex = await refreshProjectIndex();
+      const project = projectIndex.find((item) => item.id === session.projectId);
+      if (project) {
+        setExpandedProjectIds((current) => new Set(current).add(project.id));
+      }
+      const sourcePath = session.contextFiles?.[0];
+      if (sourcePath && SUPPORTED_DOCUMENT_EXTENSION.test(sourcePath)) {
+        try {
+          const attachment = await documentGateway.importAgentDocument(sourcePath, session.id);
+          setAttachmentsBySession((current) => ({ ...current, [session.id]: [attachment] }));
+          setDocumentNotice(`已打开 ${attachment.name}；所在目录已作为普通项目，文档内容也已加入会话`);
+        } catch (reason) {
+          setDocumentNotice(`文件项目已打开，但文档内容导入失败：${String(reason)}`);
+        }
+      } else {
+        setDocumentNotice(`已将 ${sourcePath?.split(/[\\/]/).pop() ?? session.title} 所在目录作为普通项目`);
+      }
+    } catch (reason) {
+      setError(`打开文件项目失败：${String(reason)}`);
+    } finally {
+      setSessionLoadingId("");
+    }
+  }, [
+    activeSession?.selectedSkillIds,
+    agentRuntime,
+    busy,
+    embedded,
+    refreshProjectIndex,
+    selectAgentConversation,
+    sessionLoadingId,
+    surfaceId,
+  ]);
 
   const removeAttachment = async (attachmentId: string) => {
     if (!activeSession || busy || documentBusy) return;
@@ -787,13 +858,20 @@ export function AgentPage({
     setConfirmation(null);
   };
 
-  const runTurn = async (sessionId: string, history: AgentConversationMessage[]) => {
+  const runTurn = async (
+    sessionId: string,
+    history: AgentConversationMessage[],
+    options: { preserveTranscript?: boolean } = {},
+  ) => {
     if (busy) return;
     if (!agentBaseUrl.trim() || !agentModel.trim()) {
       setError("请先填写 OpenAI 兼容 URL 和模型名称");
       return;
     }
-    setAgentConversationMessages(sessionId, history);
+    const currentTranscript = useAppStore.getState().agentSessions
+      .find((session) => session.id === sessionId)?.messages ?? [];
+    const transcriptBase = options.preserveTranscript ? currentTranscript : history;
+    if (!options.preserveTranscript) setAgentConversationMessages(sessionId, history);
     setError("");
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     await persistSession(sessionId).catch(() => undefined);
@@ -820,12 +898,13 @@ export function AgentPage({
         maxWallTimeSeconds: agentMaxWallTimeSeconds,
         selectedSkillIds: useAppStore.getState().agentSessions.find((session) => session.id === sessionId)?.selectedSkillIds ?? [],
         toolPolicy: agentToolPolicy,
+        contextCheckpoint: latestContextCheckpoint(transcriptBase),
         messages: history.map((message) => ({
           role: message.role,
           content: modelMessageContent(message),
         })),
       });
-      setAgentConversationMessages(sessionId, [...history, {
+      setAgentConversationMessages(sessionId, [...transcriptBase, {
         id: messageId("assistant"),
         role: "assistant",
         content: result.message,
@@ -837,13 +916,50 @@ export function AgentPage({
           stopReason: result.stopReason,
           rounds: result.rounds,
           toolCalls: result.toolCalls,
+          status: "completed",
+          retryCount: result.retryCount,
+          retries: agentRuntime.getRunProjection(sessionId).retries,
+          roundDetails: agentRuntime.getRunProjection(sessionId).rounds,
+          contextCheckpoint: result.contextCheckpoint,
         },
       }]);
       await persistSession(sessionId).catch(() => undefined);
     } catch (reason) {
-      setError(String(reason).includes("运行已取消")
+      const failure = String(reason);
+      const projection = agentRuntime.getRunProjection(sessionId);
+      const cancelled = failure.includes("运行已取消") || projection.status === "cancelled";
+      const partial = visibleAssistantMessageContent(projection.content).trim();
+      setAgentConversationMessages(sessionId, [...transcriptBase, {
+        id: messageId("assistant"),
+        role: "assistant",
+        content: partial || (cancelled
+          ? "本次运行已取消，已保留取消前的完整执行轨迹。"
+          : "本次运行未能完成，已保留失败前的完整执行轨迹，可以从失败处继续。"),
+        tools: projection.tools,
+        durationMs: projection.durationMs,
+        tokens: projection.usage.promptTokens + projection.usage.completionTokens,
+        run: {
+          requestId,
+          stopReason: cancelled ? "cancelled" : "error",
+          rounds: projection.rounds.length,
+          toolCalls: projection.tools.length,
+          status: cancelled ? "cancelled" : "failed",
+          error: failure,
+          retryCount: projection.retries.length,
+          retries: projection.retries,
+          roundDetails: projection.rounds,
+          contextCheckpoint: projection.contextCheckpoint,
+        },
+      }]);
+      let persistenceError = "";
+      try {
+        await persistSession(sessionId);
+      } catch (persistReason) {
+        persistenceError = `；但失败轨迹写入 session.db 失败：${String(persistReason)}`;
+      }
+      setError((cancelled
         ? "Agent 运行已取消"
-        : `Agent 请求失败：${String(reason)}`);
+        : `Agent 请求失败：${failure}`) + persistenceError);
     } finally {
       void refreshArtifacts(sessionId);
     }
@@ -876,6 +992,11 @@ export function AgentPage({
 
   const regenerate = async () => {
     if (!activeSession || busy) return;
+    const latest = messages.at(-1);
+    if (latest?.role === "assistant" && (latest.run?.status === "failed" || latest.run?.status === "cancelled")) {
+      await runTurn(activeSession.id, messages.slice(0, -1), { preserveTranscript: true });
+      return;
+    }
     const userIndex = latestUserIndex(messages);
     if (userIndex < 0) return;
     await runTurn(activeSession.id, messages.slice(0, userIndex + 1));
@@ -905,7 +1026,10 @@ export function AgentPage({
     }
     if (name === "rpaz_python") return agentToolPolicy.python && Boolean(selectedProject);
     if (name === "rpaz_write_file" || name === "edit_file") return agentToolPolicy.projectWrite && Boolean(selectedProject);
-    if (name === "read_file" || name === "find_files" || name === "search_text") return agentToolPolicy.arbitraryFileRead && Boolean(selectedProject);
+    if (name === "read_file" || name === "find_files" || name === "search_text") {
+      return agentToolPolicy.arbitraryFileRead
+        && (agentToolPolicy.fileReadScope !== "project" || Boolean(selectedProject));
+    }
     if (name === "rpaz_list_files") return Boolean(selectedProject);
     if (name === "data_create_connection") return agentToolPolicy.databaseConnections;
     if (name.startsWith("data_")) return agentToolPolicy.databaseRead;
@@ -988,7 +1112,7 @@ export function AgentPage({
             </div>
           )}
           {messages.map((message, index) => (
-            <article className={`agent-message ${message.role}`} key={message.id}>
+            <article className={`agent-message ${message.role} ${message.run?.status ?? ""}`} key={message.id}>
               <div className="agent-message-avatar">{message.role === "assistant" ? <Bot size={14} /> : "你"}</div>
               <div className="agent-message-body">
                 <header>
@@ -996,10 +1120,15 @@ export function AgentPage({
                   {message.role === "assistant" && <span>{message.durationMs} ms · {message.tokens ?? 0} tokens</span>}
                   <span className="agent-message-actions">
                     {message.role === "user" && message.id === latestUserMessageId && <button type="button" aria-label="编辑最新消息" onClick={() => { setEditingMessageId(message.id); setEditingDraft(visibleMessageContent(message.content)); }} disabled={busy}><Pencil size={12} /></button>}
-                    {((message.role === "assistant" && index === messages.length - 1) || (message.role === "user" && message.id === latestUserMessageId && index === messages.length - 1)) && <button type="button" aria-label="重新生成回复" onClick={() => void regenerate()} disabled={busy}><RotateCcw size={12} /></button>}
+                    {((message.role === "assistant" && index === messages.length - 1) || (message.role === "user" && message.id === latestUserMessageId && index === messages.length - 1)) && (
+                      <button type="button" aria-label={message.run?.status === "failed" || message.run?.status === "cancelled" ? "从失败处继续" : "重新生成回复"} onClick={() => void regenerate()} disabled={busy}>
+                        {message.run?.status === "failed" || message.run?.status === "cancelled" ? <RefreshCcw size={12} /> : <RotateCcw size={12} />}
+                      </button>
+                    )}
                   </span>
                 </header>
-                {message.tools && message.tools.length > 0 && <div className="agent-tool-events">{message.tools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
+                {message.role === "assistant" && (Boolean(message.tools?.length) || Boolean(message.run)) && <AgentRunTimeline tools={message.tools ?? []} run={message.run} status={message.run?.status ?? "completed"} durationMs={message.durationMs} />}
+                {message.run?.error && <div className="agent-run-error"><CircleAlert size={12} /><span>{message.run.error}</span></div>}
                 {editingMessageId === message.id ? (
                   <div className="agent-message-editor">
                     <textarea aria-label="编辑最新用户消息" autoFocus value={editingDraft} onChange={(event) => setEditingDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void submitEditedMessage(); } }} />
@@ -1014,8 +1143,8 @@ export function AgentPage({
               <div className="agent-message-avatar"><Bot size={14} /></div>
               <div className="agent-message-body">
                 <header><strong>{agentMode === "developer" ? "JCode Agent" : "DRPA Agent"}</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
-                {streamingTools.length > 0 && <div className="agent-tool-events">{streamingTools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
-                {streamingContent ? <AgentMarkdown content={streamingContent} streaming hideReasoning /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
+                <AgentRunTimeline tools={streamingTools} rounds={streamingRounds} status={runProjection.status} retries={streamingRetries} />
+                {streamingContent ? <AgentMarkdown content={streamingContent} streaming hideReasoning /> : null}
               </div>
             </article>
           )}
@@ -1101,7 +1230,10 @@ export function AgentPage({
             <section className="agent-project-browser" aria-label="Agent 项目">
               <header>
                 <span><FolderCode size={12} /> 项目</span>
-                <button type="button" aria-label="新建 Agent 项目" title="新建项目" onClick={(event) => { event.stopPropagation(); openCreateProject(); }}><FolderPlus size={12} /></button>
+                <div className="agent-project-header-actions">
+                  <button type="button" aria-label="打开任意文件作为项目" title="打开文件作为项目" onClick={(event) => { event.stopPropagation(); void openFileAsProject(); }} disabled={busy || sessionLoadingId === "file"}>{sessionLoadingId === "file" ? <LoaderCircle className="spin" size={12} /> : <FilePlus2 size={12} />}</button>
+                  <button type="button" aria-label="新建 Agent 项目" title="新建空项目" onClick={(event) => { event.stopPropagation(); openCreateProject(); }}><FolderPlus size={12} /></button>
+                </div>
               </header>
               {availableProjectOptions.length === 0 && (
                 <button className="agent-project-empty" type="button" onClick={openCreateProject}>
@@ -1133,7 +1265,7 @@ export function AgentPage({
                     <summary>
                       <ChevronDown size={11} />
                       <Folder size={13} />
-                      <span><strong>{project.name}</strong><small>{project.kind === "rpaz" ? "RPAZ 子集" : "通用项目"} · {projectSessions.length} 个会话</small></span>
+                      <span><strong>{project.name}</strong><small>{project.kind === "rpaz" ? "RPAZ 子集" : project.source === "external" ? "外部文件项目" : "通用项目"} · {projectSessions.length} 个会话</small></span>
                       <button type="button" aria-label={`在 ${project.name} 新建会话`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void createBoundConversation(project.id); }}><Plus size={11} /></button>
                     </summary>
                     <div>
@@ -1160,14 +1292,14 @@ export function AgentPage({
               <div className="agent-welcome">
                 <div className="agent-orbit"><Sparkles size={24} /></div>
                 <h2>{agentMode === "developer" ? "JCode 开发者 Agent" : "从一次对话或一个项目开始"}</h2>
-                <p>{agentMode === "developer" ? selectedProject ? `JCode 已绑定“${selectedProject.name}”，将在项目目录使用完整文件、命令和开发工具。` : "JCode 将以当前 DRPA 工作区为工作目录，使用完整开发工具处理任务。" : selectedProject ? `Agent 已绑定“${selectedProject.name}”，可以使用 Skills、知识库、项目文件与 Python；RPAZ 是其中的规范化项目子集。` : "普通会话可直接问答和处理文档；绑定任意项目后即可使用项目文件与 Python 工具。"}</p>
+                <p>{agentMode === "developer" ? selectedProject ? `JCode 已绑定“${selectedProject.name}”，将在项目目录使用完整文件、命令和开发工具。` : "JCode 将以当前 DRPA 工作区为工作目录，使用完整开发工具处理任务。" : selectedProject ? `Agent 已绑定“${selectedProject.name}”，可以使用 Skills、知识库、项目文件与 Python；RPAZ 是其中的规范化项目子集。` : agentToolPolicy.arbitraryFileRead && agentToolPolicy.fileReadScope !== "project" ? "普通会话可直接问答、处理文档，并按绝对路径只读检索整个操作系统；绑定项目后还可使用项目写入与 Python。" : "普通会话可直接问答和处理文档；绑定任意项目后即可使用项目文件与 Python 工具。"}</p>
                 <div className="agent-suggestions">
                   {suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => void send(suggestion)}><MessageSquarePlus size={14} /><span>{suggestion}</span></button>)}
                 </div>
               </div>
             )}
             {messages.map((message, index) => (
-              <article className={`agent-message ${message.role}`} key={message.id}>
+              <article className={`agent-message ${message.role} ${message.run?.status ?? ""}`} key={message.id}>
                 <div className="agent-message-avatar">{message.role === "assistant" ? <Bot size={15} /> : "你"}</div>
                 <div className="agent-message-body">
                   <header>
@@ -1176,10 +1308,11 @@ export function AgentPage({
                     <span className="agent-message-actions">
                       {message.role === "user" && message.id === latestUserMessageId && <button type="button" aria-label="编辑最新消息" title="编辑并重新生成" onClick={() => { setEditingMessageId(message.id); setEditingDraft(visibleMessageContent(message.content)); }} disabled={busy}><Pencil size={12} /></button>}
                       {message.role === "user" && message.id === latestUserMessageId && index === messages.length - 1 && <button type="button" aria-label="重新生成回复" title="重新生成" onClick={() => void regenerate()} disabled={busy}><RotateCcw size={12} /></button>}
-                      {message.role === "assistant" && index === messages.length - 1 && <button type="button" aria-label="重新生成回复" title="重新生成" onClick={() => void regenerate()} disabled={busy}><RotateCcw size={12} /></button>}
+                      {message.role === "assistant" && index === messages.length - 1 && <button type="button" aria-label={message.run?.status === "failed" || message.run?.status === "cancelled" ? "从失败处继续" : "重新生成回复"} title={message.run?.status === "failed" || message.run?.status === "cancelled" ? "保留轨迹并从失败处继续" : "重新生成"} onClick={() => void regenerate()} disabled={busy}>{message.run?.status === "failed" || message.run?.status === "cancelled" ? <RefreshCcw size={12} /> : <RotateCcw size={12} />}</button>}
                     </span>
                   </header>
-                  {message.tools && message.tools.length > 0 && <div className="agent-tool-events">{message.tools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
+                  {message.role === "assistant" && (Boolean(message.tools?.length) || Boolean(message.run)) && <AgentRunTimeline tools={message.tools ?? []} run={message.run} status={message.run?.status ?? "completed"} durationMs={message.durationMs} />}
+                  {message.role === "assistant" && message.run?.error && <div className="agent-run-error"><CircleAlert size={12} /><span>{message.run.error}</span></div>}
                   {editingMessageId === message.id ? (
                     <div className="agent-message-editor">
                       <textarea aria-label="编辑最新用户消息" autoFocus value={editingDraft} onChange={(event) => setEditingDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void submitEditedMessage(); } }} />
@@ -1194,8 +1327,8 @@ export function AgentPage({
                 <div className="agent-message-avatar"><Bot size={15} /></div>
                 <div className="agent-message-body">
                   <header><strong>{agentMode === "developer" ? "JCode Agent" : "DRPA Agent"}</strong><span>{agentStreamEnabled ? "流式生成中" : "模型与本地工具协同中"}</span></header>
-                  {streamingTools.length > 0 && <div className="agent-tool-events">{streamingTools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
-                  {streamingContent ? <AgentMarkdown content={streamingContent} streaming hideReasoning /> : <div className="agent-thinking"><LoaderCircle className="spin" size={14} /> 正在分析任务…</div>}
+                  <AgentRunTimeline tools={streamingTools} rounds={streamingRounds} status={runProjection.status} retries={streamingRetries} />
+                  {streamingContent ? <AgentMarkdown content={streamingContent} streaming hideReasoning /> : null}
                 </div>
               </article>
             )}
@@ -1276,8 +1409,9 @@ export function AgentPage({
 
             <section className="agent-config-section">
               <h2><FolderCode size={13} /> 工作上下文</h2>
-              <label><span>项目（通用 / RPAZ）</span><div className="agent-select"><FileCode2 size={13} /><select aria-label="Agent 开发项目" value={agentProjectId} onChange={(event) => activeSession && void moveSessionToProject(activeSession.id, event.target.value)} disabled={!sessionIndexReady || !activeSession || busy || Boolean(sessionLoadingId)}><option value="">不绑定项目</option>{availableProjectOptions.map((project) => <option value={project.id} key={project.id}>{project.name} · {project.kind === "rpaz" ? "RPAZ" : "通用"}</option>)}</select><ChevronDown size={13} /></div><small>任意项目都可使用文件与 Python；RPAZ 项目额外支持规范校验和构建。</small></label>
-              {selectedProject && <div className="agent-project-summary"><strong>{selectedProject.name}</strong><span>{selectedProject.kind === "rpaz" ? `RPAZ 项目 · ${selectedProject.files?.length ?? 0} 个索引文件` : "通用 Agent 项目"}</span><code>{selectedProject.path ?? selectedProject.id}</code></div>}
+              <button className="button secondary small agent-open-file-project" type="button" onClick={() => void openFileAsProject()} disabled={busy || sessionLoadingId === "file"}><FilePlus2 size={13} /> {sessionLoadingId === "file" ? "正在打开…" : "打开任意文件作为项目"}</button>
+              <label><span>项目（通用 / RPAZ）</span><div className="agent-select"><FileCode2 size={13} /><select aria-label="Agent 开发项目" value={agentProjectId} onChange={(event) => activeSession && void moveSessionToProject(activeSession.id, event.target.value)} disabled={!sessionIndexReady || !activeSession || busy || Boolean(sessionLoadingId)}><option value="">不绑定项目</option>{availableProjectOptions.map((project) => <option value={project.id} key={project.id}>{project.name} · {project.kind === "rpaz" ? "RPAZ" : project.source === "external" ? "外部" : "通用"}</option>)}</select><ChevronDown size={13} /></div><small>选择文件会新建会话，并把文件所在目录作为普通项目；读写边界锁定在该目录。</small></label>
+              {selectedProject && <div className="agent-project-summary"><strong>{selectedProject.name}</strong><span>{selectedProject.kind === "rpaz" ? `RPAZ 项目 · ${selectedProject.files?.length ?? 0} 个索引文件` : selectedProject.source === "external" ? "外部文件项目" : "通用 Agent 项目"}</span><code>{selectedProject.path ?? selectedProject.id}</code>{activeSession?.contextFiles?.map((path) => <code className="agent-context-file" key={path}>重点文件：{path.split(/[\\/]/).pop() ?? path}</code>)}</div>}
             </section>
 
             <section className="agent-config-section agent-tools-section">
@@ -1296,6 +1430,7 @@ export function AgentPage({
           onClick={(event) => event.stopPropagation()}
         >
           <button type="button" role="menuitem" onClick={openCreateProject}><FolderPlus size={12} /> 新建项目</button>
+          <button type="button" role="menuitem" onClick={() => void openFileAsProject()}><FilePlus2 size={12} /> 打开文件作为项目</button>
           {projectContextMenu.projectId && (
             <>
               <button type="button" role="menuitem" onClick={() => { const projectId = projectContextMenu.projectId; setProjectContextMenu(null); if (projectId) void createBoundConversation(projectId); }}><MessageSquarePlus size={12} /> 在项目中新建会话</button>
@@ -1457,11 +1592,131 @@ function DocumentComposerContext({
   );
 }
 
+type AgentRunMetadata = AgentConversationMessage["run"];
+
+function stopReasonLabel(reason?: string): string {
+  switch (reason) {
+    case "completed": return "任务已完成";
+    case "repeated-tool-call": return "已停止无进展循环";
+    case "tool-call-limit": return "工具预算已用完";
+    case "round-limit": return "步骤预算已用完";
+    case "wall-time-limit": return "运行时间已到上限";
+    default: return reason ? `运行结束 · ${reason}` : "运行完成";
+  }
+}
+
+function durationLabel(durationMs?: number): string {
+  if (durationMs === undefined) return "";
+  if (durationMs < 1_000) return `${durationMs} ms`;
+  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)} s`;
+}
+
+function projectedRounds(
+  tools: AgentToolEvent[],
+  liveRounds: AgentRunRoundProjection[],
+  run?: AgentRunMetadata,
+): AgentRunRoundProjection[] {
+  if (liveRounds.length > 0) return liveRounds;
+  if (run?.roundDetails?.length) return run.roundDetails;
+  const roundNumbers = new Set(tools.map((tool) => tool.round ?? 1));
+  const finalRound = run?.rounds ?? Math.max(0, ...roundNumbers);
+  if (finalRound > 0) roundNumbers.add(finalRound);
+  return [...roundNumbers]
+    .sort((left, right) => left - right)
+    .map((round) => ({ round, status: "completed" }));
+}
+
+function AgentRunTimeline({
+  tools,
+  rounds = [],
+  status = "completed",
+  run,
+  durationMs,
+  retries = [],
+}: {
+  tools: AgentToolEvent[];
+  rounds?: AgentRunRoundProjection[];
+  status?: "idle" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
+  run?: AgentRunMetadata;
+  durationMs?: number;
+  retries?: Array<{ round: number; attempt: number; maxAttempts: number; delayMs: number; error: string }>;
+}) {
+  const orderedTools = tools
+    .map((tool, index) => ({ ...tool, ordinal: tool.ordinal ?? index + 1, round: tool.round ?? 1 }))
+    .sort((left, right) => left.ordinal - right.ordinal);
+  const steps = projectedRounds(orderedTools, rounds, run);
+  const visibleSteps = steps.length > 0
+    ? steps
+    : [{ round: 1, status: status === "running" ? "running" as const : "completed" as const }];
+  const running = status === "running" || status === "cancelling";
+  const reason = run?.stopReason;
+  const recordedRetries = retries.length > 0 ? retries : run?.retries ?? [];
+  const retryCount = run?.retryCount ?? recordedRetries.length;
+  const latestRetry = recordedRetries.at(-1);
+  const stateLabel = status === "cancelling"
+    ? "正在停止"
+    : status === "failed"
+      ? "运行失败"
+      : status === "cancelled"
+        ? "已取消"
+        : running
+          ? "Agent 正在执行"
+          : stopReasonLabel(reason);
+
+  return (
+    <section className={`agent-run-timeline ${status}`} aria-label="Agent 有序运行轨迹">
+      <header className="agent-run-timeline-header">
+        <span className="agent-run-title"><Activity size={13} /><strong>运行轨迹</strong></span>
+        <span className={`agent-run-state ${running ? "active" : reason === "completed" ? "success" : ""}`}>
+          {running ? <LoaderCircle className="spin" size={11} /> : reason === "completed" ? <CheckCircle2 size={11} /> : <CircleAlert size={11} />}
+          {stateLabel}
+        </span>
+        <span className="agent-run-stats">{visibleSteps.length} 步 · {orderedTools.length} 次操作{retryCount > 0 ? ` · ${retryCount} 次重试` : ""}{run?.contextCheckpoint ? " · 已建立上下文检查点" : ""}{durationMs !== undefined ? ` · ${durationLabel(durationMs)}` : ""}</span>
+      </header>
+      {latestRetry && <div className="agent-run-retry"><RefreshCcw size={11} /><span>{running ? "模型请求失败，正在" : "模型请求曾失败，已"}执行第 {latestRetry.attempt}/{latestRetry.maxAttempts} 次尝试</span><small>{Math.ceil(latestRetry.delayMs / 100) / 10}s 退避 · {latestRetry.error}</small></div>}
+      <div className="agent-run-steps">
+        {visibleSteps.map((step, index) => {
+          const stepTools = orderedTools.filter((tool) => tool.round === step.round);
+          const isLast = index === visibleSteps.length - 1;
+          const active = running && step.status === "running";
+          const finalAnswerStep = stepTools.length === 0 && isLast && visibleSteps.length > 1;
+          return (
+            <section className={`agent-run-step ${active ? "active" : "completed"}`} key={step.round}>
+              <header>
+                <span className="agent-step-index">{step.round}</span>
+                <span className="agent-step-copy">
+                  <strong>{finalAnswerStep ? "整理结果并生成答复" : active ? "分析上下文并决定下一步" : `第 ${step.round} 步`}</strong>
+                  <small>
+                    {step.estimatedTokens !== undefined ? `上下文约 ${step.estimatedTokens.toLocaleString()} tokens` : stepTools.length > 0 ? `${stepTools.length} 个有序操作` : active ? "正在组装上下文" : "模型已完成本步"}
+                    {Boolean(step.omittedMessages || step.omittedTools) && ` · 已压缩 ${step.omittedMessages ?? 0} 条消息 / ${step.omittedTools ?? 0} 个工具`}
+                  </small>
+                </span>
+                {active ? <LoaderCircle className="spin" size={12} /> : <CheckCircle2 size={12} />}
+              </header>
+              {stepTools.length > 0 && <div className="agent-run-actions">{stepTools.map((tool) => <ToolEvent event={tool} key={tool.callId} />)}</div>}
+              {active && stepTools.length === 0 && <div className="agent-run-waiting"><span /><span /><span />等待模型给出操作或最终答复</div>}
+            </section>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function ToolEvent({ event }: { event: AgentToolEvent }) {
   return (
     <details className={`agent-tool-event ${event.status}`}>
-      <summary>{event.status === "running" ? <LoaderCircle className="spin" size={13} /> : event.status === "completed" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}<span><strong>{toolLabels[event.name] ?? event.name}</strong><small>{event.summary}</small></span><ChevronDown size={13} /></summary>
-      <pre>{event.output}</pre>
+      <summary>
+        <span className="agent-action-index">{String(event.ordinal ?? 0).padStart(2, "0")}</span>
+        {event.status === "running" ? <LoaderCircle className="spin" size={13} /> : event.status === "completed" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+        <span className="agent-action-copy"><strong>{toolLabels[event.name] ?? event.name}</strong><small>{event.summary}</small></span>
+        {event.durationMs !== undefined && <em>{durationLabel(event.durationMs)}</em>}
+        <ChevronDown size={13} />
+      </summary>
+      <div className="agent-tool-observation">
+        {event.input && <section><span>操作输入</span><pre>{event.input}</pre></section>}
+        <section><span>观察结果</span><pre>{event.output || (event.status === "running" ? "等待工具返回…" : "无输出")}</pre></section>
+      </div>
     </details>
   );
 }

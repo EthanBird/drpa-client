@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{AppPaths, agent_browser, agent_documents, jcode};
 
-const SESSION_SCHEMA_VERSION: i64 = 2;
+const SESSION_SCHEMA_VERSION: i64 = 3;
 const DEFAULT_SESSION_TITLE: &str = "新对话";
 const MAX_PROJECT_NAME_CHARS: usize = 120;
 const MAX_SESSION_TITLE_CHARS: usize = 200;
@@ -32,6 +32,7 @@ pub(crate) struct AgentProjectSummary {
     pub(crate) created_at: u64,
     pub(crate) updated_at: u64,
     pub(crate) session_count: usize,
+    pub(crate) source: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +65,14 @@ pub(crate) struct AgentSessionRecord {
     pub(crate) messages: Vec<Value>,
     #[serde(default)]
     pub(crate) selected_skill_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) context_files: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AgentProjectContext {
+    pub(crate) root: PathBuf,
+    pub(crate) context_files: Vec<PathBuf>,
 }
 
 #[tauri::command(async)]
@@ -81,6 +90,20 @@ pub(crate) fn create_agent_project(
 ) -> Result<AgentProjectSummary, String> {
     let _guard = lock_session_database()?;
     create_agent_project_at(&paths.workspace_root, &name)
+}
+
+#[tauri::command(async)]
+pub(crate) fn open_agent_file_session(
+    source_path: String,
+    selected_skill_ids: Option<Vec<String>>,
+    paths: State<'_, AppPaths>,
+) -> Result<AgentSessionRecord, String> {
+    let _guard = lock_session_database()?;
+    open_agent_file_session_at(
+        &paths.workspace_root,
+        Path::new(&source_path),
+        selected_skill_ids.unwrap_or_default(),
+    )
 }
 
 #[tauri::command(async)]
@@ -183,10 +206,10 @@ fn list_agent_projects_at(workspace_root: &Path) -> Result<Vec<AgentProjectSumma
     let connection = open_database(workspace_root)?;
     let mut statement = connection
         .prepare(
-            "SELECT p.id, p.name, p.created_at, p.updated_at, COUNT(s.id)
+            "SELECT p.id, p.name, p.root_path, p.created_at, p.updated_at, COUNT(s.id)
              FROM projects p
              LEFT JOIN sessions s ON s.project_id = p.id
-             GROUP BY p.id, p.name, p.created_at, p.updated_at
+             GROUP BY p.id, p.name, p.root_path, p.created_at, p.updated_at
              ORDER BY p.name COLLATE NOCASE ASC, p.created_at ASC",
         )
         .map_err(database_error("读取 Agent 项目失败"))?;
@@ -195,25 +218,34 @@ fn list_agent_projects_at(workspace_root: &Path) -> Result<Vec<AgentProjectSumma
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
+                row.get::<_, Option<String>>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         })
         .map_err(database_error("读取 Agent 项目失败"))?;
 
     rows.map(|row| {
-        let (id, name, created_at, updated_at, session_count) =
+        let (id, name, root_path, created_at, updated_at, session_count) =
             row.map_err(database_error("解析 Agent 项目失败"))?;
+        let source = if root_path.is_some() {
+            "external"
+        } else {
+            "managed"
+        };
         Ok(AgentProjectSummary {
-            path: project_path(workspace_root, &id)
-                .to_string_lossy()
-                .into_owned(),
+            path: root_path.unwrap_or_else(|| {
+                project_path(workspace_root, &id)
+                    .to_string_lossy()
+                    .into_owned()
+            }),
             id,
             name,
             created_at: nonnegative_u64(created_at),
             updated_at: nonnegative_u64(updated_at),
             session_count: nonnegative_usize(session_count),
+            source: source.to_owned(),
         })
     })
     .collect()
@@ -262,7 +294,89 @@ fn create_agent_project_at(
         created_at: now,
         updated_at: now,
         session_count: 0,
+        source: "managed".to_owned(),
     })
+}
+
+fn open_agent_file_session_at(
+    workspace_root: &Path,
+    source_path: &Path,
+    selected_skill_ids: Vec<String>,
+) -> Result<AgentSessionRecord, String> {
+    let source = fs::canonicalize(source_path)
+        .map_err(|error| format!("打开会话上下文文件失败：{error}"))?;
+    if !source.is_file() {
+        return Err("请选择一个本地文件作为会话上下文".to_owned());
+    }
+    let root = source
+        .parent()
+        .ok_or_else(|| "上下文文件缺少可用的父目录".to_owned())?
+        .to_path_buf();
+    let selected_skill_ids = normalize_skill_ids(selected_skill_ids)?;
+    let root_text = path_text(&root);
+    let context_file = path_text(&source);
+    let now = now_millis();
+
+    let mut connection = open_database(workspace_root)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(database_error("打开文件项目事务失败"))?;
+    let existing = transaction
+        .query_row(
+            "SELECT id FROM projects WHERE root_path = ?1",
+            [&root_text],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(database_error("查找外部文件项目失败"))?;
+    let project_id = if let Some(project_id) = existing {
+        transaction
+            .execute(
+                "UPDATE projects SET updated_at = ?1 WHERE id = ?2",
+                params![millis_i64(now), project_id],
+            )
+            .map_err(database_error("更新外部文件项目失败"))?;
+        project_id
+    } else {
+        let project_id = generated_project_id();
+        let preferred_name = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.trim().is_empty())
+            .or_else(|| source.file_stem().and_then(|name| name.to_str()))
+            .unwrap_or("外部文件项目");
+        let name = unique_project_name(&transaction, preferred_name)?;
+        transaction
+            .execute(
+                "INSERT INTO projects (id, name, root_path, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![project_id, name, root_text, millis_i64(now)],
+            )
+            .map_err(database_error("登记外部文件项目失败"))?;
+        project_id
+    };
+
+    let title = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(DEFAULT_SESSION_TITLE);
+    let session = AgentSessionRecord {
+        id: format!("agent-{}", Uuid::new_v4().simple()),
+        title: suggested_session_title(title),
+        project_id: Some(project_id),
+        created_at: now,
+        updated_at: now,
+        revision: 1,
+        messages: Vec::new(),
+        selected_skill_ids,
+        context_files: vec![context_file],
+    };
+    insert_session_in(&transaction, &session)?;
+    transaction
+        .commit()
+        .map_err(database_error("提交文件项目会话失败"))?;
+    Ok(session)
 }
 
 fn rename_agent_project_at(
@@ -386,6 +500,7 @@ fn create_agent_session_at(
         revision: 1,
         messages: Vec::new(),
         selected_skill_ids,
+        context_files: Vec::new(),
     };
     insert_session(workspace_root, &session)?;
     Ok(session)
@@ -400,7 +515,7 @@ fn get_agent_session_at(
     connection
         .query_row(
             "SELECT id, title, project_id, created_at, updated_at, messages_json,
-                    selected_skills_json, revision
+                    selected_skills_json, revision, context_files_json
              FROM sessions WHERE id = ?1",
             [session_id],
             session_record_from_row,
@@ -430,7 +545,6 @@ fn save_agent_session_at(
         .map_err(|error| format!("序列化 Agent 会话消息失败：{error}"))?;
     let skills_json = serde_json::to_string(&session.selected_skill_ids)
         .map_err(|error| format!("序列化会话技能失败：{error}"))?;
-
     let mut connection = open_database(workspace_root)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -438,15 +552,17 @@ fn save_agent_session_at(
     if let Some(project_id) = session.project_id.as_deref() {
         ensure_or_register_project_in(&transaction, workspace_root, project_id)?;
     }
-    let current_revision = transaction
+    let current = transaction
         .query_row(
-            "SELECT revision FROM sessions WHERE id = ?1",
+            "SELECT revision, context_files_json FROM sessions WHERE id = ?1",
             [&session.id],
-            |row| row.get::<_, i64>(0),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
-        .map_err(database_error("读取 Agent 会话版本失败"))?
-        .map(nonnegative_u64);
+        .map_err(database_error("读取 Agent 会话版本失败"))?;
+    let current_revision = current
+        .as_ref()
+        .map(|(revision, _)| nonnegative_u64(*revision));
     match current_revision {
         Some(current) if session.revision != current => {
             return Err(format!(
@@ -459,6 +575,14 @@ fn save_agent_session_at(
         }
         _ => {}
     }
+    session.context_files = current
+        .as_ref()
+        .map(|(_, source)| serde_json::from_str::<Vec<String>>(source))
+        .transpose()
+        .map_err(|error| format!("解析会话上下文文件失败：{error}"))?
+        .unwrap_or_default();
+    let context_files_json = serde_json::to_string(&session.context_files)
+        .map_err(|error| format!("序列化会话上下文文件失败：{error}"))?;
     let next_revision = current_revision.unwrap_or(0).saturating_add(1);
     if current_revision.is_some() {
         transaction
@@ -468,15 +592,17 @@ fn save_agent_session_at(
                     title = ?2,
                     messages_json = ?3,
                     selected_skills_json = ?4,
-                    message_count = ?5,
-                    updated_at = ?6,
-                    revision = ?7
-                 WHERE id = ?8",
+                    context_files_json = ?5,
+                    message_count = ?6,
+                    updated_at = ?7,
+                    revision = ?8
+                 WHERE id = ?9",
                 params![
                     session.project_id,
                     session.title,
                     messages_json,
                     skills_json,
+                    context_files_json,
                     usize_i64(session.messages.len())?,
                     millis_i64(session.updated_at),
                     millis_i64(next_revision),
@@ -489,14 +615,15 @@ fn save_agent_session_at(
             .execute(
                 "INSERT INTO sessions (
                     id, project_id, title, messages_json, selected_skills_json,
-                    message_count, created_at, updated_at, revision
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    context_files_json, message_count, created_at, updated_at, revision
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     session.id,
                     session.project_id,
                     session.title,
                     messages_json,
                     skills_json,
+                    context_files_json,
                     usize_i64(session.messages.len())?,
                     millis_i64(session.created_at),
                     millis_i64(session.updated_at),
@@ -548,7 +675,8 @@ fn move_agent_session_at(
     }
     let changed = transaction
         .execute(
-            "UPDATE sessions SET project_id = ?1, updated_at = ?2, revision = revision + 1 WHERE id = ?3",
+            "UPDATE sessions SET project_id = ?1, context_files_json = '[]', updated_at = ?2,
+                    revision = revision + 1 WHERE id = ?3",
             params![project_id, millis_i64(now_millis()), session_id],
         )
         .map_err(database_error("移动 Agent 会话失败"))?;
@@ -574,10 +702,6 @@ fn delete_agent_session_at(workspace_root: &Path, session_id: &str) -> Result<()
 }
 
 fn insert_session(workspace_root: &Path, session: &AgentSessionRecord) -> Result<(), String> {
-    let messages_json = serde_json::to_string(&session.messages)
-        .map_err(|error| format!("序列化 Agent 会话消息失败：{error}"))?;
-    let skills_json = serde_json::to_string(&session.selected_skill_ids)
-        .map_err(|error| format!("序列化会话技能失败：{error}"))?;
     let mut connection = open_database(workspace_root)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -585,18 +709,35 @@ fn insert_session(workspace_root: &Path, session: &AgentSessionRecord) -> Result
     if let Some(project_id) = session.project_id.as_deref() {
         ensure_or_register_project_in(&transaction, workspace_root, project_id)?;
     }
+    insert_session_in(&transaction, session)?;
+    transaction
+        .commit()
+        .map_err(database_error("提交 Agent 会话失败"))
+}
+
+fn insert_session_in(
+    transaction: &Transaction<'_>,
+    session: &AgentSessionRecord,
+) -> Result<(), String> {
+    let messages_json = serde_json::to_string(&session.messages)
+        .map_err(|error| format!("序列化 Agent 会话消息失败：{error}"))?;
+    let skills_json = serde_json::to_string(&session.selected_skill_ids)
+        .map_err(|error| format!("序列化会话技能失败：{error}"))?;
+    let context_files_json = serde_json::to_string(&session.context_files)
+        .map_err(|error| format!("序列化会话上下文文件失败：{error}"))?;
     transaction
         .execute(
             "INSERT INTO sessions (
                 id, project_id, title, messages_json, selected_skills_json,
-                message_count, created_at, updated_at, revision
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                context_files_json, message_count, created_at, updated_at, revision
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 session.id,
                 session.project_id,
                 session.title,
                 messages_json,
                 skills_json,
+                context_files_json,
                 usize_i64(session.messages.len())?,
                 millis_i64(session.created_at),
                 millis_i64(session.updated_at),
@@ -604,9 +745,7 @@ fn insert_session(workspace_root: &Path, session: &AgentSessionRecord) -> Result
             ],
         )
         .map_err(database_error("创建 Agent 会话失败"))?;
-    transaction
-        .commit()
-        .map_err(database_error("提交 Agent 会话失败"))
+    Ok(())
 }
 
 fn get_agent_project(
@@ -616,23 +755,32 @@ fn get_agent_project(
 ) -> Result<AgentProjectSummary, String> {
     connection
         .query_row(
-            "SELECT p.id, p.name, p.created_at, p.updated_at, COUNT(s.id)
+            "SELECT p.id, p.name, p.root_path, p.created_at, p.updated_at, COUNT(s.id)
              FROM projects p
              LEFT JOIN sessions s ON s.project_id = p.id
              WHERE p.id = ?1
-             GROUP BY p.id, p.name, p.created_at, p.updated_at",
+             GROUP BY p.id, p.name, p.root_path, p.created_at, p.updated_at",
             [project_id],
             |row| {
                 let id = row.get::<_, String>(0)?;
+                let root_path = row.get::<_, Option<String>>(2)?;
+                let source = if root_path.is_some() {
+                    "external"
+                } else {
+                    "managed"
+                };
                 Ok(AgentProjectSummary {
-                    path: project_path(workspace_root, &id)
-                        .to_string_lossy()
-                        .into_owned(),
+                    path: root_path.unwrap_or_else(|| {
+                        project_path(workspace_root, &id)
+                            .to_string_lossy()
+                            .into_owned()
+                    }),
                     id,
                     name: row.get(1)?,
-                    created_at: nonnegative_u64(row.get(2)?),
-                    updated_at: nonnegative_u64(row.get(3)?),
-                    session_count: nonnegative_usize(row.get(4)?),
+                    created_at: nonnegative_u64(row.get(3)?),
+                    updated_at: nonnegative_u64(row.get(4)?),
+                    session_count: nonnegative_usize(row.get(5)?),
+                    source: source.to_owned(),
                 })
             },
         )
@@ -648,7 +796,7 @@ fn get_agent_session_with(
     connection
         .query_row(
             "SELECT id, title, project_id, created_at, updated_at, messages_json,
-                    selected_skills_json, revision
+                    selected_skills_json, revision, context_files_json
              FROM sessions WHERE id = ?1",
             [session_id],
             session_record_from_row,
@@ -661,6 +809,7 @@ fn get_agent_session_with(
 fn session_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentSessionRecord> {
     let messages_json = row.get::<_, String>(5)?;
     let skills_json = row.get::<_, String>(6)?;
+    let context_files_json = row.get::<_, String>(8)?;
     Ok(AgentSessionRecord {
         id: row.get(0)?,
         title: row.get(1)?,
@@ -670,6 +819,7 @@ fn session_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentSes
         revision: nonnegative_u64(row.get(7)?),
         messages: parse_json_column(&messages_json, 5)?,
         selected_skill_ids: parse_json_column(&skills_json, 6)?,
+        context_files: parse_json_column(&context_files_json, 8)?,
     })
 }
 
@@ -765,6 +915,7 @@ fn migrate_database(connection: &mut Connection) -> Result<(), String> {
                 "CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY NOT NULL,
                     name TEXT NOT NULL,
+                    root_path TEXT,
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL
                  );
@@ -779,6 +930,11 @@ fn migrate_database(connection: &mut Connection) -> Result<(), String> {
                             json_valid(selected_skills_json)
                             AND json_type(selected_skills_json) = 'array'
                         ),
+                    context_files_json TEXT NOT NULL DEFAULT '[]'
+                        CHECK (
+                            json_valid(context_files_json)
+                            AND json_type(context_files_json) = 'array'
+                        ),
                     message_count INTEGER NOT NULL DEFAULT 0 CHECK (message_count >= 0),
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL,
@@ -789,7 +945,9 @@ fn migrate_database(connection: &mut Connection) -> Result<(), String> {
                  CREATE INDEX IF NOT EXISTS idx_agent_sessions_project_updated
                     ON sessions(project_id, updated_at DESC, created_at DESC);
                  CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_projects_name_nocase
-                    ON projects(name COLLATE NOCASE);",
+                    ON projects(name COLLATE NOCASE);
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_projects_external_root
+                    ON projects(root_path) WHERE root_path IS NOT NULL;",
             )
             .map_err(database_error("创建 Agent 会话数据库结构失败"))?;
     }
@@ -800,6 +958,20 @@ fn migrate_database(connection: &mut Connection) -> Result<(), String> {
                     CHECK (revision >= 1);",
             )
             .map_err(database_error("增加 Agent 会话版本列失败"))?;
+    }
+    if (1..3).contains(&version) {
+        transaction
+            .execute_batch(
+                "ALTER TABLE projects ADD COLUMN root_path TEXT;
+                 ALTER TABLE sessions ADD COLUMN context_files_json TEXT NOT NULL DEFAULT '[]'
+                    CHECK (
+                        json_valid(context_files_json)
+                        AND json_type(context_files_json) = 'array'
+                    );
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_projects_external_root
+                    ON projects(root_path) WHERE root_path IS NOT NULL;",
+            )
+            .map_err(database_error("增加外部文件项目结构失败"))?;
     }
     transaction
         .pragma_update(None, "user_version", SESSION_SCHEMA_VERSION)
@@ -871,6 +1043,63 @@ fn ensure_or_register_project_in(
     Ok(())
 }
 
+pub(crate) fn resolve_agent_project_context(
+    workspace_root: &Path,
+    project_id: &str,
+    session_id: &str,
+) -> Result<Option<AgentProjectContext>, String> {
+    if project_id.trim().is_empty() {
+        return Ok(None);
+    }
+    validate_project_identifier(project_id)?;
+    let _guard = lock_session_database()?;
+    let connection = open_database(workspace_root)?;
+    let stored_root = connection
+        .query_row(
+            "SELECT root_path FROM projects WHERE id = ?1",
+            [project_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(database_error("解析 Agent 项目目录失败"))?
+        .ok_or_else(|| format!("Agent 项目不存在：{project_id}"))?;
+    let root = stored_root
+        .map(PathBuf::from)
+        .unwrap_or_else(|| project_path(workspace_root, project_id));
+    let canonical_root = fs::canonicalize(&root)
+        .map_err(|error| format!("Agent 项目目录不可用（{}）：{error}", root.display()))?;
+    if !canonical_root.is_dir() {
+        return Err(format!("Agent 项目目录不是文件夹：{}", root.display()));
+    }
+
+    let context_files = if session_id.trim().is_empty() {
+        Vec::new()
+    } else {
+        validate_identifier(session_id, "会话 ID")?;
+        connection
+            .query_row(
+                "SELECT context_files_json FROM sessions
+                 WHERE id = ?1 AND project_id = ?2",
+                params![session_id, project_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error("读取会话上下文文件失败"))?
+            .map(|source| serde_json::from_str::<Vec<String>>(&source))
+            .transpose()
+            .map_err(|error| format!("解析会话上下文文件失败：{error}"))?
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|path| fs::canonicalize(path).ok())
+            .filter(|path| path.is_file() && path.starts_with(&canonical_root))
+            .collect()
+    };
+    Ok(Some(AgentProjectContext {
+        root: canonical_root,
+        context_files,
+    }))
+}
+
 fn validate_project_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -897,6 +1126,58 @@ fn validate_session_title(title: &str) -> Result<String, String> {
         return Err("会话标题不能包含控制字符".to_owned());
     }
     Ok(title.to_owned())
+}
+
+fn unique_project_name(connection: &Connection, preferred: &str) -> Result<String, String> {
+    let base = preferred
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_PROJECT_NAME_CHARS)
+        .collect::<String>();
+    let base = validate_project_name(if base.is_empty() {
+        "外部文件项目"
+    } else {
+        &base
+    })?;
+    for suffix in 1..=10_000_u32 {
+        let candidate = if suffix == 1 {
+            base.clone()
+        } else {
+            let suffix_text = format!(" ({suffix})");
+            let keep = MAX_PROJECT_NAME_CHARS.saturating_sub(suffix_text.chars().count());
+            format!(
+                "{}{}",
+                base.chars().take(keep).collect::<String>(),
+                suffix_text
+            )
+        };
+        let exists = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE name = ?1 COLLATE NOCASE)",
+                [&candidate],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(database_error("检查项目名称失败"))?;
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Err("无法生成不重复的项目名称".to_owned())
+}
+
+fn suggested_session_title(preferred: &str) -> String {
+    let title = preferred
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_SESSION_TITLE_CHARS)
+        .collect::<String>();
+    if title.is_empty() {
+        DEFAULT_SESSION_TITLE.to_owned()
+    } else {
+        title
+    }
 }
 
 fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
@@ -964,6 +1245,20 @@ fn generated_project_id() -> String {
 
 fn project_path(workspace_root: &Path, project_id: &str) -> PathBuf {
     workspace_root.join("projects").join(project_id)
+}
+
+fn path_text(path: &Path) -> String {
+    let text = path.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return rest.to_owned();
+        }
+    }
+    text
 }
 
 fn ensure_real_directory(path: &Path, label: &str) -> Result<(), String> {
@@ -1152,6 +1447,65 @@ mod tests {
     }
 
     #[test]
+    fn opens_arbitrary_files_as_reusable_projects_with_session_scoped_focus() {
+        let workspace = TestWorkspace::new("external-file-project");
+        let external_root =
+            std::env::temp_dir().join(format!("drpa-external-context-{}", Uuid::new_v4().simple()));
+        fs::create_dir_all(&external_root).unwrap();
+        let first_file = external_root.join("first notes.txt");
+        let second_file = external_root.join("second.csv");
+        fs::write(&first_file, "first").unwrap();
+        fs::write(&second_file, "value\n2\n").unwrap();
+
+        let first = open_agent_file_session_at(
+            &workspace.root,
+            &first_file,
+            vec!["data-analysis".to_owned()],
+        )
+        .unwrap();
+        let second = open_agent_file_session_at(&workspace.root, &second_file, Vec::new()).unwrap();
+
+        assert_eq!(first.project_id, second.project_id);
+        assert_eq!(first.context_files, vec![first_file.to_string_lossy()]);
+        assert_eq!(second.context_files, vec![second_file.to_string_lossy()]);
+        let projects = list_agent_projects_at(&workspace.root).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].source, "external");
+        assert_eq!(PathBuf::from(&projects[0].path), external_root);
+        assert!(!project_path(&workspace.root, &projects[0].id).exists());
+
+        let resolved = resolve_agent_project_context(
+            &workspace.root,
+            first.project_id.as_deref().unwrap(),
+            &first.id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(resolved.root, fs::canonicalize(&external_root).unwrap());
+        assert_eq!(
+            resolved.context_files,
+            vec![fs::canonicalize(&first_file).unwrap()]
+        );
+
+        let mut edited = get_agent_session_at(&workspace.root, &first.id).unwrap();
+        edited.messages = vec![json!({"id":"m1","role":"user","content":"保留会话"})];
+        edited.context_files = vec![workspace.root.join("outside.txt").to_string_lossy().into()];
+        fs::remove_file(&first_file).unwrap();
+        let saved = save_agent_session_at(&workspace.root, edited).unwrap();
+        assert_eq!(saved.context_files, first.context_files);
+        let resolved_after_delete = resolve_agent_project_context(
+            &workspace.root,
+            first.project_id.as_deref().unwrap(),
+            &first.id,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(resolved_after_delete.context_files.is_empty());
+
+        fs::remove_dir_all(external_root).unwrap();
+    }
+
+    #[test]
     fn rejects_dot_segments_and_creates_consistent_export_snapshots() {
         assert!(normalize_project_id(Some(".")).is_err());
         assert!(normalize_project_id(Some("..")).is_err());
@@ -1209,6 +1563,7 @@ mod tests {
             revision: 0,
             messages: vec![json!({"id":"old","role":"user","content":"保留我"})],
             selected_skill_ids: vec!["data-analysis".to_owned()],
+            context_files: Vec::new(),
         };
         save_agent_session_at(&workspace.root, imported.clone()).unwrap();
         let moved =

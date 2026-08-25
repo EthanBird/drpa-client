@@ -44,24 +44,30 @@ pub(crate) fn assemble_round_context(
         };
     }
 
-    let system = messages.first().cloned();
-    let history = if messages
-        .first()
-        .and_then(|message| message.get("role"))
-        .and_then(Value::as_str)
-        == Some("system")
-    {
-        &messages[1..]
-    } else {
-        messages
-    };
+    // System prompt, injected project context, and durable context checkpoints
+    // are a fixed prefix. Dropping any one of them makes later rounds appear
+    // stateless even though recent chat messages are still present.
+    let fixed_prefix_len = messages
+        .iter()
+        .take_while(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        .count();
+    let fixed_prefix = &messages[..fixed_prefix_len];
+    let history = &messages[fixed_prefix_len..];
     let groups = group_messages(history);
-    let system_tokens = system.as_ref().map(estimate_tokens).unwrap_or(0);
-    let mut used = system_tokens;
+    let fixed_tokens = fixed_prefix.iter().map(estimate_tokens).sum::<u64>();
+    let history_tokens = groups.iter().flatten().map(estimate_tokens).sum::<u64>();
+    let available_after_fixed = input_budget.saturating_sub(fixed_tokens);
+    let summary_reserve = if history_tokens > available_after_fixed {
+        (available_after_fixed / 8).clamp(48, 2_048)
+    } else {
+        0
+    };
+    let selection_budget = input_budget.saturating_sub(summary_reserve);
+    let mut used = fixed_tokens;
     let mut selected = Vec::<Vec<Value>>::new();
     for group in groups.iter().rev() {
         let cost = group.iter().map(estimate_tokens).sum::<u64>();
-        if !selected.is_empty() && used.saturating_add(cost) > input_budget {
+        if !selected.is_empty() && used.saturating_add(cost) > selection_budget {
             break;
         }
         used = used.saturating_add(cost);
@@ -70,15 +76,17 @@ pub(crate) fn assemble_round_context(
     selected.reverse();
     let selected_count = selected.iter().map(Vec::len).sum::<usize>();
     let omitted_messages = history.len().saturating_sub(selected_count);
-    let mut compacted = Vec::new();
-    if let Some(system) = system {
-        compacted.push(system);
-    }
+    let omitted_group_count = groups.len().saturating_sub(selected.len());
+    let mut compacted = fixed_prefix.to_vec();
     if omitted_messages > 0 {
+        let summary_chars = usize::try_from(summary_reserve.saturating_mul(4))
+            .unwrap_or(8_192)
+            .max(256);
+        let summary = summarize_omitted_groups(&groups[..omitted_group_count], summary_chars);
         compacted.push(json!({
             "role": "system",
             "content": format!(
-                "上下文预算已压缩：省略较早的 {omitted_messages} 条内部消息；请以保留的最近对话与工具证据为准。"
+                "上下文预算已压缩：较早的 {omitted_messages} 条内部消息已转换为以下有界执行证据。不要假定未列出的工作已经完成。\n\n{summary}"
             )
         }));
     }
@@ -103,6 +111,79 @@ pub(crate) fn assemble_round_context(
         omitted_messages,
         omitted_tools,
     }
+}
+
+fn summarize_omitted_groups(groups: &[Vec<Value>], max_chars: usize) -> String {
+    let mut records = Vec::new();
+    let mut used = 0usize;
+    for group in groups.iter().rev() {
+        let mut group_records = Vec::new();
+        for message in group {
+            let role = message
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let content = message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let content = truncate_chars(content, 1_200);
+            let tool_names = message
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .map(|calls| {
+                    calls
+                        .iter()
+                        .filter_map(|call| call.pointer("/function/name").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let tool_call_id = message
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let label = if !tool_names.is_empty() {
+                format!("{role} 调用工具 {tool_names}")
+            } else if !tool_call_id.is_empty() {
+                format!("{role} 结果 {tool_call_id}")
+            } else {
+                role.to_owned()
+            };
+            group_records.push(if content.is_empty() {
+                format!("- {label}")
+            } else {
+                format!("- {label}: {content}")
+            });
+        }
+        let record = group_records.join("\n");
+        let remaining = max_chars.saturating_sub(used);
+        if remaining == 0 {
+            break;
+        }
+        let record_chars = record.chars().count();
+        let record = truncate_chars(&record, remaining);
+        used = used.saturating_add(record.chars().count());
+        records.push(record);
+        if record_chars > remaining {
+            break;
+        }
+    }
+    records.reverse();
+    if records.is_empty() {
+        "较早执行证据因上下文预算不足而省略。".to_owned()
+    } else {
+        records.join("\n")
+    }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_owned();
+    }
+    let mut truncated = value.chars().take(max_chars).collect::<String>();
+    truncated.push_str("…[截断]");
+    truncated
 }
 
 fn group_messages(messages: &[Value]) -> Vec<Vec<Value>> {
@@ -174,5 +255,28 @@ mod tests {
             512,
         );
         assert!(with_tools.estimated_tokens > without_tools.estimated_tokens);
+    }
+
+    #[test]
+    fn preserves_all_leading_system_context_and_summarizes_omitted_tool_evidence() {
+        let messages = vec![
+            json!({"role":"system","content":"agent policy"}),
+            json!({"role":"system","content":"durable checkpoint"}),
+            json!({"role":"user","content":"old request".repeat(1_000)}),
+            json!({"role":"assistant","content":null,"tool_calls":[{"id":"c1","function":{"name":"read_file","arguments":"{}"}}]}),
+            json!({"role":"tool","tool_call_id":"c1","content":"manifest evidence".repeat(300)}),
+            json!({"role":"user","content":"latest request"}),
+        ];
+        let assembly = assemble_round_context(&messages, &[], 1_500, 256);
+        assert!(assembly.omitted_messages > 0);
+        assert_eq!(assembly.messages[0]["content"], "agent policy");
+        assert_eq!(assembly.messages[1]["content"], "durable checkpoint");
+        let compacted = assembly.messages[2]["content"].as_str().unwrap();
+        assert!(compacted.contains("有界执行证据"));
+        assert!(compacted.contains("read_file") || compacted.contains("manifest evidence"));
+        assert_eq!(
+            assembly.messages.last().unwrap()["content"],
+            "latest request"
+        );
     }
 }

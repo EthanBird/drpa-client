@@ -70,6 +70,19 @@ interface PackedContainer {
   transmittedSize: number;
 }
 
+export interface OpticalRuntimeAdapter {
+  sha256?: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array;
+  gzip?: (bytes: Uint8Array) => Promise<Uint8Array | null> | Uint8Array | null;
+  gunzip?: (bytes: Uint8Array, expectedBytes: number) => Promise<Uint8Array> | Uint8Array;
+  randomBytes?: (length: number) => Uint8Array;
+}
+
+let opticalRuntimeAdapter: OpticalRuntimeAdapter = {};
+
+export function configureOpticalRuntime(adapter: OpticalRuntimeAdapter): void {
+  opticalRuntimeAdapter = { ...opticalRuntimeAdapter, ...adapter };
+}
+
 const crcTable = new Uint32Array(256).map((_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit += 1) value = (value & 1) ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
@@ -100,6 +113,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
 }
 
 async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
+  if (opticalRuntimeAdapter.sha256) return Uint8Array.from(await opticalRuntimeAdapter.sha256(bytes));
   const stable = new Uint8Array(bytes.byteLength);
   stable.set(bytes);
   return new Uint8Array(await crypto.subtle.digest("SHA-256", stable));
@@ -110,12 +124,17 @@ function isAlreadyCompressed(mime: string): boolean {
 }
 
 async function gzip(bytes: Uint8Array): Promise<Uint8Array | null> {
+  if (opticalRuntimeAdapter.gzip) {
+    const compressed = await opticalRuntimeAdapter.gzip(bytes);
+    return compressed ? Uint8Array.from(compressed) : null;
+  }
   if (typeof CompressionStream === "undefined" || typeof Blob.prototype.stream !== "function") return null;
   const stream = new Blob([Uint8Array.from(bytes)]).stream().pipeThrough(new CompressionStream("gzip"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 async function gunzip(bytes: Uint8Array, expectedBytes: number): Promise<Uint8Array> {
+  if (opticalRuntimeAdapter.gunzip) return Uint8Array.from(await opticalRuntimeAdapter.gunzip(bytes, expectedBytes));
   if (typeof DecompressionStream === "undefined" || typeof Blob.prototype.stream !== "function") throw new Error("当前浏览器不支持 gzip 解压，请关闭发送端压缩后重试");
   const reader = new Blob([Uint8Array.from(bytes)]).stream().pipeThrough(new DecompressionStream("gzip")).getReader();
   const chunks: Uint8Array[] = [];
@@ -342,7 +361,10 @@ export async function createOpticalTransfer(
   const blockBytes = frameBytes - FRAME_HEADER_BYTES;
   const sourceBlocks = Math.ceil(packed.bytes.byteLength / blockBytes);
   if (sourceBlocks > MAX_SOURCE_BLOCKS) throw new Error("文件分块数量超限，请提高单帧容量");
-  const sessionId = new DataView(crypto.getRandomValues(new Uint8Array(4)).buffer).getUint32(0, true) || 1;
+  const randomBytes = opticalRuntimeAdapter.randomBytes?.(4) ?? crypto.getRandomValues(new Uint8Array(4));
+  if (randomBytes.byteLength < 4) throw new Error("运行环境无法生成光学会话标识");
+  const stableRandomBytes = Uint8Array.from(randomBytes.subarray(0, 4));
+  const sessionId = new DataView(stableRandomBytes.buffer).getUint32(0, true) || 1;
   const checksum = crc32(packed.bytes);
   const source = new Uint8Array(sourceBlocks * blockBytes);
   source.set(packed.bytes);

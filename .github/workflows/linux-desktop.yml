@@ -84,6 +84,7 @@ jobs:
           python tools/offline/validate_requirements.py offline/requirements/runtime.txt
           python -m unittest discover -s tools/offline/tests -v
           python -m unittest discover -s tools/linux/tests -v
+          python -m pytest -q tools/linux/tests/test_fetch_linux_jcode.py
       - name: Build and air-gap test Linux sealed runtime
         run: python tools/offline/build_runtime_bundle.py --platform linux-x86_64 --work-dir "${{ runner.temp }}/drpa-linux"
       - name: Stage sealed runtime as a Tauri resource
@@ -101,6 +102,13 @@ jobs:
             exit 1
           fi
           python tools/linux/verify_runtime_layout.py --runtime-root apps/desktop/src-tauri/resources/linux/runtime
+      - name: Stage pinned Linux JCode sidecar
+        run: |
+          rm -rf apps/desktop/src-tauri/resources/linux/jcode
+          python tools/linux/fetch_jcode.py \
+            --output-dir apps/desktop/src-tauri/resources/linux/jcode
+          test -x apps/desktop/src-tauri/resources/linux/jcode/jcode
+          apps/desktop/src-tauri/resources/linux/jcode/jcode --version
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -136,6 +144,9 @@ jobs:
           )
           runtime_manifest="$(find "$extract_root/squashfs-root" -type f -path '*/runtime/manifest.json' -print -quit)"
           test -n "$runtime_manifest"
+          jcode="$(find "$extract_root/squashfs-root" -type f -path '*/jcode/jcode' -print -quit)"
+          test -x "$jcode"
+          "$jcode" --version
           runtime_root="$(dirname "$runtime_manifest")"
           python tools/linux/verify_runtime_layout.py --runtime-root "$runtime_root"
           runtime_python="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["pythonExecutable"])' "$runtime_manifest")"
@@ -271,6 +282,7 @@ jobs:
           rm -rf \
             target \
             apps/desktop/src-tauri/resources/linux/runtime \
+            apps/desktop/src-tauri/resources/linux/jcode \
             "${{ runner.temp }}/drpa-linux" \
             "${{ runner.temp }}/appimage-extract" \
             "${{ runner.temp }}/bundled-deb-work" \

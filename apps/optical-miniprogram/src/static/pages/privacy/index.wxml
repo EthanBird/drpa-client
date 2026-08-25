@@ -1,0 +1,30 @@
+<view class="privacy-page">
+  <view class="privacy-hero">
+    <image src="/assets/avatar.png" mode="aspectFill" />
+    <view><text class="privacy-title">DRPA 光学传输</text><text>本地优先的屏幕文件通道</text></view>
+  </view>
+
+  <view class="privacy-card">
+    <text class="section-title">我们如何处理文件</text>
+    <text class="paragraph">发送文件仅在手机内存中读取并编码为动态二维码；接收文件仅在手机内存中恢复、校验，并写入微信提供的本地临时目录。</text>
+    <text class="paragraph">DRPA 不设置文件服务器，不会将文件内容、文件名或摘要上传到开发者服务器。</text>
+  </view>
+
+  <view class="privacy-card">
+    <text class="section-title">相机权限</text>
+    <text class="paragraph">相机只用于识别电脑屏幕上的 DRPA 动态二维码。小程序不录制视频、不保存相机画面，也不上传图像。</text>
+  </view>
+
+  <view class="privacy-card">
+    <text class="section-title">微信文件能力</text>
+    <text class="paragraph">当你主动选择聊天文件时，小程序读取所选文件用于光学发送；当你点击转发按钮时，小程序把已校验文件交给微信的原生转发面板。</text>
+  </view>
+
+  <view class="privacy-card warning">
+    <text class="section-title">安全提示</text>
+    <text class="paragraph">物理隔离不等于内容加密。任何能清晰拍摄动态二维码的摄像头都可能接收文件，请避免在非受控环境展示敏感内容。</text>
+  </view>
+
+  <button class="contact" bindtap="copyContact">复制开发者联系邮箱</button>
+  <text class="version">DRPA Optical Mini Program · DRPA2 Protocol</text>
+</view>

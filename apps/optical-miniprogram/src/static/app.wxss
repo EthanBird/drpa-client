@@ -1,0 +1,25 @@
+page {
+  min-height: 100%;
+  background: #f4f7fc;
+  color: #17213a;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+button::after { border: 0; }
+
+.button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 86rpx;
+  margin: 0;
+  border-radius: 20rpx;
+  font-size: 28rpx;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.button-primary { background: linear-gradient(135deg, #315ed6, #168ee8); color: #fff; box-shadow: 0 14rpx 32rpx rgba(49, 94, 214, .22); }
+.button-secondary { border: 1rpx solid #d9e1f0; background: #fff; color: #34415d; }
+.button-danger { background: #fff0ef; color: #c8443c; }
+.button[disabled] { opacity: .48; }

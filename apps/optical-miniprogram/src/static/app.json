@@ -1,0 +1,21 @@
+{
+  "pages": [
+    "pages/transfer/index",
+    "pages/privacy/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "DRPA 光学传输",
+    "navigationBarBackgroundColor": "#f7f9ff",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f4f7fc",
+    "backgroundTextStyle": "dark"
+  },
+  "permission": {
+    "scope.camera": {
+      "desc": "用于在本机扫描 DRPA 动态二维码并恢复文件"
+    }
+  },
+  "workers": "workers",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

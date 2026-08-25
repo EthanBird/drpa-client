@@ -1,0 +1,101 @@
+<view class="page-shell">
+  <view class="brand-card">
+    <image class="brand-avatar" src="/assets/avatar.png" mode="aspectFill" />
+    <view class="brand-copy">
+      <view class="brand-row"><text class="brand-name">DRPA</text><text class="brand-badge">OPTICAL</text></view>
+      <text class="brand-title">让文件穿过屏幕，而非网络</text>
+      <text class="brand-subtitle">动态二维码 · 丢帧恢复 · 完整性校验</text>
+    </view>
+  </view>
+
+  <view class="mode-switch">
+    <button class="mode-tab {{mode === 'receive' ? 'active' : ''}}" data-mode="receive" bindtap="switchMode">◉ 接收文件</button>
+    <button class="mode-tab {{mode === 'send' ? 'active' : ''}}" data-mode="send" bindtap="switchMode">▣ 发送文件</button>
+  </view>
+
+  <block wx:if="{{mode === 'receive'}}">
+    <view class="camera-card">
+      <camera
+        wx:if="{{scanning}}"
+        class="camera"
+        mode="scanCode"
+        device-position="back"
+        resolution="high"
+        frame-size="small"
+        flash="off"
+        bindinitdone="onCameraInitDone"
+        bindscancode="onScanCode"
+        binderror="onCameraError"
+        bindstop="onCameraStop"
+      />
+      <view wx:if="{{scanning}}" class="scan-guide"><view class="corner"></view><view class="corner"></view><view class="corner"></view><view class="corner"></view><text>将动态二维码保持在框内</text></view>
+      <view wx:elif="{{receivedReady}}" class="receive-complete">
+        <view class="complete-icon">✓</view>
+        <text class="complete-title">文件校验完成</text>
+        <text class="complete-name">{{receivedName}}</text>
+        <text class="complete-size">{{receivedSize}}</text>
+      </view>
+      <view wx:else class="camera-empty">
+        <view class="camera-symbol">⌾</view>
+        <text class="empty-title">扫描电脑屏幕上的二维码流</text>
+        <text class="empty-copy">文件数据只在本机解码，不会上传</text>
+      </view>
+    </view>
+
+    <view class="panel">
+      <view class="panel-heading">
+        <view><text class="eyebrow">FOUNTAIN RECEIVER</text><text class="panel-title">{{receiveName}}</text></view>
+        <text class="percent">{{receivePercent}}%</text>
+      </view>
+      <view class="decoder-status {{decoderState}}">
+        <view class="decoder-dot"></view>
+        <text>{{decoderLabel}}</text>
+        <text wx:if="{{decoderFps}}" class="decoder-metric">{{decoderFps}} FPS · {{decoderLatency}} ms</text>
+      </view>
+      <view class="progress-track"><view class="progress-value" style="width: {{receivePercent}}%"></view></view>
+      <view class="stat-grid">
+        <view class="stat"><text>已恢复源块</text><text class="stat-value">{{receivedChunks}} / {{totalChunks || '--'}}</text></view>
+        <view class="stat"><text>有效二维码帧</text><text class="stat-value">{{acceptedFrames}}</text></view>
+        <view class="stat wide"><text>已恢复数据</text><text class="stat-value">{{receivedBytes}}</text></view>
+      </view>
+      <text wx:if="{{receivedReady}}" class="hash" user-select="true">SHA-256  {{receivedSha256}}</text>
+
+      <button wx:if="{{receivedReady}}" class="button button-primary" bindtap="shareReceivedFile">转发给微信好友 / 群聊</button>
+      <button wx:elif="{{!scanning}}" class="button button-primary" bindtap="startReceive">启动相机接收</button>
+      <button wx:else class="button button-danger" bindtap="stopReceive">停止扫描</button>
+      <button class="button button-secondary reset-button" bindtap="resetReceiver">清空并重新接收</button>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view class="panel send-panel">
+      <view class="panel-heading">
+        <view><text class="eyebrow">OPTICAL SENDER</text><text class="panel-title">从微信或手机选择文件</text></view>
+        <text class="limit">最大 64 MB</text>
+      </view>
+      <button class="file-picker" bindtap="chooseSendFile" disabled="{{preparing || sending}}">
+        <text class="file-picker-icon">＋</text>
+        <text>{{preparing ? '正在准备文件…' : '选择聊天文件或本机文件'}}</text>
+        <text class="file-picker-note">文件不会上传服务器</text>
+      </button>
+
+      <view wx:if="{{sendReady}}" class="send-meta">
+        <view><text>文件</text><text class="meta-value">{{sendFileName}}</text></view>
+        <view><text>大小</text><text class="meta-value">{{sendFileSize}}</text></view>
+        <view><text>源块</text><text class="meta-value">{{sendChunks}}</text></view>
+        <view><text>压缩</text><text class="meta-value">{{sendCompression}}</text></view>
+        <text class="hash" user-select="true">SHA-256  {{sendSha256}}</text>
+      </view>
+    </view>
+
+    <view wx:if="{{sendReady}}" class="qr-card">
+      <view class="qr-shell"><canvas type="2d" id="qrCanvas" class="qr-canvas" /></view>
+      <view class="send-status"><view class="status-dot {{sending ? 'live' : ''}}"></view><text class="status-label">{{sending ? '正在循环发送' : '发送已暂停'}}</text><text>帧 {{sendFrameLabel}}</text></view>
+      <view class="fps-row"><text>发送帧率</text><slider min="4" max="12" step="1" value="{{fps}}" activeColor="#315ed6" backgroundColor="#dbe3f2" bindchange="onFpsChange" /><text class="fps-value">{{fps}} FPS</text></view>
+      <button class="button {{sending ? 'button-danger' : 'button-primary'}}" bindtap="toggleSending">{{sending ? '停止发送' : '开始光学发送'}}</button>
+    </view>
+  </block>
+
+  <view class="notice"><view class="notice-dot"></view><text>{{notice}}</text></view>
+  <view class="privacy-link" bindtap="openPrivacy">隐私保护与使用说明 ›</view>
+</view>

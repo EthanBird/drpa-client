@@ -15,7 +15,7 @@ import type { AgentExtensionSummary, AgentToolPolicy } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 import "../styles/extension-tools.css";
 
-type PolicyKey = Exclude<keyof AgentToolPolicy, "enabled">;
+type PolicyKey = Exclude<keyof AgentToolPolicy, "enabled" | "fileReadScope">;
 
 const builtInPolicies: Array<{
   key: PolicyKey;
@@ -25,7 +25,7 @@ const builtInPolicies: Array<{
 }> = [
   { key: "databaseRead", label: "只读数据库", detail: "列出连接、读取结构并执行 Host 强制的只读查询。", tools: ["data_list_connections", "data_get_schema", "data_query"] },
   { key: "databaseConnections", label: "创建连接配置", detail: "新增 PostgreSQL、MySQL、SQLite、Excel 配置，不保存密码。", tools: ["data_create_connection"] },
-  { key: "arbitraryFileRead", label: "文件检索与只读", detail: "项目内快速 find/search；按行读取相对或绝对路径文本，单次最多 2000 行。", tools: ["find_files", "search_text", "read_file"] },
+  { key: "arbitraryFileRead", label: "文件检索与只读", detail: "按配置范围执行 find/search/read；只读文本单次最多 2000 行，扫描不跟随符号链接。", tools: ["find_files", "search_text", "read_file"] },
   { key: "projectWrite", label: "项目内编辑", detail: "精确 edit 与文件写入严格限制在当前通用项目内。", tools: ["edit_file", "rpaz_write_file", "rpaz_validate", "rpaz_build"] },
   { key: "python", label: "Python 辅助执行", detail: "在当前通用项目目录运行内置 Python。", tools: ["rpaz_python"] },
   { key: "knowledgeBaseRead", label: "知识库查询", detail: "列出并混合检索当前隔离工作区的向量知识库。", tools: ["knowledge_base_list", "knowledge_base_search"] },
@@ -179,6 +179,16 @@ export function ExtensionToolsPage() {
               <div className="extension-master-icon"><FileSearch size={19} /></div>
               <div><strong>启用 AI Agent 工具</strong><span>关闭后只进行模型对话，不向模型发送任何工具定义。Python 当前超时 {pythonTimeout} 秒。</span></div>
               <button className={`switch ${policy.enabled ? "on" : ""}`} type="button" role="switch" aria-label="启用 AI Agent 工具" aria-checked={policy.enabled} onClick={() => setPolicy({ enabled: !policy.enabled })}><span /></button>
+            </section>
+            <section className={`extension-read-scope ${!policy.enabled || !policy.arbitraryFileRead ? "disabled" : ""}`} aria-label="Agent 文件读取范围">
+              <div>
+                <strong>文件读取范围</strong>
+                <span>只影响 <code>read_file</code>、<code>find_files</code>、<code>search_text</code>；所有写入仍锁定在项目目录。</span>
+              </div>
+              <div className="extension-scope-options" role="group" aria-label="选择文件读取范围">
+                <button type="button" className={(policy.fileReadScope ?? "system") === "system" ? "active" : ""} aria-pressed={(policy.fileReadScope ?? "system") === "system"} disabled={!policy.enabled || !policy.arbitraryFileRead} onClick={() => setPolicy({ fileReadScope: "system" })}><strong>整个操作系统</strong><small>允许绝对路径，受当前用户系统权限限制</small></button>
+                <button type="button" className={policy.fileReadScope === "project" ? "active" : ""} aria-pressed={policy.fileReadScope === "project"} disabled={!policy.enabled || !policy.arbitraryFileRead} onClick={() => setPolicy({ fileReadScope: "project" })}><strong>仅当前项目</strong><small>相对或绝对路径都不能越过项目根目录</small></button>
+              </div>
             </section>
             <section className="extension-policy-grid">
               {builtInPolicies.map((item) => (

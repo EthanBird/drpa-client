@@ -122,6 +122,7 @@ UOS 包必须从同一轮已经验证的 AppDir 派生。不要绕过 AppImage r
         ├── lib/.../WebKitNetworkProcess
         ├── lib/.../WebKitWebProcess
         ├── lib/DRPA Next/runtime/
+        ├── lib/DRPA Next/jcode/jcode
         │   ├── manifest.json
         │   ├── bootstrap_runtime.py
         │   ├── python/
@@ -325,7 +326,7 @@ python tools/linux/verify_uos20_deb.py \
 - 所有带 interpreter 的应用 ELF 指向固定私有 loader；
 - 实际 ELF 数量与包内 provenance manifest 一致；
 - `/usr/bin/drpa-next` 可执行、不导出 `LD_LIBRARY_PATH`、切换到 `$APPDIR/usr` 且不使用 `WEBKIT_EXEC_PATH`；
-- 包内只有一份 sealed runtime，manifest、wheel 散列、平台、Python/uv/Chrome 可执行位均正确。
+- 包内只有一份 sealed runtime，manifest、wheel 散列、平台、Python/uv/Chrome 可执行位均正确；同时只有一份可执行的 Linux `jcode/jcode`，不得退回寻找 `jcode.exe`。
 
 发布 manifest 是对最终 deb 的机器可读摘要；包内 provenance manifest 进一步记录每个私有运行库的来源、字节数、SHA-256、修补 ELF 清单和许可证文件。
 

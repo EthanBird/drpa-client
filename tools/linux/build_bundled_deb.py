@@ -26,6 +26,8 @@ REQUIRED_APPDIR_PATHS = (
     "AppRun",
     "AppRun.wrapped",
     "usr/bin/drpa-desktop",
+    "usr/lib/DRPA Next/jcode/jcode",
+    "usr/lib/DRPA Next/jcode/jcode.bin",
     "usr/lib/libwebkit2gtk-4.1.so.0",
     "usr/lib/libjavascriptcoregtk-4.1.so.0",
     "usr/lib/libgtk-3.so.0",
@@ -45,6 +47,12 @@ def validate_appdir(appdir: Path) -> Path:
     missing = [relative for relative in REQUIRED_APPDIR_PATHS if not (appdir / relative).exists()]
     if missing:
         raise ValueError(f"AppDir desktop runtime is incomplete: {', '.join(missing)}")
+    jcode = appdir / "usr/lib/DRPA Next/jcode/jcode"
+    if not jcode.is_file() or not os.access(jcode, os.X_OK):
+        raise ValueError("AppDir JCode sidecar must be an executable Linux binary")
+    jcode_binary = appdir / "usr/lib/DRPA Next/jcode/jcode.bin"
+    if not jcode_binary.is_file() or not os.access(jcode_binary, os.X_OK):
+        raise ValueError("AppDir JCode native binary must be present and executable")
     runtime_manifests = [
         path for path in appdir.rglob("manifest.json") if path.parent.name == "runtime"
     ]

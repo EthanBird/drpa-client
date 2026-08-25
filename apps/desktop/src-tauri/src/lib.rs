@@ -27,6 +27,7 @@ mod agent_config;
 mod agent_context;
 mod agent_documents;
 mod agent_extensions;
+mod agent_loop_guard;
 mod agent_runtime;
 mod agent_sessions;
 mod agent_tools;
@@ -3852,6 +3853,7 @@ pub fn run() {
             agent_config::delete_agent_skill,
             agent_sessions::list_agent_projects,
             agent_sessions::create_agent_project,
+            agent_sessions::open_agent_file_session,
             agent_sessions::rename_agent_project,
             agent_sessions::list_agent_sessions,
             agent_sessions::create_agent_session,

@@ -18,6 +18,7 @@ function createAgentSession(projectId = ""): AgentConversationSession {
     revision: 0,
     messages: [],
     selectedSkillIds: [],
+    contextFiles: [],
     messageCount: 0,
     bodyState: "ready",
   };
@@ -144,6 +145,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     databaseRead: true,
     databaseConnections: true,
     arbitraryFileRead: true,
+    fileReadScope: "system",
     knowledgeBaseRead: true,
     documentRead: true,
     documentWrite: true,
@@ -317,7 +319,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   })),
 }), {
   name: "drpa-ui-preferences",
-  version: 10,
+  version: 11,
   migrate: (persistedState, version) => {
     const state = (persistedState ?? {}) as Partial<AppStore>;
     const migrated = { ...state };
@@ -370,6 +372,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
         ...session,
         projectId: session.projectId ?? "",
         selectedSkillIds: session.selectedSkillIds ?? [],
+        contextFiles: session.contextFiles ?? [],
         messageCount: session.messageCount ?? session.messages.length,
       }));
       if (migrated.agentWorkspaceStates) {
@@ -407,6 +410,12 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     if (version < 10) {
       migrated.agentMaxToolCalls = state.agentMaxToolCalls ?? 128;
       migrated.agentMaxWallTimeSeconds = state.agentMaxWallTimeSeconds ?? 900;
+    }
+    if (version < 11) {
+      migrated.agentToolPolicy = {
+        ...migrated.agentToolPolicy,
+        fileReadScope: state.agentToolPolicy?.fileReadScope ?? "system",
+      } as AgentToolPolicy;
     }
     if (version < 6) {
       migrated.agentMode = state.agentMode === "developer" ? "developer" : "rpaz";

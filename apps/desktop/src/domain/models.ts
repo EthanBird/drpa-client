@@ -576,6 +576,7 @@ export interface AgentToolPolicy {
   databaseRead: boolean;
   databaseConnections: boolean;
   arbitraryFileRead: boolean;
+  fileReadScope?: "project" | "system";
   knowledgeBaseRead: boolean;
   documentRead: boolean;
   documentWrite: boolean;
@@ -754,6 +755,16 @@ export interface AgentProviderRef {
 
 export type AgentMode = "rpaz" | "developer";
 
+export interface AgentContextCheckpoint {
+  checkpointId: string;
+  summary: string;
+  coversMessages: number;
+  sourceDigest: string;
+  createdAt: number;
+  estimatedTokens: number;
+  method: "model" | "deterministic-fallback" | string;
+}
+
 export interface AgentTurnRequest {
   requestId: string;
   sessionId?: string;
@@ -774,6 +785,7 @@ export interface AgentTurnRequest {
   maxWallTimeSeconds?: number;
   selectedSkillIds: string[];
   toolPolicy: AgentToolPolicy;
+  contextCheckpoint?: AgentContextCheckpoint | null;
   messages: AgentMessage[];
 }
 
@@ -783,12 +795,37 @@ export interface AgentToolEvent {
   status: "running" | "completed" | "failed";
   summary: string;
   output: string;
+  /** Stable action order within one run. Older persisted sessions may omit it. */
+  ordinal?: number;
+  /** Model step/round that produced this action. */
+  round?: number;
+  /** Redacted, bounded action input for the run inspector. */
+  input?: string;
+  durationMs?: number;
+}
+
+export interface AgentRunRoundProjection {
+  round: number;
+  status: "running" | "completed";
+  estimatedTokens?: number;
+  omittedMessages?: number;
+  omittedTools?: number;
+}
+
+export interface AgentRunRetry {
+  round: number;
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  error: string;
 }
 
 export type AgentStreamEvent =
   | { type: "started"; runId: string; sessionId: string }
   | { type: "roundStarted"; round: number }
   | { type: "contextAssembled"; round: number; estimatedTokens: number; omittedMessages: number; omittedTools: number }
+  | { type: "retrying"; round: number; attempt: number; maxAttempts: number; delayMs: number; error: string }
+  | { type: "contextCompacted"; round: number; checkpoint: AgentContextCheckpoint }
   | { type: "delta"; content: string }
   | { type: "contentReplace"; content: string }
   | { type: "tool"; tool: AgentToolEvent }
@@ -806,6 +843,12 @@ export interface AgentConversationMessage extends AgentMessage {
     stopReason: string;
     rounds: number;
     toolCalls: number;
+    status?: "completed" | "failed" | "cancelled";
+    error?: string;
+    retryCount?: number;
+    retries?: AgentRunRetry[];
+    roundDetails?: AgentRunRoundProjection[];
+    contextCheckpoint?: AgentContextCheckpoint;
   };
 }
 
@@ -818,6 +861,7 @@ export interface AgentConversationSession {
   revision?: number;
   messages: AgentConversationMessage[];
   selectedSkillIds: string[];
+  contextFiles?: string[];
   messageCount?: number;
   bodyState?: "summary" | "loading" | "ready" | "failed";
 }
@@ -840,6 +884,7 @@ export interface AgentConversationProject {
   createdAt: number;
   updatedAt: number;
   sessionCount: number;
+  source?: "managed" | "external";
 }
 
 export interface AgentTurnResult {
@@ -853,6 +898,8 @@ export interface AgentTurnResult {
   stopReason: string;
   rounds: number;
   toolCalls: number;
+  retryCount: number;
+  contextCheckpoint?: AgentContextCheckpoint;
 }
 
 export type AgentRunStatus = "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";

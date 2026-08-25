@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -18,13 +18,16 @@ use serde_json::Value;
 
 use crate::agent::{
     AgentHostContext, AgentMessage, AgentStreamEvent, AgentToolEvent, AgentTurnRequest,
-    AgentTurnResult, AgentUsage, validate_project_id,
+    AgentTurnResult, AgentUsage, persistent_tool_input,
 };
 use crate::agent_browser::AgentBrowserSession;
+use crate::agent_loop_guard::ToolLoopGuard;
 use crate::agent_runtime::AgentRunControl;
 
 const JCODE_PROFILE: &str = "drpa-openai-compatible";
 const MAX_EVENT_OUTPUT_BYTES: usize = 40_000;
+const MAX_EVENT_TOOL_INPUT_BYTES: usize = 200_000;
+const JCODE_LOOP_STOP_SIGNAL: &str = "__DRPA_JCODE_LOOP_STOP__";
 static JCODE_SESSION_INDEX_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -49,6 +52,15 @@ struct StreamState {
     usage: AgentUsage,
     tools: BTreeMap<String, AgentToolEvent>,
     tool_names: BTreeMap<String, String>,
+    tool_inputs: BTreeMap<String, String>,
+    tool_ordinals: BTreeMap<String, usize>,
+    tool_started_at: BTreeMap<String, Instant>,
+    tool_fingerprints: BTreeMap<String, (String, String)>,
+    observed_tool_ids: BTreeSet<String>,
+    current_tool_input_id: Option<String>,
+    tool_calls: usize,
+    stop_reason: Option<String>,
+    tool_loop_guard: ToolLoopGuard,
     last_error: String,
 }
 
@@ -192,7 +204,19 @@ where
         host_bridge.token(),
     )?;
 
-    let working_dir = resolve_working_dir(workspace_root, &request.project_id)?;
+    let project_context = crate::agent_sessions::resolve_agent_project_context(
+        workspace_root,
+        &request.project_id,
+        &request.session_id,
+    )?;
+    let working_dir = project_context
+        .as_ref()
+        .map(|project| project.root.clone())
+        .unwrap_or_else(|| workspace_root.to_path_buf());
+    let context_files = project_context
+        .as_ref()
+        .map(|project| project.context_files.as_slice())
+        .unwrap_or_default();
     let index_path = developer_root.join("session-index.json");
     let previous_messages = request
         .messages
@@ -210,11 +234,17 @@ where
             .filter(|state| state.conversation_digest == previous_digest)
             .map(|state| state.jcode_session_id.clone())
     };
-    let agent_context = crate::agent_config::render_agent_context(
+    let mut agent_context = crate::agent_config::render_agent_context(
         workspace_root,
         Some(&working_dir),
         &request.selected_skill_ids,
     )?;
+    agent_context.push_str(&crate::agent::render_session_project_context(
+        project_context
+            .as_ref()
+            .map(|project| project.root.as_path()),
+        context_files,
+    ));
     let prompt = if resume_session.is_some() {
         format!(
             "{}\n\n{}",
@@ -262,6 +292,11 @@ where
         .env("JCODE_HOME", &jcode_home)
         .env("DRPA_JCODE_API_KEY", request.api_key.trim())
         .env("JCODE_RUN_MCP", "1")
+        // DRPA owns the run lifecycle and budgets. JCode's default auto-poke
+        // starts extra autonomous turns for unfinished todos and can replay the
+        // same work outside DRPA's model/tool accounting.
+        .env("JCODE_RUN_AUTO_POKE", "0")
+        .env("JCODE_RUN_AUTO_POKE_MAX_TURNS", "1")
         .env("JCODE_NO_TELEMETRY", "1")
         .env("NO_COLOR", "1");
     hide_child_window(&mut command);
@@ -287,9 +322,7 @@ where
         text
     });
 
-    if request.stream {
-        emit(AgentStreamEvent::RoundStarted { round: 1 });
-    }
+    emit(AgentStreamEvent::RoundStarted { round: 1 });
     let mut state = StreamState::default();
     let (stdout_tx, stdout_rx) = mpsc::channel::<Result<Option<Vec<u8>>, String>>();
     let stdout_reader = thread::spawn(move || {
@@ -339,24 +372,86 @@ where
             }
             let value: Value = serde_json::from_str(trimmed)
                 .map_err(|error| format!("JCode 返回了无效 NDJSON 事件：{error} · {trimmed}"))?;
-            consume_event(&value, request.stream, &mut state, &mut emit)?;
+            consume_event(
+                &value,
+                request.stream,
+                request.max_tool_calls,
+                &mut state,
+                &mut emit,
+            )?;
         }
         Ok(())
     })();
 
+    let guarded_stop_reason = state.stop_reason.clone();
     if stream_result.is_err() {
         terminate_child_process_tree(&mut child);
         let _ = child.wait();
     }
 
     let _ = stdout_reader.join();
-    stream_result?;
+    if let Some(stop_reason) = guarded_stop_reason {
+        let _ = stderr_reader.join();
+        let notice = if stop_reason == "repeated-tool-call" {
+            "检测到 JCode 连续执行相同工具且结果没有变化，已自动停止本次运行以避免继续浪费时间和 tokens。"
+        } else {
+            "JCode 已达到本次运行的工具调用上限，已自动停止后续工具。"
+        };
+        let message = if state.message.trim().is_empty() {
+            notice.to_owned()
+        } else {
+            format!("{}\n\n{notice}", state.message.trim())
+        };
+        if !request.session_id.trim().is_empty() && !state.session_id.trim().is_empty() {
+            let mut completed_messages = request.messages.clone();
+            completed_messages.push(AgentMessage {
+                role: "assistant".to_owned(),
+                content: message.clone(),
+            });
+            persist_session_state(
+                &index_path,
+                request.session_id.trim(),
+                &state.session_id,
+                &conversation_digest(&completed_messages),
+            )?;
+        }
+        return Ok(AgentTurnResult {
+            message,
+            tools: ordered_tools(state.tools),
+            usage: state.usage,
+            duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            stop_reason,
+            rounds: 1,
+            tool_calls: state.tool_calls,
+            retry_count: 0,
+            context_checkpoint: request.context_checkpoint.clone(),
+        });
+    }
+    if let Err(error) = stream_result {
+        if !request.session_id.trim().is_empty() && !state.session_id.trim().is_empty() {
+            let _ = persist_session_state(
+                &index_path,
+                request.session_id.trim(),
+                &state.session_id,
+                &previous_digest,
+            );
+        }
+        return Err(error);
+    }
 
     let status = child
         .wait()
         .map_err(|error| format!("等待 JCode 退出失败：{error}"))?;
     let stderr = stderr_reader.join().unwrap_or_default().trim().to_owned();
     if !status.success() {
+        if !request.session_id.trim().is_empty() && !state.session_id.trim().is_empty() {
+            let _ = persist_session_state(
+                &index_path,
+                request.session_id.trim(),
+                &state.session_id,
+                &previous_digest,
+            );
+        }
         let detail = if !state.last_error.is_empty() {
             state.last_error.clone()
         } else if !stderr.is_empty() {
@@ -367,9 +462,25 @@ where
         return Err(format!("JCode 开发者 Agent 执行失败：{detail}"));
     }
     if !state.last_error.is_empty() && state.message.trim().is_empty() {
+        if !request.session_id.trim().is_empty() && !state.session_id.trim().is_empty() {
+            let _ = persist_session_state(
+                &index_path,
+                request.session_id.trim(),
+                &state.session_id,
+                &previous_digest,
+            );
+        }
         return Err(format!("JCode 开发者 Agent 返回错误：{}", state.last_error));
     }
     if state.message.trim().is_empty() {
+        if !request.session_id.trim().is_empty() && !state.session_id.trim().is_empty() {
+            let _ = persist_session_state(
+                &index_path,
+                request.session_id.trim(),
+                &state.session_id,
+                &previous_digest,
+            );
+        }
         return Err("JCode 开发者 Agent 返回了空消息".to_owned());
     }
 
@@ -379,29 +490,24 @@ where
             role: "assistant".to_owned(),
             content: state.message.clone(),
         });
-        let _guard = JCODE_SESSION_INDEX_LOCK
-            .lock()
-            .map_err(|_| "JCode 会话索引状态已损坏".to_owned())?;
-        let mut index = read_session_index(&index_path)?;
-        index.sessions.insert(
-            request.session_id.trim().to_owned(),
-            SessionState {
-                jcode_session_id: state.session_id.clone(),
-                conversation_digest: conversation_digest(&completed_messages),
-            },
-        );
-        write_session_index(&index_path, &index)?;
+        persist_session_state(
+            &index_path,
+            request.session_id.trim(),
+            &state.session_id,
+            &conversation_digest(&completed_messages),
+        )?;
     }
 
-    let tool_calls = state.tools.len();
     Ok(AgentTurnResult {
         message: state.message,
-        tools: state.tools.into_values().collect(),
+        tools: ordered_tools(state.tools),
         usage: state.usage,
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         stop_reason: "completed".to_owned(),
         rounds: 1,
-        tool_calls,
+        tool_calls: state.tool_calls,
+        retry_count: 0,
+        context_checkpoint: request.context_checkpoint.clone(),
     })
 }
 
@@ -422,6 +528,7 @@ fn terminate_child_process_tree(child: &mut std::process::Child) {
 fn consume_event<F>(
     value: &Value,
     stream: bool,
+    max_tool_calls: usize,
     state: &mut StreamState,
     emit: &mut F,
 ) -> Result<(), String>
@@ -478,25 +585,129 @@ where
                 });
             }
         }
-        "tool_start" | "tool_exec" => {
+        "tool_start" => {
             let id = event_id(value);
             let name = value
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or("tool")
                 .to_owned();
-            state.tool_names.insert(id.clone(), name.clone());
-            if stream {
-                emit(AgentStreamEvent::Tool {
-                    tool: AgentToolEvent {
-                        call_id: id,
-                        name: format!("jcode:{name}"),
-                        status: "running".to_owned(),
-                        summary: "JCode 正在执行".to_owned(),
-                        output: String::new(),
-                    },
-                });
+            let (newly_observed, ordinal) = observe_tool(state, &id);
+            if newly_observed {
+                if state.tool_calls > max_tool_calls {
+                    return stop_jcode_tool(
+                        state,
+                        stream,
+                        emit,
+                        id,
+                        name,
+                        "tool-call-limit",
+                        format!("JCode 工具调用已达到上限 {max_tool_calls}，已停止后续调用。"),
+                    );
+                }
             }
+            state.tool_names.insert(id.clone(), name.clone());
+            state.tool_inputs.insert(id.clone(), String::new());
+            state.tool_started_at.insert(id.clone(), Instant::now());
+            state.current_tool_input_id = Some(id.clone());
+            emit(AgentStreamEvent::Tool {
+                tool: AgentToolEvent {
+                    call_id: id,
+                    name: format!("jcode:{name}"),
+                    status: "running".to_owned(),
+                    summary: "JCode 正在执行".to_owned(),
+                    output: String::new(),
+                    ordinal,
+                    round: 1,
+                    input: String::new(),
+                    duration_ms: None,
+                },
+            });
+        }
+        "tool_input" => {
+            if let Some(id) = state.current_tool_input_id.as_ref()
+                && let Some(input) = state.tool_inputs.get_mut(id)
+            {
+                append_bounded(
+                    input,
+                    value
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    MAX_EVENT_TOOL_INPUT_BYTES,
+                );
+            }
+        }
+        "tool_exec" => {
+            let id = event_id(value);
+            let name = value
+                .get("name")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| state.tool_names.get(&id).cloned())
+                .unwrap_or_else(|| "tool".to_owned());
+            state.tool_names.insert(id.clone(), name.clone());
+            state.current_tool_input_id = None;
+            let (newly_observed, ordinal) = observe_tool(state, &id);
+            if newly_observed && state.tool_calls > max_tool_calls {
+                return stop_jcode_tool(
+                    state,
+                    stream,
+                    emit,
+                    id,
+                    name,
+                    "tool-call-limit",
+                    format!("JCode 工具调用已达到上限 {max_tool_calls}，已停止后续调用。"),
+                );
+            }
+            if !state.tool_fingerprints.contains_key(&id) {
+                let canonical_arguments = canonical_tool_arguments(
+                    state
+                        .tool_inputs
+                        .get(&id)
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                );
+                if state
+                    .tool_loop_guard
+                    .should_block(&name, &canonical_arguments)
+                {
+                    return stop_jcode_tool(
+                        state,
+                        stream,
+                        emit,
+                        id,
+                        name.clone(),
+                        "repeated-tool-call",
+                        format!("JCode 工具连续返回相同结果，已停止重复调用：{name}"),
+                    );
+                } else {
+                    state
+                        .tool_fingerprints
+                        .insert(id.clone(), (name.clone(), canonical_arguments));
+                }
+            }
+            let input = display_jcode_tool_input(
+                &name,
+                state
+                    .tool_inputs
+                    .get(&id)
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            );
+            emit(AgentStreamEvent::Tool {
+                tool: AgentToolEvent {
+                    call_id: id,
+                    name: format!("jcode:{name}"),
+                    status: "running".to_owned(),
+                    summary: "JCode 正在执行".to_owned(),
+                    output: String::new(),
+                    ordinal,
+                    round: 1,
+                    input,
+                    duration_ms: None,
+                },
+            });
         }
         "tool_done" => {
             let id = event_id(value);
@@ -515,24 +726,42 @@ where
                     .unwrap_or_else(|| output.to_string()),
                 MAX_EVENT_OUTPUT_BYTES,
             );
+            let status = if error.is_some() {
+                "failed"
+            } else {
+                "completed"
+            };
+            if let Some((tool_name, canonical_arguments)) = state.tool_fingerprints.remove(&id) {
+                state
+                    .tool_loop_guard
+                    .record(&tool_name, &canonical_arguments, status, &output);
+            }
+            let input = display_jcode_tool_input(
+                &name,
+                state
+                    .tool_inputs
+                    .get(&id)
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            );
             let tool = AgentToolEvent {
                 call_id: id.clone(),
                 name: format!("jcode:{name}"),
-                status: if error.is_some() {
-                    "failed"
-                } else {
-                    "completed"
-                }
-                .to_owned(),
+                status: status.to_owned(),
                 summary: error
                     .map(|item| truncate_text(item.to_string(), 500))
                     .unwrap_or_else(|| format!("JCode 已执行 {name}")),
                 output,
+                ordinal: state.tool_ordinals.get(&id).copied().unwrap_or(1),
+                round: 1,
+                input,
+                duration_ms: state.tool_started_at.remove(&id).map(|started| {
+                    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+                }),
             };
+            state.tool_inputs.remove(&id);
             state.tools.insert(id, tool.clone());
-            if stream {
-                emit(AgentStreamEvent::Tool { tool });
-            }
+            emit(AgentStreamEvent::Tool { tool });
         }
         "tokens" => {
             state.usage.prompt_tokens = value.get("input").and_then(Value::as_u64).unwrap_or(0);
@@ -551,6 +780,79 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn stop_jcode_tool<F>(
+    state: &mut StreamState,
+    _stream: bool,
+    emit: &mut F,
+    id: String,
+    name: String,
+    reason: &str,
+    summary: String,
+) -> Result<(), String>
+where
+    F: FnMut(AgentStreamEvent),
+{
+    state.stop_reason = Some(reason.to_owned());
+    let ordinal = if let Some(ordinal) = state.tool_ordinals.get(&id).copied() {
+        ordinal
+    } else {
+        let ordinal = state.tool_ordinals.len().saturating_add(1);
+        state.tool_ordinals.insert(id.clone(), ordinal);
+        ordinal
+    };
+    let input = display_jcode_tool_input(
+        &name,
+        state
+            .tool_inputs
+            .get(&id)
+            .map(String::as_str)
+            .unwrap_or_default(),
+    );
+    let duration_ms = state
+        .tool_started_at
+        .remove(&id)
+        .map(|started| u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+    let tool = AgentToolEvent {
+        call_id: id.clone(),
+        name: format!("jcode:{name}"),
+        status: "failed".to_owned(),
+        summary: summary.clone(),
+        output: serde_json::json!({"ok": false, "error": summary}).to_string(),
+        ordinal,
+        round: 1,
+        input,
+        duration_ms,
+    };
+    state.tools.insert(id, tool.clone());
+    emit(AgentStreamEvent::Tool { tool });
+    Err(JCODE_LOOP_STOP_SIGNAL.to_owned())
+}
+
+fn observe_tool(state: &mut StreamState, id: &str) -> (bool, usize) {
+    let ordinal = state.tool_ordinals.get(id).copied().unwrap_or_else(|| {
+        let ordinal = state.tool_ordinals.len().saturating_add(1);
+        state.tool_ordinals.insert(id.to_owned(), ordinal);
+        ordinal
+    });
+    let newly_observed = state.observed_tool_ids.insert(id.to_owned());
+    if newly_observed {
+        state.tool_calls = state.tool_calls.saturating_add(1);
+    }
+    (newly_observed, ordinal)
+}
+
+fn display_jcode_tool_input(name: &str, input: &str) -> String {
+    let value = serde_json::from_str(input).unwrap_or_else(|_| Value::String(input.to_owned()));
+    persistent_tool_input(&format!("jcode:{name}"), &value)
+}
+
+fn ordered_tools(tools: BTreeMap<String, AgentToolEvent>) -> Vec<AgentToolEvent> {
+    let mut tools = tools.into_values().collect::<Vec<_>>();
+    tools.sort_by_key(|tool| tool.ordinal);
+    tools
+}
+
 fn event_id(value: &Value) -> String {
     value
         .get("id")
@@ -560,31 +862,36 @@ fn event_id(value: &Value) -> String {
         .unwrap_or_else(|| format!("jcode-tool-{}", uuid::Uuid::new_v4()))
 }
 
-fn resolve_working_dir(workspace_root: &Path, project_id: &str) -> Result<PathBuf, String> {
-    if project_id.trim().is_empty() {
-        return Ok(workspace_root.to_path_buf());
+fn append_bounded(target: &mut String, fragment: &str, max_bytes: usize) {
+    if target.len() >= max_bytes || fragment.is_empty() {
+        return;
     }
-    validate_project_id(project_id)?;
-    let root = workspace_root.join("projects").join(project_id);
-    if !root.is_dir() {
-        return Err(format!("Agent 项目不存在：{project_id}"));
+    let mut remaining = max_bytes.saturating_sub(target.len()).min(fragment.len());
+    while !fragment.is_char_boundary(remaining) {
+        remaining -= 1;
     }
-    Ok(root)
+    target.push_str(&fragment[..remaining]);
+}
+
+fn canonical_tool_arguments(input: &str) -> String {
+    serde_json::from_str::<Value>(input)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| input.trim().to_owned())
 }
 
 fn locate_jcode(workspace_root: &Path, resource_dir: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("DRPA_JCODE_PATH") {
         let path = PathBuf::from(path);
-        if path.is_file() {
+        if is_executable_file(&path) {
             return Ok(path);
         }
         return Err(format!(
-            "DRPA_JCODE_PATH 指向的文件不存在：{}",
+            "DRPA_JCODE_PATH 指向的文件不存在或不可执行：{}",
             path.display()
         ));
     }
 
-    let executable_name = if cfg!(windows) { "jcode.exe" } else { "jcode" };
+    let executable_name = jcode_executable_name();
     let mut candidates = Vec::new();
     if let Some(resource_dir) = resource_dir {
         candidates.push(resource_dir.join("jcode").join(executable_name));
@@ -611,11 +918,33 @@ fn locate_jcode(workspace_root: &Path, resource_dir: Option<&Path>) -> Result<Pa
     }
     candidates
         .into_iter()
-        .find(|path| path.is_file())
+        .find(|path| is_executable_file(path))
         .ok_or_else(|| {
-            "未找到内置 JCode。完整安装包应包含 jcode/jcode.exe；本地开发可设置 DRPA_JCODE_PATH。"
-                .to_owned()
+            format!(
+                "未找到内置 JCode。完整安装包应包含 jcode/{executable_name}；本地开发可设置 DRPA_JCODE_PATH。"
+            )
         })
+}
+
+fn jcode_executable_name() -> &'static str {
+    if cfg!(windows) { "jcode.exe" } else { "jcode" }
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn find_on_path(name: &str) -> Option<PathBuf> {
@@ -623,7 +952,7 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
         .into_iter()
         .flat_map(|value| env::split_paths(&value).collect::<Vec<_>>())
         .map(|root| root.join(name))
-        .find(|path| path.is_file())
+        .find(|path| is_executable_file(path))
 }
 
 fn write_provider_config(home: &Path, request: &AgentTurnRequest) -> Result<(), String> {
@@ -823,6 +1152,26 @@ fn write_session_index(path: &Path, index: &SessionIndex) -> Result<(), String> 
     fs::write(path, content).map_err(|error| format!("保存 JCode 会话索引失败：{error}"))
 }
 
+fn persist_session_state(
+    index_path: &Path,
+    drpa_session_id: &str,
+    jcode_session_id: &str,
+    conversation_digest: &str,
+) -> Result<(), String> {
+    let _guard = JCODE_SESSION_INDEX_LOCK
+        .lock()
+        .map_err(|_| "JCode 会话索引状态已损坏".to_owned())?;
+    let mut index = read_session_index(index_path)?;
+    index.sessions.insert(
+        drpa_session_id.to_owned(),
+        SessionState {
+            jcode_session_id: jcode_session_id.to_owned(),
+            conversation_digest: conversation_digest.to_owned(),
+        },
+    );
+    write_session_index(index_path, &index)
+}
+
 pub(crate) fn delete_session_data(workspace_root: &Path, session_id: &str) -> Result<(), String> {
     let developer_root = workspace_root.join("agent").join("jcode");
     let home = developer_root.join("homes").join(session_id);
@@ -866,6 +1215,14 @@ fn hide_child_window(_command: &mut Command) {}
 mod tests {
     use super::*;
 
+    fn consume_test_event(
+        state: &mut StreamState,
+        max_tool_calls: usize,
+        value: Value,
+    ) -> Result<(), String> {
+        consume_event(&value, false, max_tool_calls, state, &mut |_| {})
+    }
+
     fn request(api_key: &str) -> AgentTurnRequest {
         AgentTurnRequest {
             request_id: "req-jcode-test".to_owned(),
@@ -887,11 +1244,18 @@ mod tests {
             max_wall_time_seconds: 900,
             selected_skill_ids: Vec::new(),
             tool_policy: crate::agent::AgentToolPolicy::default(),
+            context_checkpoint: None,
             messages: vec![AgentMessage {
                 role: "user".to_owned(),
                 content: "inspect the project".to_owned(),
             }],
         }
+    }
+
+    #[test]
+    fn bundled_jcode_name_matches_the_target_platform() {
+        let expected = if cfg!(windows) { "jcode.exe" } else { "jcode" };
+        assert_eq!(jcode_executable_name(), expected);
     }
 
     #[test]
@@ -988,6 +1352,7 @@ mod tests {
         consume_event(
             &serde_json::json!({"type":"start","session_id":"fox"}),
             true,
+            128,
             &mut state,
             &mut |event| emitted.push(event),
         )
@@ -995,6 +1360,7 @@ mod tests {
         consume_event(
             &serde_json::json!({"type":"text_delta","text":"done"}),
             true,
+            128,
             &mut state,
             &mut |event| emitted.push(event),
         )
@@ -1002,6 +1368,7 @@ mod tests {
         consume_event(
             &serde_json::json!({"type":"tool_done","id":"1","name":"bash","output":"ok","error":null}),
             true,
+            128,
             &mut state,
             &mut |event| emitted.push(event),
         )
@@ -1009,6 +1376,7 @@ mod tests {
         consume_event(
             &serde_json::json!({"type":"tokens","input":12,"output":4}),
             true,
+            128,
             &mut state,
             &mut |event| emitted.push(event),
         )
@@ -1022,6 +1390,88 @@ mod tests {
     }
 
     #[test]
+    fn ndjson_stops_a_repeated_tool_after_unchanged_results() {
+        let mut state = StreamState::default();
+        for index in 0..3 {
+            let id = format!("call-{index}");
+            consume_test_event(
+                &mut state,
+                128,
+                serde_json::json!({"type":"tool_start","id":id,"name":"read"}),
+            )
+            .unwrap();
+            consume_test_event(
+                &mut state,
+                128,
+                serde_json::json!({"type":"tool_input","delta":"{\"path\":\"a.txt\"}"}),
+            )
+            .unwrap();
+            consume_test_event(
+                &mut state,
+                128,
+                serde_json::json!({"type":"tool_exec","id":id,"name":"read"}),
+            )
+            .unwrap();
+            consume_test_event(
+                &mut state,
+                128,
+                serde_json::json!({"type":"tool_done","id":id,"name":"read","output":"same","error":null}),
+            )
+            .unwrap();
+        }
+
+        consume_test_event(
+            &mut state,
+            128,
+            serde_json::json!({"type":"tool_start","id":"call-blocked","name":"read"}),
+        )
+        .unwrap();
+        consume_test_event(
+            &mut state,
+            128,
+            serde_json::json!({"type":"tool_input","delta":"{\"path\":\"a.txt\"}"}),
+        )
+        .unwrap();
+        let error = consume_test_event(
+            &mut state,
+            128,
+            serde_json::json!({"type":"tool_exec","id":"call-blocked","name":"read"}),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, JCODE_LOOP_STOP_SIGNAL);
+        assert_eq!(state.stop_reason.as_deref(), Some("repeated-tool-call"));
+        assert_eq!(state.tool_calls, 4);
+        assert_eq!(state.tools["call-blocked"].status, "failed");
+    }
+
+    #[test]
+    fn ndjson_enforces_drpa_tool_call_budget() {
+        let mut state = StreamState::default();
+        for id in ["first", "second"] {
+            let started = consume_test_event(
+                &mut state,
+                1,
+                serde_json::json!({"type":"tool_start","id":id,"name":"bash"}),
+            );
+            if id == "second" {
+                assert_eq!(started.unwrap_err(), JCODE_LOOP_STOP_SIGNAL);
+                break;
+            }
+            started.unwrap();
+            let result = consume_test_event(
+                &mut state,
+                1,
+                serde_json::json!({"type":"tool_exec","id":id,"name":"bash"}),
+            );
+            result.unwrap();
+        }
+
+        assert_eq!(state.stop_reason.as_deref(), Some("tool-call-limit"));
+        assert_eq!(state.tool_calls, 2);
+    }
+
+    #[test]
     fn ndjson_thinking_tags_are_kept_out_of_visible_text_events() {
         let mut state = StreamState::default();
         let mut emitted = Vec::new();
@@ -1029,6 +1479,7 @@ mod tests {
             consume_event(
                 &serde_json::json!({"type":"text_delta","text":text}),
                 true,
+                128,
                 &mut state,
                 &mut |event| emitted.push(event),
             )

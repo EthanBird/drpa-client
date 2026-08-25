@@ -15,6 +15,7 @@ import type {
   AgentTurnRequest,
   AgentTurnResult,
   AgentStreamEvent,
+  AgentToolEvent,
   AgentWorkspaceConfig,
   AgentSkillPackage,
   CurrentUser,
@@ -191,6 +192,7 @@ export interface DesktopGateway {
   exportAgentArtifact(sessionId: string, artifactId: string, destinationPath: string): Promise<AgentDocumentExport>;
   listAgentProjects(): Promise<AgentConversationProject[]>;
   createAgentProject(name: string): Promise<AgentConversationProject>;
+  openAgentFileSession(selectedSkillIds?: string[]): Promise<AgentConversationSession | null>;
   renameAgentProject(projectId: string, name: string): Promise<AgentConversationProject>;
   listAgentSessions(projectId?: string): Promise<AgentConversationSessionSummary[]>;
   createAgentSession(projectId?: string, title?: string, selectedSkillIds?: string[]): Promise<AgentConversationSession>;
@@ -1398,9 +1400,30 @@ const mockGateway: DesktopGateway = {
       ? `已连接浏览器预览 Agent。当前问题：${prompt}`
       : `已收到问题：${prompt}\n选择一个开发项目后可启用 RPAZ 工具。`;
     const listener = mockAgentStreamListeners.get(request.requestId);
-    if (request.stream && listener) {
+    const tools: AgentToolEvent[] = request.projectId ? [{
+      callId: `${request.requestId}-tool-1`,
+      name: "search_text",
+      status: "completed",
+      summary: "已完成项目检索",
+      input: JSON.stringify({ query: prompt.slice(0, 80) }),
+      output: JSON.stringify({ ok: true, matches: 3 }),
+      ordinal: 1,
+      round: 1,
+      durationMs: 84,
+    }] : [];
+    if (listener) {
       listener({ type: "started", runId: request.requestId, sessionId: request.sessionId ?? "" });
       listener({ type: "roundStarted", round: 1 });
+      listener({ type: "contextAssembled", round: 1, estimatedTokens: 1_240, omittedMessages: 0, omittedTools: 0 });
+      if (tools[0]) {
+        listener({ type: "tool", tool: { ...tools[0], status: "running", summary: "正在检索项目", output: "", durationMs: undefined } });
+        await new Promise((resolve) => window.setTimeout(resolve, 84));
+        listener({ type: "tool", tool: tools[0] });
+        listener({ type: "roundStarted", round: 2 });
+        listener({ type: "contextAssembled", round: 2, estimatedTokens: 1_410, omittedMessages: 0, omittedTools: 0 });
+      }
+    }
+    if (request.stream && listener) {
       for (const chunk of message.match(/.{1,12}/gs) ?? [message]) {
         await new Promise((resolve) => window.setTimeout(resolve, 18));
         if (mockAgentRuns.get(request.requestId)?.status === "cancelling") {
@@ -1416,12 +1439,13 @@ const mockGateway: DesktopGateway = {
     }
     const result: AgentTurnResult = {
       message,
-      tools: [],
+      tools,
       usage: { promptTokens: 18, completionTokens: 24 },
       durationMs: 220,
       stopReason: "completed",
-      rounds: 1,
-      toolCalls: 0,
+      rounds: tools.length > 0 ? 2 : 1,
+      toolCalls: tools.length,
+      retryCount: 0,
     };
     Object.assign(run, {
       status: "completed",
@@ -1508,9 +1532,38 @@ const mockGateway: DesktopGateway = {
       createdAt: now,
       updatedAt: now,
       sessionCount: 0,
+      source: "managed",
     };
     mockAgentProjects = [...mockAgentProjects, project];
     return structuredClone(project);
+  },
+  async openAgentFileSession(selectedSkillIds = []) {
+    const now = Date.now();
+    const project: AgentConversationProject = {
+      id: `project-${Math.random().toString(16).slice(2, 26).padEnd(24, "0")}`,
+      name: "示例文件项目",
+      path: "浏览器预览数据/example",
+      createdAt: now,
+      updatedAt: now,
+      sessionCount: 1,
+      source: "external",
+    };
+    mockAgentProjects = [...mockAgentProjects, project];
+    const session: AgentConversationSession = {
+      id: `agent-${now}-${Math.random().toString(16).slice(2)}`,
+      title: "example.txt",
+      projectId: project.id,
+      createdAt: now,
+      updatedAt: now,
+      revision: 1,
+      messages: [],
+      selectedSkillIds,
+      contextFiles: ["浏览器预览数据/example/example.txt"],
+      messageCount: 0,
+      bodyState: "ready",
+    };
+    mockAgentSessions = [session, ...mockAgentSessions];
+    return structuredClone(session);
   },
   async renameAgentProject(projectId, name) {
     const project = mockAgentProjects.find((item) => item.id === projectId);
@@ -1545,6 +1598,7 @@ const mockGateway: DesktopGateway = {
       revision: 1,
       messages: [],
       selectedSkillIds,
+      contextFiles: [],
       messageCount: 0,
       bodyState: "ready",
     };
@@ -1568,6 +1622,7 @@ const mockGateway: DesktopGateway = {
       ...structuredClone(session),
       projectId: session.projectId ?? "",
       selectedSkillIds: session.selectedSkillIds ?? [],
+      contextFiles: session.contextFiles ?? [],
       revision: (existing?.revision ?? 0) + 1,
       messageCount: session.messages.length,
       bodyState: "ready" as const,
@@ -1583,7 +1638,7 @@ const mockGateway: DesktopGateway = {
   },
   async moveAgentSession(sessionId, projectId = "") {
     const session = await this.getAgentSession(sessionId);
-    return this.saveAgentSession({ ...session, projectId, updatedAt: Date.now() });
+    return this.saveAgentSession({ ...session, projectId, contextFiles: [], updatedAt: Date.now() });
   },
   async deleteAgentSession(sessionId) {
     mockAgentSessions = mockAgentSessions.filter((session) => session.id !== sessionId);
@@ -2128,6 +2183,15 @@ const tauriGateway: DesktopGateway = {
   exportAgentArtifact: (sessionId, artifactId, destinationPath) => invoke<AgentDocumentExport>("export_agent_artifact", { sessionId, artifactId, destinationPath }),
   listAgentProjects: () => invoke<AgentConversationProject[]>("list_agent_projects"),
   createAgentProject: (name) => invoke<AgentConversationProject>("create_agent_project", { name }),
+  openAgentFileSession: async (selectedSkillIds = []) => {
+    const selected = await open({ multiple: false, directory: false });
+    if (typeof selected !== "string") return null;
+    const session = await invoke<AgentConversationSession>("open_agent_file_session", {
+      sourcePath: selected,
+      selectedSkillIds,
+    });
+    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [], contextFiles: session.contextFiles ?? [] };
+  },
   renameAgentProject: (projectId, name) => invoke<AgentConversationProject>("rename_agent_project", { projectId, name }),
   listAgentSessions: (projectId) => invoke<AgentConversationSessionSummary[]>("list_agent_sessions", { projectId }),
   createAgentSession: async (projectId, title, selectedSkillIds) => {
@@ -2136,28 +2200,28 @@ const tauriGateway: DesktopGateway = {
       title,
       selectedSkillIds,
     });
-    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [], contextFiles: session.contextFiles ?? [] };
   },
   getAgentSession: async (sessionId) => {
     const session = await invoke<AgentConversationSession>("get_agent_session", { sessionId });
-    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [], contextFiles: session.contextFiles ?? [] };
   },
   saveAgentSession: async (session) => {
     const saved = await invoke<AgentConversationSession>("save_agent_session", {
       session: { ...session, projectId: session.projectId || null },
     });
-    return { ...saved, revision: saved.revision ?? ((session.revision ?? 0) + 1), bodyState: "ready", projectId: saved.projectId ?? "", selectedSkillIds: saved.selectedSkillIds ?? [] };
+    return { ...saved, revision: saved.revision ?? ((session.revision ?? 0) + 1), bodyState: "ready", projectId: saved.projectId ?? "", selectedSkillIds: saved.selectedSkillIds ?? [], contextFiles: saved.contextFiles ?? [] };
   },
   renameAgentSession: async (sessionId, title) => {
     const session = await invoke<AgentConversationSession>("rename_agent_session", { sessionId, title });
-    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [], contextFiles: session.contextFiles ?? [] };
   },
   moveAgentSession: async (sessionId, projectId) => {
     const session = await invoke<AgentConversationSession>("move_agent_session", {
       sessionId,
       projectId: projectId || null,
     });
-    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [] };
+    return { ...session, revision: session.revision ?? 1, bodyState: "ready", projectId: session.projectId ?? "", selectedSkillIds: session.selectedSkillIds ?? [], contextFiles: session.contextFiles ?? [] };
   },
   deleteAgentSession: (sessionId) => invoke<void>("delete_agent_session", { sessionId }),
   listAgentExtensions: () => invoke<AgentExtensionSummary[]>("list_agent_extensions"),

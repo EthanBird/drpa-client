@@ -9,28 +9,32 @@ use std::sync::{
     mpsc,
 };
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use drpa_package::{Entrypoint, PackageManifest, safe_relative_path, validate_package_id};
+use drpa_package::{Entrypoint, PackageManifest, safe_relative_path};
 use globset::Glob;
 use ignore::WalkBuilder;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 #[cfg(test)]
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
 use crate::{
     AppPaths, RunProcessManager, agent_browser::AgentBrowserSession, agent_config, agent_documents,
-    agent_extensions, agent_runtime::AgentRunControl, credential_vault, database,
-    dispatch_run_background, knowledge, knowledge_base, plugins,
+    agent_extensions, agent_loop_guard::ToolLoopGuard, agent_runtime::AgentRunControl,
+    credential_vault, database, dispatch_run_background, knowledge, knowledge_base, plugins,
 };
 use drpa_host::HostState;
 
 const DEFAULT_MAX_AGENT_ROUNDS: usize = 64;
 const MAX_CONFIGURABLE_AGENT_ROUNDS: usize = 256;
 const MAX_HISTORY_MESSAGES: usize = 120;
+const MAX_PROVIDER_ATTEMPTS: usize = 4;
+const MAX_COMPACTION_SOURCE_BYTES: usize = 256 * 1024;
+const MAX_COMPACTION_SUMMARY_BYTES: usize = 32 * 1024;
 const MAX_MESSAGE_BYTES: usize = 100_000;
 const MAX_TOOL_OUTPUT_BYTES: usize = 20_000;
 const MAX_PYTHON_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
@@ -87,7 +91,21 @@ pub(crate) struct AgentTurnRequest {
     pub selected_skill_ids: Vec<String>,
     #[serde(default)]
     pub tool_policy: AgentToolPolicy,
+    #[serde(default)]
+    pub context_checkpoint: Option<AgentContextCheckpoint>,
     pub messages: Vec<AgentMessage>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentContextCheckpoint {
+    pub checkpoint_id: String,
+    pub summary: String,
+    pub covers_messages: usize,
+    pub source_digest: String,
+    pub created_at: u64,
+    pub estimated_tokens: u64,
+    pub method: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -108,6 +126,7 @@ pub(crate) struct AgentToolPolicy {
     pub document_write: bool,
     pub document_convert: bool,
     pub arbitrary_file_read: bool,
+    pub file_read_scope: AgentFileReadScope,
     pub project_write: bool,
     pub python: bool,
     pub workspace_write: bool,
@@ -117,6 +136,19 @@ pub(crate) struct AgentToolPolicy {
     pub run_records: bool,
     pub vault_read: bool,
     pub vault_write: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum AgentFileReadScope {
+    Project,
+    System,
+}
+
+impl Default for AgentFileReadScope {
+    fn default() -> Self {
+        Self::System
+    }
 }
 
 impl Default for AgentToolPolicy {
@@ -130,6 +162,7 @@ impl Default for AgentToolPolicy {
             document_write: true,
             document_convert: true,
             arbitrary_file_read: true,
+            file_read_scope: AgentFileReadScope::System,
             project_write: true,
             python: true,
             workspace_write: true,
@@ -151,6 +184,11 @@ pub(crate) struct AgentToolEvent {
     pub status: String,
     pub summary: String,
     pub output: String,
+    pub ordinal: usize,
+    pub round: usize,
+    pub input: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +206,17 @@ pub(crate) enum AgentStreamEvent {
         estimated_tokens: u64,
         omitted_messages: usize,
         omitted_tools: usize,
+    },
+    Retrying {
+        round: usize,
+        attempt: usize,
+        max_attempts: usize,
+        delay_ms: u64,
+        error: String,
+    },
+    ContextCompacted {
+        round: usize,
+        checkpoint: AgentContextCheckpoint,
     },
     Delta {
         content: String,
@@ -210,12 +259,16 @@ pub(crate) struct AgentTurnResult {
     pub stop_reason: String,
     pub rounds: usize,
     pub tool_calls: usize,
+    pub retry_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_checkpoint: Option<AgentContextCheckpoint>,
 }
 
 #[derive(Clone)]
 struct AgentContext {
     workspace_root: PathBuf,
     project_root: Option<PathBuf>,
+    context_files: Vec<PathBuf>,
     python: PathBuf,
     browser: Option<PathBuf>,
     browser_session: Option<AgentBrowserSession>,
@@ -499,7 +552,7 @@ trait ProviderAdapter {
         payload: &Value,
         stream: bool,
         on_delta: &mut dyn FnMut(String),
-    ) -> Result<Value, String>;
+    ) -> Result<Value, crate::provider::ProviderError>;
 }
 
 struct OpenAiCompatibleAdapter {
@@ -522,8 +575,8 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
         payload: &Value,
         stream: bool,
         on_delta: &mut dyn FnMut(String),
-    ) -> Result<Value, String> {
-        crate::provider::complete_cancellable(
+    ) -> Result<Value, crate::provider::ProviderError> {
+        crate::provider::complete_cancellable_detailed(
             &self.profile,
             payload,
             stream,
@@ -531,6 +584,217 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
             on_delta,
         )
     }
+}
+
+fn wait_before_retry(control: &AgentRunControl, delay: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + delay;
+    while Instant::now() < deadline {
+        control.check()?;
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(50)),
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn complete_with_retry<F>(
+    provider: &dyn ProviderAdapter,
+    payload: &Value,
+    stream: bool,
+    round: usize,
+    control: &AgentRunControl,
+    stable_content: &mut String,
+    retry_count: &mut usize,
+    emit: &mut F,
+) -> Result<Value, String>
+where
+    F: FnMut(AgentStreamEvent),
+{
+    for attempt in 1..=MAX_PROVIDER_ATTEMPTS {
+        control.check()?;
+        let mut attempt_content = String::new();
+        let result = provider.complete(payload, stream, &mut |content| {
+            attempt_content.push_str(&content);
+            emit(AgentStreamEvent::Delta { content });
+        });
+        match result {
+            Ok(response) => {
+                stable_content.push_str(&attempt_content);
+                return Ok(response);
+            }
+            Err(error) if error.retryable && attempt < MAX_PROVIDER_ATTEMPTS => {
+                *retry_count = retry_count.saturating_add(1);
+                emit(AgentStreamEvent::ContentReplace {
+                    content: stable_content.clone(),
+                });
+                let exponential = 500_u64.saturating_mul(1_u64 << (attempt - 1).min(3));
+                let jitter = u64::from(rand::random::<u16>() % 251);
+                let delay = Duration::from_millis(exponential.saturating_add(jitter));
+                emit(AgentStreamEvent::Retrying {
+                    round,
+                    attempt: attempt + 1,
+                    max_attempts: MAX_PROVIDER_ATTEMPTS,
+                    delay_ms: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                    error: error.message,
+                });
+                wait_before_retry(control, delay)?;
+            }
+            Err(error) => return Err(error.message),
+        }
+    }
+    Err("Provider 重试预算已耗尽".to_owned())
+}
+
+fn message_prefix_digest(messages: &[AgentMessage], count: usize) -> String {
+    let mut digest = Sha256::new();
+    for message in messages.iter().take(count) {
+        digest.update(message.role.as_bytes());
+        digest.update([0]);
+        digest.update(message.content.as_bytes());
+        digest.update([0xff]);
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn valid_context_checkpoint<'a>(
+    checkpoint: Option<&'a AgentContextCheckpoint>,
+    messages: &[AgentMessage],
+) -> Option<&'a AgentContextCheckpoint> {
+    checkpoint.filter(|checkpoint| {
+        checkpoint.covers_messages <= messages.len()
+            && !checkpoint.summary.trim().is_empty()
+            && checkpoint.source_digest
+                == message_prefix_digest(messages, checkpoint.covers_messages)
+    })
+}
+
+fn compaction_source(
+    previous: Option<&AgentContextCheckpoint>,
+    messages: &[AgentMessage],
+    start: usize,
+    end: usize,
+) -> String {
+    let mut records = Vec::new();
+    let mut bytes = previous.map_or(0, |checkpoint| checkpoint.summary.len());
+    for (index, message) in messages[start..end].iter().enumerate().rev() {
+        let content = truncate_text(&message.content, 8_000);
+        let record = format!(
+            "[消息 {} · {}]\n{}",
+            start + index + 1,
+            message.role,
+            content
+        );
+        if !records.is_empty() && bytes.saturating_add(record.len()) > MAX_COMPACTION_SOURCE_BYTES {
+            break;
+        }
+        bytes = bytes.saturating_add(record.len());
+        records.push(record);
+    }
+    records.reverse();
+    let previous = previous
+        .map(|checkpoint| format!("上一版结构化检查点：\n{}\n\n", checkpoint.summary))
+        .unwrap_or_default();
+    format!(
+        "{previous}需要合并的新对话与执行证据：\n{}",
+        records.join("\n\n")
+    )
+}
+
+fn fallback_compaction_summary(source: &str) -> String {
+    let source = truncate_text(source, MAX_COMPACTION_SUMMARY_BYTES.saturating_sub(512));
+    format!(
+        "## 会话恢复检查点（确定性降级）\n\n模型压缩暂时不可用。以下是经过大小限制的原始历史尾部，后续运行不得假定被省略部分已完成：\n\n{source}"
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_context_checkpoint<F>(
+    request: &AgentTurnRequest,
+    provider: &dyn ProviderAdapter,
+    history_start: usize,
+    control: &AgentRunControl,
+    stable_content: &mut String,
+    retry_count: &mut usize,
+    emit: &mut F,
+) -> (Option<AgentContextCheckpoint>, usize)
+where
+    F: FnMut(AgentStreamEvent),
+{
+    if history_start == 0 {
+        return (None, 0);
+    }
+    let previous = valid_context_checkpoint(request.context_checkpoint.as_ref(), &request.messages);
+    if let Some(checkpoint) = previous
+        && checkpoint.covers_messages >= history_start
+    {
+        return (Some(checkpoint.clone()), checkpoint.covers_messages);
+    }
+    let source_start = previous.map_or(0, |checkpoint| checkpoint.covers_messages);
+    let source = compaction_source(previous, &request.messages, source_start, history_start);
+    let max_tokens =
+        u32::try_from((request.context_window / 32).clamp(1_024, 8_192)).unwrap_or(8_192);
+    let payload = json!({
+        "model": request.model.trim(),
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是 Agent Harness 的上下文压缩器。只根据给定历史生成结构化恢复检查点，必须保留：用户目标与约束、已确认事实、关键决定、已完成工作、文件/数据/工具证据、失败及原因、未完成事项和下一步。不要继续任务，不要虚构。使用简洁 Markdown。"
+            },
+            {"role": "user", "content": source.clone()}
+        ],
+        "temperature": 0.1,
+        "max_tokens": max_tokens,
+        "stream": false
+    });
+    let (summary, method) = match complete_with_retry(
+        provider,
+        &payload,
+        false,
+        1,
+        control,
+        stable_content,
+        retry_count,
+        emit,
+    )
+    .and_then(|response| {
+        let assistant = response
+            .pointer("/choices/0/message")
+            .ok_or_else(|| "上下文压缩响应缺少 choices[0].message".to_owned())?;
+        let summary = message_content(assistant.get("content"));
+        if summary.trim().is_empty() {
+            Err("上下文压缩返回空检查点".to_owned())
+        } else {
+            Ok(truncate_text(&summary, MAX_COMPACTION_SUMMARY_BYTES))
+        }
+    }) {
+        Ok(summary) => (summary, "model".to_owned()),
+        Err(_) => (
+            fallback_compaction_summary(&source),
+            "deterministic-fallback".to_owned(),
+        ),
+    };
+    let source_digest = message_prefix_digest(&request.messages, history_start);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let checkpoint = AgentContextCheckpoint {
+        checkpoint_id: format!("ctx-{}-{now}", &source_digest[..16]),
+        estimated_tokens: u64::try_from(summary.len().saturating_add(3) / 4).unwrap_or(u64::MAX),
+        summary,
+        covers_messages: history_start,
+        source_digest,
+        created_at: u64::try_from(now).unwrap_or(u64::MAX),
+        method,
+    };
+    emit(AgentStreamEvent::ContextCompacted {
+        round: 1,
+        checkpoint: checkpoint.clone(),
+    });
+    (Some(checkpoint), history_start)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -577,19 +841,23 @@ where
     let provider =
         OpenAiCompatibleAdapter::new(&request.base_url, &request.api_key, control.clone())?;
     let sql_mode = request.mode == "sql";
-    let project_root = if sql_mode || request.project_id.trim().is_empty() {
+    let project_context = if sql_mode || request.project_id.trim().is_empty() {
         None
     } else {
-        validate_project_id(&request.project_id)?;
-        let root = workspace_root.join("projects").join(&request.project_id);
-        if !root.is_dir() {
-            return Err(format!("Agent 项目不存在：{}", request.project_id));
-        }
-        Some(root)
+        crate::agent_sessions::resolve_agent_project_context(
+            &workspace_root,
+            &request.project_id,
+            &request.session_id,
+        )?
     };
+    let project_root = project_context.as_ref().map(|project| project.root.clone());
+    let context_files = project_context
+        .map(|project| project.context_files)
+        .unwrap_or_default();
     let context = AgentContext {
         workspace_root,
         project_root,
+        context_files,
         python,
         browser,
         browser_session,
@@ -609,13 +877,21 @@ where
     let (system, tools) = if sql_mode {
         (sql_system_prompt(&request.database_dialect), Vec::new())
     } else {
-        let injected_context = agent_config::render_agent_context(
+        let mut injected_context = agent_config::render_agent_context(
             &context.workspace_root,
             context.project_root.as_deref(),
             &request.selected_skill_ids,
         )?;
+        injected_context.push_str(&render_session_project_context(
+            context.project_root.as_deref(),
+            &context.context_files,
+        ));
         (
-            system_prompt(context.project_root.is_some(), &injected_context),
+            system_prompt(
+                context.project_root.is_some(),
+                context.tool_policy.file_read_scope == AgentFileReadScope::System,
+                &injected_context,
+            ),
             tool_registry
                 .as_ref()
                 .map(|registry| registry.definitions.clone())
@@ -623,27 +899,46 @@ where
         )
     };
     let history_start = select_history_start(&request, &system, &tools)?;
+    let mut retry_count = 0usize;
+    let mut stable_stream_content = String::new();
+    let (context_checkpoint, effective_history_start) = prepare_context_checkpoint(
+        &request,
+        &provider,
+        history_start,
+        &control,
+        &mut stable_stream_content,
+        &mut retry_count,
+        &mut emit,
+    );
     let mut messages = vec![json!({
         "role": "system",
         "content": system,
     })];
-    for message in &request.messages[history_start..] {
+    if let Some(checkpoint) = &context_checkpoint {
+        messages.push(json!({
+            "role": "system",
+            "content": format!(
+                "以下是较早会话的结构化恢复检查点。它只概括检查点覆盖范围；后续原始消息优先级更高。\n\n{}",
+                checkpoint.summary
+            )
+        }));
+    }
+    for message in &request.messages[effective_history_start..] {
         messages.push(json!({"role": message.role, "content": message.content}));
     }
 
     let mut events = Vec::new();
     let mut usage = AgentUsage::default();
     let mut tool_calls_count = 0usize;
-    let mut repeated_calls = HashMap::<String, usize>::new();
+    let mut tool_event_ordinal = 0usize;
+    let mut tool_loop_guard = ToolLoopGuard::default();
     let mut rounds_completed = 0usize;
     let mut stop_reason = "round-limit".to_owned();
 
     'rounds: for round in 0..request.max_rounds {
         control.check()?;
         rounds_completed = round + 1;
-        if request.stream {
-            emit(AgentStreamEvent::RoundStarted { round: round + 1 });
-        }
+        emit(AgentStreamEvent::RoundStarted { round: round + 1 });
         let assembled = crate::agent_context::assemble_round_context(
             &messages,
             &tools,
@@ -673,9 +968,16 @@ where
         if request.stream {
             payload["stream"] = Value::Bool(true);
         }
-        let response = provider.complete(&payload, request.stream, &mut |content| {
-            emit(AgentStreamEvent::Delta { content });
-        })?;
+        let response = complete_with_retry(
+            &provider,
+            &payload,
+            request.stream,
+            round + 1,
+            &control,
+            &mut stable_stream_content,
+            &mut retry_count,
+            &mut emit,
+        )?;
         control.check()?;
         accumulate_usage(&mut usage, response.get("usage"));
         let assistant = response
@@ -702,15 +1004,17 @@ where
                 stop_reason: "completed".to_owned(),
                 rounds: rounds_completed,
                 tool_calls: tool_calls_count,
+                retry_count,
+                context_checkpoint,
             });
         }
 
+        let mut stop_after_tool_batch = false;
         for call in tool_calls {
             control.check()?;
-            if tool_calls_count >= request.max_tool_calls {
-                stop_reason = "tool-call-limit".to_owned();
-                break 'rounds;
-            }
+            tool_event_ordinal = tool_event_ordinal.saturating_add(1);
+            let ordinal = tool_event_ordinal;
+            let tool_round = round + 1;
             let call_id = call
                 .get("id")
                 .and_then(Value::as_str)
@@ -721,19 +1025,80 @@ where
                 .and_then(Value::as_str)
                 .unwrap_or("unknown")
                 .to_owned();
+            if stop_after_tool_batch {
+                let error = format!("本轮工具循环已停止，未执行后续调用：{name}");
+                let (tool_event, output_text) =
+                    failed_tool_call(&call_id, &name, error, ordinal, tool_round, String::new());
+                events.push(tool_event.clone());
+                emit(AgentStreamEvent::Tool { tool: tool_event });
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output_text,
+                }));
+                continue;
+            }
+            if tool_calls_count >= request.max_tool_calls {
+                stop_reason = "tool-call-limit".to_owned();
+                stop_after_tool_batch = true;
+                let error = format!(
+                    "Agent 工具调用已达到上限 {}，未执行：{name}",
+                    request.max_tool_calls
+                );
+                let (tool_event, output_text) =
+                    failed_tool_call(&call_id, &name, error, ordinal, tool_round, String::new());
+                events.push(tool_event.clone());
+                emit(AgentStreamEvent::Tool { tool: tool_event });
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output_text,
+                }));
+                continue;
+            }
             let arguments = parse_tool_arguments(call.pointer("/function/arguments"))?;
+            let persistent_input = persistent_tool_input(&name, &arguments);
             tool_calls_count = tool_calls_count.saturating_add(1);
-            let fingerprint = format!("{name}:{arguments}");
-            let repeat_count = repeated_calls.entry(fingerprint).or_insert(0);
-            *repeat_count = repeat_count.saturating_add(1);
-            let executed = if *repeat_count > 3 {
-                Err(format!("检测到重复工具调用，已熔断：{name}"))
-            } else {
-                tool_registry
-                    .as_ref()
-                    .ok_or_else(|| "当前 Agent 模式没有工具注册表".to_owned())?
-                    .execute(&name, &arguments)
-            };
+            let canonical_arguments = arguments.to_string();
+            if tool_loop_guard.should_block(&name, &canonical_arguments) {
+                let error = format!("检测到工具连续返回相同结果，已停止重复调用：{name}");
+                let (tool_event, output_text) = failed_tool_call(
+                    &call_id,
+                    &name,
+                    error,
+                    ordinal,
+                    tool_round,
+                    persistent_input,
+                );
+                events.push(tool_event.clone());
+                emit(AgentStreamEvent::Tool { tool: tool_event });
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output_text,
+                }));
+                stop_reason = "repeated-tool-call".to_owned();
+                stop_after_tool_batch = true;
+                continue;
+            }
+            emit(AgentStreamEvent::Tool {
+                tool: AgentToolEvent {
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    status: "running".to_owned(),
+                    summary: "正在执行操作".to_owned(),
+                    output: String::new(),
+                    ordinal,
+                    round: tool_round,
+                    input: persistent_input.clone(),
+                    duration_ms: None,
+                },
+            });
+            let tool_started = Instant::now();
+            let executed = tool_registry
+                .as_ref()
+                .ok_or_else(|| "当前 Agent 模式没有工具注册表".to_owned())?
+                .execute(&name, &arguments);
             let (status, summary, output) = match executed {
                 Ok(result) => ("completed".to_owned(), result.summary, result.output),
                 Err(error) => (
@@ -743,6 +1108,7 @@ where
                 ),
             };
             let output_text = truncate_text(&output.to_string(), MAX_TOOL_OUTPUT_BYTES);
+            tool_loop_guard.record(&name, &canonical_arguments, &status, &output_text);
             let event_output = if tool_registry
                 .as_ref()
                 .is_some_and(|registry| registry.redact_persistent_output(&name))
@@ -767,23 +1133,33 @@ where
                 status,
                 summary,
                 output: event_output,
+                ordinal,
+                round: tool_round,
+                input: persistent_input,
+                duration_ms: Some(elapsed_ms(tool_started)),
             };
             events.push(tool_event.clone());
-            if request.stream {
-                emit(AgentStreamEvent::Tool { tool: tool_event });
-            }
+            emit(AgentStreamEvent::Tool { tool: tool_event });
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": call_id,
                 "content": output_text,
             }));
         }
+        if stop_after_tool_batch {
+            break 'rounds;
+        }
     }
 
     control.check()?;
+    let final_instruction = if stop_reason == "repeated-tool-call" {
+        "检测到工具在没有产生新结果的情况下重复调用，运行已自动熔断。请直接基于已有证据给出最终答复，不再调用工具，并说明尚未完成的事项。"
+    } else {
+        "工具预算已经结束。请基于已有工具证据直接给出最终答复，不再调用任何工具；说明已完成内容与仍待处理项。"
+    };
     messages.push(json!({
         "role": "system",
-        "content": "工具预算已经结束。请基于已有工具证据直接给出最终答复，不再调用任何工具；说明已完成内容与仍待处理项。"
+        "content": final_instruction
     }));
     let final_round = rounds_completed.saturating_add(1);
     let assembled = crate::agent_context::assemble_round_context(
@@ -792,6 +1168,7 @@ where
         request.context_window,
         request.max_output_tokens,
     );
+    emit(AgentStreamEvent::RoundStarted { round: final_round });
     emit(AgentStreamEvent::ContextAssembled {
         round: final_round,
         estimated_tokens: assembled.estimated_tokens,
@@ -809,11 +1186,17 @@ where
     }
     if request.stream {
         payload["stream"] = Value::Bool(true);
-        emit(AgentStreamEvent::RoundStarted { round: final_round });
     }
-    let response = provider.complete(&payload, request.stream, &mut |content| {
-        emit(AgentStreamEvent::Delta { content });
-    })?;
+    let response = complete_with_retry(
+        &provider,
+        &payload,
+        request.stream,
+        final_round,
+        &control,
+        &mut stable_stream_content,
+        &mut retry_count,
+        &mut emit,
+    )?;
     control.check()?;
     accumulate_usage(&mut usage, response.get("usage"));
     let assistant = response
@@ -831,6 +1214,8 @@ where
         stop_reason,
         rounds: rounds_completed.saturating_add(1),
         tool_calls: tool_calls_count,
+        retry_count,
+        context_checkpoint,
     })
 }
 
@@ -1015,6 +1400,78 @@ fn parse_tool_arguments(value: Option<&Value>) -> Result<Value, String> {
     }
 }
 
+fn failed_tool_call(
+    call_id: &str,
+    name: &str,
+    error: String,
+    ordinal: usize,
+    round: usize,
+    input: String,
+) -> (AgentToolEvent, String) {
+    let output = json!({"ok": false, "error": error.clone()}).to_string();
+    (
+        AgentToolEvent {
+            call_id: call_id.to_owned(),
+            name: name.to_owned(),
+            status: "failed".to_owned(),
+            summary: error,
+            output: output.clone(),
+            ordinal,
+            round,
+            input,
+            duration_ms: None,
+        },
+        output,
+    )
+}
+
+pub(crate) fn persistent_tool_input(name: &str, arguments: &Value) -> String {
+    if matches!(
+        name,
+        "vault_get_credential" | "vault_upsert_credential" | "document_create"
+    ) {
+        return json!({"redacted": true, "message": "敏感输入未写入运行记录"}).to_string();
+    }
+    truncate_text(&redact_argument_value(None, arguments).to_string(), 2_000)
+}
+
+fn redact_argument_value(key: Option<&str>, value: &Value) -> Value {
+    let sensitive_key = key.is_some_and(|key| {
+        let key = key.to_ascii_lowercase();
+        [
+            "password",
+            "secret",
+            "token",
+            "api_key",
+            "apikey",
+            "credential",
+            "authorization",
+        ]
+        .iter()
+        .any(|candidate| key.contains(candidate))
+    });
+    if sensitive_key {
+        return Value::String("[已隐藏]".to_owned());
+    }
+    match value {
+        Value::Object(values) => Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), redact_argument_value(Some(key), value)))
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .take(32)
+                .map(|value| redact_argument_value(None, value))
+                .collect(),
+        ),
+        Value::String(value) => Value::String(truncate_text(value, 500)),
+        _ => value.clone(),
+    }
+}
+
 fn accumulate_usage(target: &mut AgentUsage, value: Option<&Value>) {
     let Some(value) = value else { return };
     target.prompt_tokens = target.prompt_tokens.saturating_add(
@@ -1031,14 +1488,19 @@ fn accumulate_usage(target: &mut AgentUsage, value: Option<&Value>) {
     );
 }
 
-fn system_prompt(has_project: bool, injected_context: &str) -> String {
+fn system_prompt(has_project: bool, system_file_read: bool, injected_context: &str) -> String {
     let context = if has_project {
-        "当前已绑定一个通用开发项目；可在项目目录运行 Python，并按设置读取项目相对路径或任意绝对路径，写入始终严格限制在当前项目内。若项目包含 manifest.yaml，则它也是可校验和构建的规范化 RPAZ 项目。"
+        "当前已绑定一个通用开发项目；可在项目目录运行 Python，写入始终严格限制在当前项目内。若项目包含 manifest.yaml，则它也是可校验和构建的规范化 RPAZ 项目。"
     } else {
         "当前未绑定项目，项目文件写入和 Python 工具暂不可用。"
     };
+    let read_scope = if system_file_read {
+        "文件只读范围已配置为整个操作系统：read_file、find_files、search_text 可以使用绝对路径读取当前系统账户有权访问的位置；相对路径仍从当前项目解析，未绑定项目时从 DRPA 工作区解析。"
+    } else {
+        "文件只读范围已配置为仅当前项目：read_file、find_files、search_text 不得越过项目目录。"
+    };
     format!(
-        "你是 DRPA Next 内置的通用开发与自动化 Agent。{context}\n\
+        "你是 DRPA Next 内置的通用开发与自动化 Agent。{context}{read_scope}\n\
          RPAZ 是根目录含 manifest.yaml 的 ZIP，当前 schema 为 2；Python 入口实现 main(ctx)，\
          参数来自 ctx.params，产物使用 ctx.output_file，进度使用 ctx.progress。\n\
          你可以使用 data 工具列出数据工作台连接、读取结构并执行 Host 强制的只读查询；\
@@ -1054,6 +1516,30 @@ fn system_prompt(has_project: bool, injected_context: &str) -> String {
          回答使用简体中文，先给结论，再列出实际完成的文件与验证结果。\
          {injected_context}"
     )
+}
+
+pub(crate) fn render_session_project_context(
+    project_root: Option<&Path>,
+    context_files: &[PathBuf],
+) -> String {
+    let Some(project_root) = project_root else {
+        return String::new();
+    };
+    let files = context_files
+        .iter()
+        .map(|path| {
+            path.strip_prefix(project_root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "projectRoot": project_root.to_string_lossy(),
+        "initialContextFiles": files,
+        "instruction": "把 initialContextFiles 作为本会话的首要文件线索；先按需读取相关区段，再扩展检索同目录项目。"
+    });
+    format!("\n<session_project_context>{payload}</session_project_context>\n")
 }
 
 fn sql_system_prompt(dialect: &str) -> String {
@@ -1263,22 +1749,40 @@ fn agent_tool_definitions(
             json!({"type":"object","properties":{"documentId":{"type":"string"},"targetFormat":{"type":"string","enum":["pdf","docx","xlsx","pptx"]},"title":{"type":"string"},"fileName":{"type":"string"}},"required":["documentId","targetFormat"],"additionalProperties":false}),
         ));
     }
-    if has_project && policy.arbitrary_file_read {
+    if policy.arbitrary_file_read
+        && (has_project || policy.file_read_scope == AgentFileReadScope::System)
+    {
+        let system_scope = policy.file_read_scope == AgentFileReadScope::System;
+        let read_description = if system_scope {
+            "按行读取 UTF-8 文本文件。相对路径从当前项目解析（未绑定项目时从 DRPA 工作区解析），绝对路径可读取当前系统账户有权访问的本机文件；可指定起始行，一次严格不超过 2000 行。"
+        } else {
+            "按行读取当前项目内的 UTF-8 文本文件；相对或绝对路径都不能越过项目目录。可指定起始行，一次严格不超过 2000 行。"
+        };
+        let find_description = if system_scope {
+            "按 glob 快速查找文件。path 可使用本机绝对目录，省略时从当前项目开始；不跟随符号链接，最多返回 500 项。"
+        } else {
+            "在当前项目中按 glob 快速查找文件，遵循 .gitignore；最多返回 500 项。"
+        };
+        let search_description = if system_scope {
+            "在文本文件中进行正则或字面量检索。path 可使用本机绝对目录，省略时从当前项目开始；不跟随符号链接，返回文件、行号和匹配行。"
+        } else {
+            "在当前项目文本文件中进行正则或字面量检索，遵循 .gitignore；返回文件、行号和匹配行。"
+        };
         tools.extend([
             tool_definition(
                 "read_file",
-                "按行读取 UTF-8 文本文件。相对路径从当前项目解析，绝对路径可读取本机现有文件；可指定起始行，一次严格不超过 2000 行。",
+                read_description,
                 json!({"type":"object","properties":{"path":{"type":"string"},"startLine":{"type":"integer","minimum":1},"lineCount":{"type":"integer","minimum":1,"maximum":MAX_FILE_READ_LINES}},"required":["path"],"additionalProperties":false}),
             ),
             tool_definition(
                 "find_files",
-                "在当前项目中按 glob 快速查找文件，遵循 .gitignore；最多返回 500 项。",
-                json!({"type":"object","properties":{"pattern":{"type":"string","description":"例如 **/*.rs 或 manifest.*"},"path":{"type":"string","description":"项目内起始目录，默认 ."},"limit":{"type":"integer","minimum":1,"maximum":MAX_FILE_TOOL_RESULTS}},"required":["pattern"],"additionalProperties":false}),
+                find_description,
+                json!({"type":"object","properties":{"pattern":{"type":"string","description":"例如 **/*.rs 或 manifest.*"},"path":{"type":"string","description":"起始目录；整个系统范围下允许绝对路径，默认 ."},"limit":{"type":"integer","minimum":1,"maximum":MAX_FILE_TOOL_RESULTS}},"required":["pattern"],"additionalProperties":false}),
             ),
             tool_definition(
                 "search_text",
-                "在当前项目文本文件中进行正则或字面量检索，遵循 .gitignore；返回文件、行号和匹配行。",
-                json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string","description":"项目内起始目录，默认 ."},"glob":{"type":"string","description":"可选文件 glob，例如 **/*.rs"},"literal":{"type":"boolean"},"ignoreCase":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":MAX_FILE_TOOL_RESULTS}},"required":["pattern"],"additionalProperties":false}),
+                search_description,
+                json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string","description":"起始目录；整个系统范围下允许绝对路径，默认 ."},"glob":{"type":"string","description":"可选文件 glob，例如 **/*.rs"},"literal":{"type":"boolean"},"ignoreCase":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":MAX_FILE_TOOL_RESULTS}},"required":["pattern"],"additionalProperties":false}),
             ),
         ]);
     }
@@ -1743,6 +2247,66 @@ fn execute_tool(
         }
         _ => {}
     }
+    let allow_system_read = context.tool_policy.file_read_scope == AgentFileReadScope::System;
+    let file_root = context
+        .project_root
+        .as_deref()
+        .unwrap_or(context.workspace_root.as_path());
+    if name == "read_file" {
+        let requested = argument_string(arguments, "path")?;
+        let path = resolve_agent_read_file(file_root, requested, allow_system_read)?;
+        let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.len() > MAX_FILE_BYTES {
+            return Err(format!(
+                "文件超过 {} MiB 读取限制",
+                MAX_FILE_BYTES / 1024 / 1024
+            ));
+        }
+        let content =
+            fs::read_to_string(&path).map_err(|error| format!("读取 {requested} 失败：{error}"))?;
+        let start_line = bounded_positive_argument(arguments, "startLine", 1, usize::MAX)?;
+        let line_count = bounded_positive_argument(
+            arguments,
+            "lineCount",
+            MAX_FILE_READ_LINES,
+            MAX_FILE_READ_LINES,
+        )?;
+        let all_lines = content.lines().collect::<Vec<_>>();
+        let start_index = start_line.saturating_sub(1).min(all_lines.len());
+        let end_index = start_index.saturating_add(line_count).min(all_lines.len());
+        let selected = all_lines[start_index..end_index]
+            .iter()
+            .enumerate()
+            .map(|(index, line)| format!("{:>6}\t{line}", start_index + index + 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let next_start_line = (end_index < all_lines.len()).then_some(end_index + 1);
+        return Ok(ToolResult {
+            output: json!({
+                "ok": true,
+                "path": path,
+                "content": selected,
+                "startLine": start_index.saturating_add(1),
+                "endLine": end_index,
+                "totalLines": all_lines.len(),
+                "nextStartLine": next_start_line,
+                "truncated": next_start_line.is_some(),
+                "readOnly": true
+            }),
+            summary: format!(
+                "已只读读取 {requested} 第 {}–{} 行（共 {} 行）",
+                start_index.saturating_add(1),
+                end_index,
+                all_lines.len()
+            ),
+        });
+    }
+    if name == "find_files" {
+        return find_project_files(file_root, arguments, allow_system_read);
+    }
+    if name == "search_text" {
+        return search_project_text(file_root, arguments, allow_system_read);
+    }
     let project_root = context
         .project_root
         .as_deref()
@@ -1758,57 +2322,6 @@ fn execute_tool(
                 summary: format!("已列出 {count} 个项目文件"),
             })
         }
-        "read_file" => {
-            let requested = argument_string(arguments, "path")?;
-            let path = resolve_agent_read_file(project_root, requested)?;
-            let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
-            if metadata.len() > MAX_FILE_BYTES {
-                return Err(format!(
-                    "文件超过 {} MiB 读取限制",
-                    MAX_FILE_BYTES / 1024 / 1024
-                ));
-            }
-            let content = fs::read_to_string(&path)
-                .map_err(|error| format!("读取 {requested} 失败：{error}"))?;
-            let start_line = bounded_positive_argument(arguments, "startLine", 1, usize::MAX)?;
-            let line_count = bounded_positive_argument(
-                arguments,
-                "lineCount",
-                MAX_FILE_READ_LINES,
-                MAX_FILE_READ_LINES,
-            )?;
-            let all_lines = content.lines().collect::<Vec<_>>();
-            let start_index = start_line.saturating_sub(1).min(all_lines.len());
-            let end_index = start_index.saturating_add(line_count).min(all_lines.len());
-            let selected = all_lines[start_index..end_index]
-                .iter()
-                .enumerate()
-                .map(|(index, line)| format!("{:>6}\t{line}", start_index + index + 1))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let next_start_line = (end_index < all_lines.len()).then_some(end_index + 1);
-            Ok(ToolResult {
-                output: json!({
-                    "ok": true,
-                    "path": path,
-                    "content": selected,
-                    "startLine": start_index.saturating_add(1),
-                    "endLine": end_index,
-                    "totalLines": all_lines.len(),
-                    "nextStartLine": next_start_line,
-                    "truncated": next_start_line.is_some(),
-                    "readOnly": true
-                }),
-                summary: format!(
-                    "已只读读取 {requested} 第 {}–{} 行（共 {} 行）",
-                    start_index.saturating_add(1),
-                    end_index,
-                    all_lines.len()
-                ),
-            })
-        }
-        "find_files" => find_project_files(project_root, arguments),
-        "search_text" => search_project_text(project_root, arguments),
         "edit_file" => edit_project_file(project_root, arguments),
         "rpaz_write_file" => {
             let relative = argument_string(arguments, "path")?;
@@ -1950,31 +2463,48 @@ fn bounded_positive_argument(
     Ok(value)
 }
 
-fn resolve_project_search_path(project_root: &Path, value: &str) -> Result<PathBuf, String> {
+fn resolve_project_search_path(
+    project_root: &Path,
+    value: &str,
+    allow_system_read: bool,
+) -> Result<PathBuf, String> {
     let canonical_root = fs::canonicalize(project_root).map_err(|error| error.to_string())?;
     let target = if value.trim().is_empty() || value.trim() == "." {
         canonical_root.clone()
     } else {
-        let relative = safe_relative_path(value).map_err(|error| error.to_string())?;
-        fs::canonicalize(project_root.join(relative))
-            .map_err(|error| format!("定位项目检索路径 {value} 失败：{error}"))?
+        let requested = Path::new(value);
+        if requested.is_absolute() {
+            fs::canonicalize(requested)
+                .map_err(|error| format!("定位检索路径 {value} 失败：{error}"))?
+        } else {
+            let relative = safe_relative_path(value).map_err(|error| error.to_string())?;
+            fs::canonicalize(project_root.join(relative))
+                .map_err(|error| format!("定位检索路径 {value} 失败：{error}"))?
+        }
     };
-    if !target.starts_with(&canonical_root) {
-        return Err("检索路径超出当前项目".to_owned());
+    if !allow_system_read && !target.starts_with(&canonical_root) {
+        return Err("当前读取范围仅允许检索项目目录".to_owned());
     }
     if !target.is_dir() && !target.is_file() {
-        return Err(format!("项目检索路径不存在：{value}"));
+        return Err(format!("检索路径不存在：{value}"));
     }
     Ok(target)
 }
 
-fn find_project_files(project_root: &Path, arguments: &Value) -> Result<ToolResult, String> {
+fn find_project_files(
+    project_root: &Path,
+    arguments: &Value,
+    allow_system_read: bool,
+) -> Result<ToolResult, String> {
     let pattern = argument_string(arguments, "pattern")?.trim();
     if pattern.is_empty() {
         return Err("文件查找 pattern 不能为空".to_owned());
     }
-    let search_root =
-        resolve_project_search_path(project_root, argument_optional_string(arguments, "path"))?;
+    let search_root = resolve_project_search_path(
+        project_root,
+        argument_optional_string(arguments, "path"),
+        allow_system_read,
+    )?;
     let matcher = Glob::new(pattern)
         .map_err(|error| format!("文件 glob 无效：{error}"))?
         .compile_matcher();
@@ -2035,7 +2565,11 @@ fn build_search_regex(pattern: &str, literal: bool, ignore_case: bool) -> Result
         .map_err(|error| format!("检索正则无效：{error}"))
 }
 
-fn search_project_text(project_root: &Path, arguments: &Value) -> Result<ToolResult, String> {
+fn search_project_text(
+    project_root: &Path,
+    arguments: &Value,
+    allow_system_read: bool,
+) -> Result<ToolResult, String> {
     let pattern = argument_string(arguments, "pattern")?;
     let regex = build_search_regex(
         pattern,
@@ -2058,8 +2592,11 @@ fn search_project_text(project_root: &Path, arguments: &Value) -> Result<ToolRes
                 .map_err(|error| format!("文件 glob 无效：{error}"))
         })
         .transpose()?;
-    let search_root =
-        resolve_project_search_path(project_root, argument_optional_string(arguments, "path"))?;
+    let search_root = resolve_project_search_path(
+        project_root,
+        argument_optional_string(arguments, "path"),
+        allow_system_read,
+    )?;
     let limit = bounded_positive_argument(arguments, "limit", 100, MAX_FILE_TOOL_RESULTS)?;
     let canonical_project = fs::canonicalize(project_root).map_err(|error| error.to_string())?;
     let mut scanned = 0usize;
@@ -2177,7 +2714,11 @@ fn edit_project_file(project_root: &Path, arguments: &Value) -> Result<ToolResul
     })
 }
 
-fn resolve_agent_read_file(project_root: &Path, value: &str) -> Result<PathBuf, String> {
+fn resolve_agent_read_file(
+    project_root: &Path,
+    value: &str,
+    allow_system_read: bool,
+) -> Result<PathBuf, String> {
     let requested = Path::new(value);
     let target = if requested.is_absolute() {
         requested.to_path_buf()
@@ -2188,6 +2729,12 @@ fn resolve_agent_read_file(project_root: &Path, value: &str) -> Result<PathBuf, 
         fs::canonicalize(&target).map_err(|error| format!("定位只读文件 {value} 失败：{error}"))?;
     if !canonical.is_file() {
         return Err(format!("只读文件不存在：{value}"));
+    }
+    if !allow_system_read {
+        let canonical_root = fs::canonicalize(project_root).map_err(|error| error.to_string())?;
+        if !canonical.starts_with(canonical_root) {
+            return Err("当前读取范围仅允许访问项目目录".to_owned());
+        }
     }
     Ok(canonical)
 }
@@ -2569,17 +3116,6 @@ fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-pub(crate) fn validate_project_id(value: &str) -> Result<(), String> {
-    let generated = value
-        .strip_prefix("project-")
-        .is_some_and(|hash| hash.len() == 24 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    if generated || validate_package_id(value).is_ok() {
-        Ok(())
-    } else {
-        Err("开发项目 ID 无效".to_owned())
-    }
-}
-
 #[cfg(windows)]
 fn configure_agent_python_process(command: &mut Command) {
     use std::os::windows::process::CommandExt;
@@ -2799,6 +3335,39 @@ mod tests {
     }
 
     #[test]
+    fn context_checkpoint_is_reused_only_for_the_exact_history_prefix() {
+        let messages = vec![
+            AgentMessage {
+                role: "user".to_owned(),
+                content: "inspect the project".to_owned(),
+            },
+            AgentMessage {
+                role: "assistant".to_owned(),
+                content: "read manifest.yaml".to_owned(),
+            },
+            AgentMessage {
+                role: "user".to_owned(),
+                content: "continue".to_owned(),
+            },
+        ];
+        let checkpoint = AgentContextCheckpoint {
+            checkpoint_id: "ctx-test".to_owned(),
+            summary: "The manifest was inspected.".to_owned(),
+            covers_messages: 2,
+            source_digest: message_prefix_digest(&messages, 2),
+            created_at: 1,
+            estimated_tokens: 8,
+            method: "model".to_owned(),
+        };
+
+        assert!(valid_context_checkpoint(Some(&checkpoint), &messages).is_some());
+
+        let mut edited = messages.clone();
+        edited[0].content = "inspect another project".to_owned();
+        assert!(valid_context_checkpoint(Some(&checkpoint), &edited).is_none());
+    }
+
+    #[test]
     fn python_stream_capture_is_memory_bounded_and_flags_excess_output() {
         let exceeded = Arc::new(AtomicBool::new(false));
         let output_bytes = Arc::new(AtomicUsize::new(0));
@@ -2975,6 +3544,7 @@ mod tests {
         let context = AgentContext {
             workspace_root: PathBuf::from("unused"),
             project_root: None,
+            context_files: Vec::new(),
             python: PathBuf::from("python"),
             browser: None,
             browser_session: None,
@@ -3056,6 +3626,7 @@ mod tests {
             max_wall_time_seconds: default_max_wall_time_seconds(),
             selected_skill_ids: Vec::new(),
             tool_policy: AgentToolPolicy::default(),
+            context_checkpoint: None,
             messages: vec![
                 AgentMessage {
                     role: "user".to_owned(),
@@ -3138,6 +3709,7 @@ mod tests {
         let context = AgentContext {
             workspace_root: workspace.clone(),
             project_root: Some(project.clone()),
+            context_files: Vec::new(),
             python: PathBuf::from("python"),
             browser: None,
             browser_session: None,
@@ -3267,6 +3839,91 @@ mod tests {
     }
 
     #[test]
+    fn system_file_read_works_without_a_project_and_project_scope_blocks_escape() {
+        let workspace =
+            std::env::temp_dir().join(format!("drpa-agent-read-workspace-{}", Uuid::new_v4()));
+        let outside =
+            std::env::temp_dir().join(format!("drpa-agent-read-outside-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let outside_file = outside.join("system.txt");
+        fs::write(&outside_file, "system scope").unwrap();
+
+        let system_policy = AgentToolPolicy::default();
+        let definitions = agent_tool_definitions(
+            &workspace,
+            false,
+            false,
+            &[],
+            DEFAULT_PYTHON_TIMEOUT_SECONDS,
+            &system_policy,
+        )
+        .unwrap();
+        let names = definitions
+            .iter()
+            .filter_map(|value| value.pointer("/function/name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"find_files"));
+        assert!(names.contains(&"search_text"));
+
+        let mut context = AgentContext {
+            workspace_root: workspace.clone(),
+            project_root: None,
+            context_files: Vec::new(),
+            python: PathBuf::from("python"),
+            browser: None,
+            browser_session: None,
+            host: None,
+            session_id: "test-session".to_owned(),
+            python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
+            selected_skill_ids: Vec::new(),
+            tool_policy: system_policy,
+            control: AgentRunControl::for_tests(),
+        };
+        assert!(
+            execute_tool(
+                &context,
+                "read_file",
+                &json!({"path": outside_file.to_string_lossy()})
+            )
+            .unwrap()
+            .output["content"]
+                .as_str()
+                .unwrap()
+                .contains("system scope")
+        );
+        let found = execute_tool(
+            &context,
+            "find_files",
+            &json!({"path": outside.to_string_lossy(), "pattern": "*.txt"}),
+        )
+        .unwrap();
+        assert_eq!(found.output["count"], 1);
+
+        context.tool_policy.file_read_scope = AgentFileReadScope::Project;
+        assert!(
+            execute_tool(
+                &context,
+                "read_file",
+                &json!({"path": outside_file.to_string_lossy()})
+            )
+            .is_err()
+        );
+        assert!(
+            execute_tool(
+                &context,
+                "find_files",
+                &json!({"path": outside.to_string_lossy(), "pattern": "*.txt"})
+            )
+            .is_err()
+        );
+
+        fs::remove_dir_all(workspace).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
     fn database_agent_tool_executes_select_but_never_update() {
         let workspace =
             std::env::temp_dir().join(format!("drpa-agent-database-{}", Uuid::new_v4()));
@@ -3283,6 +3940,7 @@ mod tests {
         let context = AgentContext {
             workspace_root: workspace.clone(),
             project_root: None,
+            context_files: Vec::new(),
             python: PathBuf::from("python"),
             browser: None,
             browser_session: None,
@@ -3325,6 +3983,7 @@ mod tests {
         let context = AgentContext {
             workspace_root: workspace.clone(),
             project_root: None,
+            context_files: Vec::new(),
             python: PathBuf::from("python"),
             browser: None,
             browser_session: None,
@@ -3377,6 +4036,7 @@ mod tests {
         let context = AgentContext {
             workspace_root: workspace.clone(),
             project_root: None,
+            context_files: Vec::new(),
             python: PathBuf::from("python"),
             browser: None,
             browser_session: None,

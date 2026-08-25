@@ -4,7 +4,8 @@
   "private": true,
   "workspaces": [
     "apps/desktop",
-    "apps/optical-web"
+    "apps/optical-web",
+    "apps/optical-miniprogram"
   ],
   "scripts": {
     "dev": "npm run dev --workspace @drpa/desktop",
@@ -12,6 +13,9 @@
     "dev:optical": "npm run dev --workspace @drpa/optical-web",
     "build:optical": "npm run build --workspace @drpa/optical-web",
     "typecheck:optical": "npm run typecheck --workspace @drpa/optical-web",
+    "build:miniprogram": "npm run build --workspace @drpa/optical-miniprogram",
+    "typecheck:miniprogram": "npm run typecheck --workspace @drpa/optical-miniprogram",
+    "test:miniprogram": "npm run test --workspace @drpa/optical-miniprogram",
     "typecheck": "npm run typecheck --workspace @drpa/desktop",
     "test": "npm run test --workspace @drpa/desktop",
     "tauri:dev": "npm run tauri:dev --workspace @drpa/desktop",

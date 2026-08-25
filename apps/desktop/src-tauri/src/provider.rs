@@ -58,18 +58,33 @@ enum WorkerEvent {
     Finished(Result<Value, ProviderError>),
 }
 
+#[cfg(test)]
 pub(crate) fn complete_cancellable<F>(
     profile: &ProviderProfile,
     payload: &Value,
     stream: bool,
     control: &AgentRunControl,
-    mut on_delta: F,
+    on_delta: F,
 ) -> Result<Value, String>
 where
     F: FnMut(String),
 {
-    control.check()?;
-    let response_timeout = control.remaining()?;
+    complete_cancellable_detailed(profile, payload, stream, control, on_delta)
+        .map_err(|error| error.message)
+}
+
+pub(crate) fn complete_cancellable_detailed<F>(
+    profile: &ProviderProfile,
+    payload: &Value,
+    stream: bool,
+    control: &AgentRunControl,
+    mut on_delta: F,
+) -> Result<Value, ProviderError>
+where
+    F: FnMut(String),
+{
+    control.check().map_err(non_retryable_provider_error)?;
+    let response_timeout = control.remaining().map_err(non_retryable_provider_error)?;
     let profile = profile.clone();
     let payload = payload.clone();
     let (sender, receiver) = mpsc::channel();
@@ -88,17 +103,33 @@ where
             );
             let _ = sender.send(WorkerEvent::Finished(result));
         })
-        .map_err(|error| format!("启动 Provider 请求线程失败：{error}"))?;
+        .map_err(|error| ProviderError {
+            kind: ProviderErrorKind::Transport,
+            message: format!("启动 Provider 请求线程失败：{error}"),
+            retryable: true,
+        })?;
     loop {
-        control.check()?;
+        control.check().map_err(non_retryable_provider_error)?;
         match receiver.recv_timeout(Duration::from_millis(40)) {
             Ok(WorkerEvent::Delta(content)) => on_delta(content),
-            Ok(WorkerEvent::Finished(result)) => return result.map_err(|error| error.message),
+            Ok(WorkerEvent::Finished(result)) => return result,
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err("Provider 请求线程意外退出".to_owned());
+                return Err(ProviderError {
+                    kind: ProviderErrorKind::Transport,
+                    message: "Provider 请求线程意外退出".to_owned(),
+                    retryable: true,
+                });
             }
         }
+    }
+}
+
+fn non_retryable_provider_error(message: String) -> ProviderError {
+    ProviderError {
+        kind: ProviderErrorKind::Configuration,
+        message,
+        retryable: false,
     }
 }
 
@@ -164,7 +195,7 @@ where
     let mut response = request.send_json(&payload).map_err(|error| ProviderError {
         kind: ProviderErrorKind::Transport,
         message: format!("Provider 请求失败：{error}"),
-        retryable: true,
+        retryable: retryable_transport_error(&error),
     })?;
     if stream {
         parse_chat_completion_stream(BufReader::new(response.body_mut().as_reader()), on_delta)
@@ -183,6 +214,20 @@ where
                 retryable: false,
             })?;
         Ok(normalize_chat_completion_response(response))
+    }
+}
+
+fn retryable_transport_error(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::StatusCode(status) => {
+            matches!(*status, 408 | 409 | 425 | 429) || (500..=599).contains(status)
+        }
+        ureq::Error::Io(_)
+        | ureq::Error::Timeout(_)
+        | ureq::Error::HostNotFound
+        | ureq::Error::Protocol(_)
+        | ureq::Error::ConnectionFailed => true,
+        _ => false,
     }
 }
 
@@ -815,5 +860,15 @@ mod tests {
                 .and_then(Value::as_str),
             Some("inspect project")
         );
+    }
+
+    #[test]
+    fn retries_only_transient_http_statuses() {
+        for status in [408, 409, 425, 429, 500, 502, 503, 504] {
+            assert!(retryable_transport_error(&ureq::Error::StatusCode(status)));
+        }
+        for status in [400, 401, 403, 404, 422] {
+            assert!(!retryable_transport_error(&ureq::Error::StatusCode(status)));
+        }
     }
 }

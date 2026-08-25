@@ -5,7 +5,8 @@
       "appimage"
     ],
     "resources": {
-      "resources/linux/runtime/": "runtime/"
+      "resources/linux/runtime/": "runtime/",
+      "resources/linux/jcode/": "jcode/"
     },
     "linux": {
       "appimage": {

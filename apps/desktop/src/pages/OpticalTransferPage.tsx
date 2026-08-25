@@ -1,6 +1,7 @@
-import { Camera, CheckCircle2, CircleStop, Copy, FileUp, Gauge, LoaderCircle, Play, QrCode, RadioTower, RefreshCw, Save, Share2, ShieldAlert, Smartphone } from "lucide-react";
+import { Camera, CheckCircle2, CircleStop, Copy, FileUp, Gauge, LoaderCircle, Maximize2, Minimize2, Play, QrCode, RadioTower, RefreshCw, Save, Share2, ShieldAlert, Smartphone, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import miniProgramCodeUrl from "../assets/optical-miniprogram-code.jpg";
 import { OpticalDecodePool, type OpticalDecodedSymbol } from "../features/optical/opticalDecodePool";
 import {
   DEFAULT_OPTICAL_FRAME_BYTES,
@@ -81,22 +82,68 @@ function canUseNativeFileShare(receivedFile: OpticalReceivedFile): boolean {
   }
 }
 
-function MobileWebEntry({ url, onCopy }: { url: string; onCopy: () => void }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+function MobileClientEntry({ url, onCopy }: { url: string; onCopy: () => void }) {
+  const webCanvasRef = useRef<HTMLCanvasElement>(null);
+  const expandedWebCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [expanded, setExpanded] = useState<"mini-program" | "web" | null>(null);
 
   useEffect(() => {
-    if (canvasRef.current) renderOpticalWebEntryQr(canvasRef.current, url);
-  }, [url]);
+    if (webCanvasRef.current) renderOpticalWebEntryQr(webCanvasRef.current, url);
+    if (expanded === "web" && expandedWebCanvasRef.current) {
+      renderOpticalWebEntryQr(expandedWebCanvasRef.current, url);
+    }
+  }, [expanded, url]);
+
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(null);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [expanded]);
 
   return (
-    <section className="optical-mobile-entry" aria-label="手机网页版入口">
-      <div className="optical-mobile-entry-qr"><canvas ref={canvasRef} aria-label="扫码打开 DRPA 光学传输网页版" /></div>
-      <div className="optical-mobile-entry-copy">
-        <strong><Smartphone size={15} /> 手机零安装</strong>
-        <p>扫码打开网页版，手机可直接发送或接收。</p>
-        <button className="button secondary" type="button" onClick={onCopy}><Copy size={13} /> 复制网址</button>
+    <section className="optical-mobile-entry" aria-label="手机接收端入口">
+      <header className="optical-mobile-entry-header">
+        <span><Smartphone size={15} /></span>
+        <div><strong>手机接收端</strong><small>扫码选择微信小程序或网页版</small></div>
+      </header>
+      <div className="optical-mobile-methods">
+        <article className="optical-mobile-method recommended">
+          <button className="optical-mobile-entry-qr" type="button" aria-label="放大微信小程序码" onClick={() => setExpanded("mini-program")}>
+            <img src={miniProgramCodeUrl} alt="DRPA 光学传输微信小程序码" />
+            <span>微信原生</span>
+          </button>
+          <div><strong>微信小程序</strong><p>接收校验后直接转发好友或群聊。</p></div>
+          <button className="button secondary" type="button" onClick={() => setExpanded("mini-program")}><Maximize2 size={12} /> 放大扫码</button>
+        </article>
+        <article className="optical-mobile-method">
+          <button className="optical-mobile-entry-qr" type="button" aria-label="放大网页版二维码" onClick={() => setExpanded("web")}>
+            <canvas ref={webCanvasRef} aria-label="扫码打开 DRPA 光学传输网页版" />
+            <span>零安装</span>
+          </button>
+          <div><strong>手机网页版</strong><p>浏览器直接发送或接收，兼容更多设备。</p></div>
+          <button className="button secondary" type="button" onClick={onCopy}><Copy size={12} /> 复制网址</button>
+        </article>
       </div>
-      <small>网络仅用于加载应用，文件数据不上传服务器。</small>
+      <small>网络只用于打开客户端；光学文件数据不上传服务器。</small>
+      {expanded && (
+        <div className="optical-mobile-code-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(null); }}>
+          <section className="optical-mobile-code-dialog" role="dialog" aria-modal="true" aria-label={expanded === "mini-program" ? "微信小程序码" : "手机网页版二维码"}>
+            <header>
+              <div><strong>{expanded === "mini-program" ? "微信小程序接收" : "手机网页版接收"}</strong><small>{expanded === "mini-program" ? "微信扫码，接收后可直接转发" : "手机浏览器扫码，零安装使用"}</small></div>
+              <button type="button" aria-label="关闭手机接收端二维码" onClick={() => setExpanded(null)}><X size={18} /></button>
+            </header>
+            <div className="optical-mobile-code-large">
+              {expanded === "mini-program"
+                ? <img src={miniProgramCodeUrl} alt="放大的 DRPA 光学传输微信小程序码" />
+                : <canvas ref={expandedWebCanvasRef} aria-label="放大的 DRPA 光学传输网页版二维码" />}
+            </div>
+            <p>{expanded === "mini-program" ? "小程序在本机完成扫描、恢复与 SHA-256 校验，完成后调用微信原生文件转发面板。" : "网页版支持发送与接收；浏览器允许时可调用系统分享面板，否则可保存文件。"}</p>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
@@ -119,7 +166,10 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
   const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [runtimeStats, setRuntimeStats] = useState<ReceiverRuntimeStats>({ engine: "正在加载", captureFps: 0, decodeFps: 0, workers: 0, regions: 0, dropped: 0, resolution: "--" });
+  const [nativeQrFullscreen, setNativeQrFullscreen] = useState(false);
+  const [fallbackQrFullscreen, setFallbackQrFullscreen] = useState(false);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
+  const qrStageRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scanCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -155,6 +205,49 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
   };
 
   useEffect(() => () => stopCamera(), []);
+
+  const qrFullscreen = nativeQrFullscreen || fallbackQrFullscreen;
+
+  useEffect(() => {
+    const syncFullscreen = () => setNativeQrFullscreen(document.fullscreenElement === qrStageRef.current);
+    const exitFallbackOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFallbackQrFullscreen(false);
+    };
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    document.addEventListener("keydown", exitFallbackOnEscape);
+    return () => {
+      document.removeEventListener("fullscreenchange", syncFullscreen);
+      document.removeEventListener("keydown", exitFallbackOnEscape);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (mode === "send") return;
+    setFallbackQrFullscreen(false);
+    if (document.fullscreenElement === qrStageRef.current) void document.exitFullscreen();
+  }, [mode]);
+
+  const toggleQrFullscreen = async () => {
+    const stage = qrStageRef.current;
+    if (!stage) return;
+    if (document.fullscreenElement === stage) {
+      await document.exitFullscreen();
+      return;
+    }
+    if (fallbackQrFullscreen) {
+      setFallbackQrFullscreen(false);
+      return;
+    }
+    try {
+      if (!stage.requestFullscreen) throw new Error("Fullscreen API unavailable");
+      await stage.requestFullscreen();
+      setNativeQrFullscreen(true);
+    } catch {
+      // Tauri WebView and iOS browsers may reject the native API. The fixed
+      // viewport fallback still gives the QR code the complete application window.
+      setFallbackQrFullscreen(true);
+    }
+  };
 
   useEffect(() => {
     if (!transfer || !qrCanvasRef.current) return;
@@ -501,7 +594,7 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
       {mode === "send" ? (
         <main className="optical-layout send-layout">
           <section className="optical-control-panel">
-            {webEntryUrl && <MobileWebEntry url={webEntryUrl} onCopy={() => void copyWebEntryUrl()} />}
+            {webEntryUrl && <MobileClientEntry url={webEntryUrl} onCopy={() => void copyWebEntryUrl()} />}
             <div className="optical-section-title"><RadioTower size={17} /><div><strong>高速发送设置</strong><span>单文件最大 {formatBytes(MAX_OPTICAL_FILE_BYTES)}</span></div></div>
             <label className="optical-dropzone" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void selectFile(event.dataTransfer.files[0]); }}>
               <input type="file" onChange={(event) => { void selectFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
@@ -516,7 +609,8 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
             {transfer && <dl className="optical-file-meta"><div><dt>文件</dt><dd>{transfer.name}</dd></div><div><dt>原始大小</dt><dd>{formatBytes(transfer.size)}</dd></div><div><dt>源块</dt><dd>{transfer.totalChunks} × {formatBytes(transfer.blockBytes)}</dd></div><div><dt>压缩</dt><dd>{transfer.compression === "gzip" ? `${formatBytes(transfer.transmittedSize)} gzip` : "未压缩"}</dd></div><div className="wide"><dt>SHA-256</dt><dd><code>{transfer.sha256}</code></dd></div></dl>}
             <button className={`button ${sending ? "danger" : "primary"} wide`} type="button" disabled={!transfer || preparing} onClick={() => setSending((value) => !value)}>{sending ? <CircleStop size={16} /> : <Play size={16} />}{sending ? "停止发送" : "开始高速发送"}</button>
           </section>
-          <section className="optical-stage">
+          <section ref={qrStageRef} className={`optical-stage${qrFullscreen ? " is-qr-fullscreen" : ""}`}>
+            {transfer && <button className="optical-fullscreen-toggle" type="button" aria-label={qrFullscreen ? "退出二维码全屏" : "全屏显示二维码"} aria-pressed={qrFullscreen} onClick={() => void toggleQrFullscreen()}>{qrFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}<span>{qrFullscreen ? "退出全屏" : "全屏显示"}</span></button>}
             {transfer ? <><div className={`optical-qr-shell optical-grid-${sending ? codeCount : 1}`}><canvas ref={qrCanvasRef} aria-label="动态光学传输二维码" /></div><div className="optical-stage-status"><span className={sending ? "live" : ""} /><strong>{sending ? "高速发送中" : "已暂停"}</strong><span>序号 {currentFrame.sequence}</span><small>周期位置 {currentFrame.cycle + 1}/{transfer.totalChunks * 2}</small></div></> : <div className="optical-stage-empty"><QrCode size={54} /><h2>二维码将在这里显示</h2><p>默认 24 FPS、1465 B、单码以稳定为先；确认对焦稳定后再提高容量或增加同屏二维码。</p></div>}
           </section>
         </main>
@@ -530,7 +624,7 @@ export function OpticalTransferPage({ saveFile, webEntryUrl }: OpticalTransferPa
             {receivedFile && <div className="optical-received"><CheckCircle2 size={54} /><h2>文件校验完成</h2><p>{receivedFile.name} · {formatBytes(receivedFile.bytes.byteLength)}</p><code>{receivedFile.sha256}</code></div>}
           </section>
           <aside className="optical-control-panel receive-controls">
-            {webEntryUrl && <MobileWebEntry url={webEntryUrl} onCopy={() => void copyWebEntryUrl()} />}
+            {webEntryUrl && <MobileClientEntry url={webEntryUrl} onCopy={() => void copyWebEntryUrl()} />}
             <div className="optical-section-title"><Camera size={17} /><div><strong>Fountain 接收进度</strong><span>{receiveProgress.name}</span></div></div>
             {cameraDevices.length > 1 && <label className="optical-setting"><span>接收摄像头</span><select value={selectedDeviceId} onChange={(event) => { const deviceId = event.target.value; setSelectedDeviceId(deviceId); if (scanning) void startCamera(deviceId, true); }}><option value="">自动选择后置镜头</option>{cameraDevices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `摄像头 ${index + 1}`}</option>)}</select></label>}
             {scanning && <div className="optical-runtime-grid"><div><span>解码器</span><strong>{runtimeStats.engine}</strong></div><div><span>捕获</span><strong>{runtimeStats.captureFps.toFixed(1)} FPS</strong></div><div><span>解码</span><strong>{runtimeStats.decodeFps.toFixed(1)} FPS</strong></div><div><span>跟踪区</span><strong>{runtimeStats.regions}</strong></div><div><span>Worker</span><strong>{runtimeStats.workers}</strong></div><div><span>忙丢帧</span><strong>{runtimeStats.dropped}</strong></div><small>{runtimeStats.resolution} · 新相机帧驱动</small></div>}

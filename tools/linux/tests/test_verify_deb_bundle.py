@@ -25,6 +25,8 @@ class DebianBundleTests(unittest.TestCase):
             "AppRun",
             "AppRun.wrapped",
             "usr/bin/drpa-desktop",
+            "usr/lib/DRPA Next/jcode/jcode",
+            "usr/lib/DRPA Next/jcode/jcode.bin",
             "usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess",
             "usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess",
         ):
@@ -127,6 +129,10 @@ class DebianBundleTests(unittest.TestCase):
                 manifest["runtimeManifestPath"],
                 "/opt/drpa-next/usr/lib/DRPA Next/runtime/manifest.json",
             )
+            self.assertEqual(
+                manifest["jcodePath"],
+                "/opt/drpa-next/usr/lib/DRPA Next/jcode/jcode",
+            )
             self.assertNotIn("libwebkit2gtk-4.1-0", manifest["depends"])
             self.assertIn(
                 "/opt/drpa-next/usr/lib/libwebkit2gtk-4.1.so.0",
@@ -169,6 +175,20 @@ class DebianBundleTests(unittest.TestCase):
                     root / "broken.deb",
                     "1.0.0-2",
                     root / "broken-work",
+                )
+
+    def test_rejects_non_executable_jcode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            appdir = self.create_appdir(root)
+            jcode = appdir / "usr/lib/DRPA Next/jcode/jcode"
+            jcode.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "JCode sidecar"):
+                build_bundled_deb(
+                    appdir,
+                    root / "broken-jcode.deb",
+                    "1.0.0-2",
+                    root / "broken-jcode-work",
                 )
 
 

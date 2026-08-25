@@ -87,6 +87,14 @@ REQUIRED_PRIVATE_RUNTIME_FILES = {
 }
 
 
+def is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def patchelf_value(path: Path, option: str) -> tuple[int, str]:
     result = subprocess.run(
         ["patchelf", option, str(path)],
@@ -140,6 +148,21 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         if private_root.is_dir()
         else []
     )
+    jcode_candidates = [
+        path
+        for path in app_root.rglob("jcode")
+        if path.is_file() and path.parent.name == "jcode"
+    ]
+    if len(jcode_candidates) != 1:
+        errors.append(f"UOS deb must contain exactly one Linux JCode sidecar, found {len(jcode_candidates)}")
+        jcode = None
+    else:
+        jcode = jcode_candidates[0]
+        if not jcode.stat().st_mode & 0o111:
+            errors.append("UOS Linux JCode sidecar is not executable")
+        jcode_binary = jcode.with_name("jcode.bin")
+        if not jcode_binary.is_file() or not jcode_binary.stat().st_mode & 0o111:
+            errors.append("UOS JCode native binary is missing or not executable")
     private_names = {Path(path).name for path in private_files}
     missing_private = sorted(REQUIRED_PRIVATE_RUNTIME_FILES - private_names)
     if missing_private:
@@ -190,7 +213,7 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
     interpreter_elfs = 0
     runpath_elfs: list[str] = []
     for path in sorted(app_root.rglob("*")):
-        if path.is_relative_to(private_root) or not is_x86_64_elf(path):
+        if is_within(path, private_root) or not is_x86_64_elf(path):
             continue
         needed_status, _ = patchelf_value(path, "--print-needed")
         if needed_status != 0:
@@ -297,6 +320,9 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
         "patchedElfCount": patched_elfs,
         "interpreterElfCount": interpreter_elfs,
         "runtimeManifestPath": f"/{runtime_manifest.relative_to(extract_root).as_posix()}",
+        "jcodePath": (
+            f"/{jcode.relative_to(extract_root).as_posix()}" if jcode is not None else None
+        ),
         "privateRuntimeFiles": private_files,
     }
 

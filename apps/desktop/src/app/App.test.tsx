@@ -466,8 +466,15 @@ describe("DRPA Next desktop shell", () => {
     const databaseToolSwitch = screen.getByRole("switch", { name: "只读数据库" });
     expect(masterToolSwitch).toBeChecked();
     expect(databaseToolSwitch).toBeEnabled();
+    const systemScope = screen.getByRole("button", { name: /整个操作系统/ });
+    const projectScope = screen.getByRole("button", { name: /仅当前项目/ });
+    expect(systemScope).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(projectScope);
+    expect(useAppStore.getState().agentToolPolicy.fileReadScope).toBe("project");
+    expect(projectScope).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(masterToolSwitch);
     expect(databaseToolSwitch).toBeDisabled();
+    expect(systemScope).toBeDisabled();
   });
 
   it("collapses and restores the global and workbench sidebars", async () => {
@@ -633,6 +640,7 @@ describe("DRPA Next desktop shell", () => {
       stopReason: "completed",
       rounds: 1,
       toolCalls: 1,
+      retryCount: 0,
     });
     useAppStore.setState({ activeNavigation: "agent" });
     render(<App />);
@@ -678,6 +686,43 @@ describe("DRPA Next desktop shell", () => {
     const previousSession = screen.getByRole("button", { name: "打开对话 校验当前项目" });
     fireEvent.click(previousSession);
     expect(screen.getAllByText("项目校验通过。")[0]).toBeVisible();
+  });
+
+  it("opens an arbitrary file as a persistent project conversation", async () => {
+    const project = {
+      id: "project-000000000000000000000088",
+      name: "external-notes",
+      path: "D:\\shared\\external-notes",
+      createdAt: 1,
+      updatedAt: 1,
+      sessionCount: 1,
+      source: "external" as const,
+    };
+    const session = {
+      id: "agent-external-file",
+      title: "notes.txt",
+      projectId: project.id,
+      createdAt: 1,
+      updatedAt: 1,
+      revision: 1,
+      messages: [],
+      selectedSkillIds: [],
+      contextFiles: ["D:\\shared\\external-notes\\notes.txt"],
+      messageCount: 0,
+      bodyState: "ready" as const,
+    };
+    vi.spyOn(desktopGateway, "listAgentProjects").mockResolvedValue([project]);
+    const openFile = vi.spyOn(desktopGateway, "openAgentFileSession").mockResolvedValue(session);
+    useAppStore.setState({ activeNavigation: "agent", workspaceScopeLoaded: true });
+    render(<AgentPage />);
+
+    await screen.findByText("SESSION.DB");
+    fireEvent.click(screen.getAllByRole("button", { name: "打开任意文件作为项目" })[0]);
+
+    await waitFor(() => expect(openFile).toHaveBeenCalledOnce());
+    expect(await screen.findByText("重点文件：notes.txt")).toBeVisible();
+    expect(screen.getByText("外部文件项目")).toBeVisible();
+    expect(useAppStore.getState().activeAgentSessionId).toBe(session.id);
   });
 
   it("migrates only legacy Agent sessions missing from session.db before clearing the cache", async () => {
@@ -846,7 +891,7 @@ describe("DRPA Next desktop shell", () => {
       return () => {};
     });
     let resolveFirst!: (value: Awaited<ReturnType<typeof desktopGateway.runAgentTurn>>) => void;
-    const result = { message: "# 实时结果\n\nMarkdown 已完成。", tools: [], usage: { promptTokens: 30, completionTokens: 12 }, durationMs: 80, stopReason: "completed", rounds: 1, toolCalls: 0 };
+    const result = { message: "# 实时结果\n\nMarkdown 已完成。", tools: [], usage: { promptTokens: 30, completionTokens: 12 }, durationMs: 80, stopReason: "completed", rounds: 1, toolCalls: 0, retryCount: 0 };
     const runAgent = vi.spyOn(desktopGateway, "runAgentTurn")
       .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
       .mockResolvedValue(result);
@@ -892,6 +937,59 @@ describe("DRPA Next desktop shell", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "重新生成回复" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "重新生成回复" }));
     await waitFor(() => expect(runAgent).toHaveBeenCalledTimes(3));
+  });
+
+  it("persists a failed Agent trajectory and continues without deleting the failed attempt", async () => {
+    useAppStore.setState({ activeNavigation: "agent" });
+    let streamListener: ((event: import("../domain/models").AgentStreamEvent) => void) | undefined;
+    vi.spyOn(desktopGateway, "listenAgentStream").mockImplementation(async (_requestId, listener) => {
+      streamListener = listener;
+      return () => undefined;
+    });
+    const saveSession = vi.spyOn(desktopGateway, "saveAgentSession");
+    const runAgent = vi.spyOn(desktopGateway, "runAgentTurn")
+      .mockImplementationOnce(async () => {
+        streamListener?.({ type: "roundStarted", round: 1 });
+        streamListener?.({ type: "delta", content: "已读取 manifest，" });
+        streamListener?.({
+          type: "tool",
+          tool: { callId: "read-1", name: "read_file", status: "completed", summary: "读取完成", output: "schema: 2", ordinal: 1, round: 1 },
+        });
+        streamListener?.({ type: "retrying", round: 2, attempt: 2, maxAttempts: 4, delayMs: 1_000, error: "HTTP 503" });
+        throw new Error("upstream HTTP 503");
+      })
+      .mockResolvedValue({
+        message: "已从失败处继续并完成。",
+        tools: [],
+        usage: { promptTokens: 20, completionTokens: 8 },
+        durationMs: 20,
+        stopReason: "completed",
+        rounds: 1,
+        toolCalls: 0,
+        retryCount: 0,
+      });
+    render(<App />);
+
+    const composer = await screen.findByPlaceholderText(/询问 RPAZ/);
+    fireEvent.change(composer, { target: { value: "检查项目" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    expect(await screen.findByText("已读取 manifest，")).toBeVisible();
+    expect((await screen.findAllByText(/upstream HTTP 503/)).length).toBeGreaterThan(0);
+    const continueButton = await screen.findByRole("button", { name: "从失败处继续" });
+    await waitFor(() => expect(saveSession.mock.calls.some(([session]) => (
+      session.messages.at(-1)?.run?.status === "failed"
+      && session.messages.at(-1)?.tools?.[0]?.callId === "read-1"
+      && session.messages.at(-1)?.run?.retries?.[0]?.attempt === 2
+    ))).toBe(true));
+
+    fireEvent.click(continueButton);
+    expect(await screen.findByText("已从失败处继续并完成。")).toBeVisible();
+    expect(screen.getByText("已读取 manifest，")).toBeVisible();
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(runAgent.mock.calls[1][0].messages).toEqual([
+      expect.objectContaining({ role: "user", content: "检查项目" }),
+    ]);
   });
 
   it("opens the local Markdown knowledge library, follows links, edits and creates inline", async () => {
@@ -1146,6 +1244,7 @@ describe("DRPA Next desktop shell", () => {
       stopReason: "completed",
       rounds: 1,
       toolCalls: 0,
+      retryCount: 0,
     });
     render(<StudioPage />);
 

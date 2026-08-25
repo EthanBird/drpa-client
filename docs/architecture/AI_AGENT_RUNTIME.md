@@ -10,6 +10,8 @@
 4. Rust Host 是工具能力、参数校验、运行预算和路径边界的最终裁决者，前端开关不是权限边界。
 5. 每个 model round 都重新组装 provider 上下文；压缩只作用于投影，不修改完整会话历史。
 6. 取消、超时和流解析失败必须沿同一个 `AgentRunControl` 传播到 Provider、Python、文档 worker、Skill 和 JCode 子进程。
+7. 失败不是删除事件：部分正文、Action/Observation、重试、上下文检查点和错误必须先写入 `session.db`，再向用户暴露恢复入口。
+8. 自动重试只覆盖可判定为暂时性的 Provider 请求；可能产生副作用的工具和外部进程不得整轮盲目重放。
 
 ## 2. 组件与所有权
 
@@ -79,8 +81,13 @@ flowchart TD
 3. 计算工具 schema 占用；工具定义过大时按预算裁剪并记录 `omittedTools`。
 4. 将 assistant tool-call 与对应 tool result 作为不可分割组装单元。
 5. 从最新消息向前保留连续上下文，始终保留 system 与最新用户任务。
-6. 发出 `contextAssembled` 事件，记录估算 token、保留/省略消息数和工具数。
-7. 调用 Provider，执行并记录工具结果，然后在下一轮重新核算。
+6. 所有开头的固定 system 上下文（策略、项目上下文、结构化检查点）作为不可裁剪前缀；较早的本轮工具组转换成有大小上限的证据摘要，而不是只记录“已省略”。
+7. 发出 `contextAssembled` 事件，记录估算 token、保留/省略消息数和工具数。
+8. 调用 Provider，执行并记录工具结果，然后在下一轮重新核算。
+
+跨 Turn 的历史超过消息数或 token 预算时，Harness 生成结构化 `contextCheckpoint`，保留用户目标与约束、决定、文件/工具证据、失败原因、未完成事项和下一步。检查点携带覆盖消息数与 SHA-256 前缀摘要；只有原始历史前缀完全匹配时才复用。压缩模型不可用时退化为有界原始历史尾部，不会因此清空会话。检查点与每轮压缩/重试元数据随 assistant 消息写入 `session.db`。
+
+运行与界面共享同一套有序事件语义：一次用户请求是 `Turn`，每次模型请求是 `Step`，工具请求是 `Action`，工具返回是 `Observation`。工具事件携带跨步骤稳定的 `ordinal`、所属 `round`、脱敏后的输入、状态和耗时；`running` 到 `completed/failed` 必须按 `callId` 原位更新，不能重新追加导致顺序跳动。历史会话只持久化最终 Observation，流式运行同时投影正在执行的 Action。
 
 达到 rounds、tool calls、wall time 或重复调用熔断条件时，不把预算耗尽伪装成普通错误。运行关闭工具定义，再请求一次最终总结；结果通过 `stopReason`、`rounds` 和 `toolCalls` 说明实际停止原因与消耗。
 
@@ -115,10 +122,18 @@ RPAZ Agent 和 Local Dify 共用 `provider.rs`：
 - 统一普通 JSON 与 SSE 增量解析；
 - 统一配置、HTTP、协议、取消和超时错误分类；
 - Provider 调用在阻塞工作线程执行，协调线程轮询 `AgentRunControl`，因此 UI 取消不等待长 HTTP 超时。
+- 408、409、425、429、5xx 和连接/超时类错误最多尝试 4 次，使用指数退避与抖动；401、403、参数错误和响应协议错误立即失败。
+- 流式请求在重试前发出 `contentReplace` 回滚该次未完成增量，避免重连后把相同片段重复拼接。重试事件进入运行日志和会话轨迹。
 
 Provider 的连接、发送和首个响应阶段使用握手时限；响应正文使用当前 Agent Run 的剩余预算。固定握手时限不得作为整个 SSE 的 `global` 时限，否则持续输出的长任务会在固定秒数处被误杀。MiniMax OpenAI-compatible 请求启用 `reasoning_split`，解析器保留 `reasoning_content`/`reasoning_details` 供工具回合续接，但只向 `Delta` 和最终 Markdown 投影可见答案；`<think>` 与 `<mm:think>` 是兼容兜底，不进入正文。
 
 JCode 使用相同的请求 profile 生成 session 配置，但进程协议仍由 JCode adapter 负责。MiniMax profile 同样写入 `reasoning_split = true`，NDJSON adapter 再执行一次可见内容分流。Provider key 只通过进程环境传入，不写入 JCode 配置文件或运行日志。
+
+桌面包按目标平台携带 JCode：Windows 为 `$RESOURCES/jcode/jcode.exe`，Linux/UOS 为 `$RESOURCES/jcode/jcode`。Linux 资源在打包前由固定版本与 SHA-256 的下载器落盘，AppImage、普通 deb 和 UOS deb 都必须验证文件存在且可执行；运行时缺失提示也按当前平台显示文件名。
+
+DRPA 启动 JCode 时固定关闭其默认 `auto-poke`，避免未完成 Todo 在 Host 预算之外自动开启额外回合。Adapter 会累计 NDJSON 的 `tool_input/tool_exec/tool_done`，执行 DRPA 的工具调用上限，并在相邻的同名同参 Action 连续返回相同 Observation 后终止 sidecar，记录 `repeated-tool-call`；不同操作或结果变化都视为取得进展并重置检测链，允许正常轮询和修改后复查。
+
+JCode 一旦报告 session id 就更新 DRPA 的可恢复索引；即使进程随后 502、退出或返回空答复，下一次“从失败处继续”仍使用该 session，而不是重新创建一个失忆的 JCode 进程。DRPA 不自动重放整个 JCode 进程，因为其中可能已经执行写文件或命令等副作用操作。
 
 ## 7. 附件、产物与外部进程
 
@@ -155,6 +170,8 @@ npm run build
 - MiniMax 累积式 reasoning/content 快照不会重复，推理字段和分片 `<think>` 标签不会进入正文事件。
 - 上下文裁剪不会拆开 tool-call/tool-result 组。
 - 工具 schema 计入 token 预算，禁用工具既不可见也不可执行。
+- 暂时性 Provider 错误会退避重试，认证/参数错误不会重试；失败后部分正文、工具顺序、错误和检查点仍可从会话恢复。
+- 上下文检查点只对完全匹配的历史前缀生效；修改旧消息后必须失效并重建。
 - 附件可在重启后恢复，删除会话时文件和索引一致清理。
 
 ## 9. 后续扩展边界

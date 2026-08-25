@@ -28,6 +28,8 @@ FORBIDDEN_DESKTOP_DEPENDENCIES = {
 REQUIRED_BUNDLED_PATHS = (
     "opt/drpa-next/AppRun",
     "opt/drpa-next/AppRun.wrapped",
+    "opt/drpa-next/usr/lib/DRPA Next/jcode/jcode",
+    "opt/drpa-next/usr/lib/DRPA Next/jcode/jcode.bin",
     "opt/drpa-next/usr/lib/libwebkit2gtk-4.1.so.0",
     "opt/drpa-next/usr/lib/libjavascriptcoregtk-4.1.so.0",
     "opt/drpa-next/usr/lib/libgtk-3.so.0",
@@ -96,6 +98,12 @@ def verify_deb_bundle(deb: Path, expected_version: str, extract_root: Path) -> d
         errors.append(
             "deb private desktop runtime is incomplete: " + ", ".join(missing_bundled_paths)
         )
+    jcode = extract_root / "opt/drpa-next/usr/lib/DRPA Next/jcode/jcode"
+    if not jcode.is_file() or not jcode.stat().st_mode & 0o111:
+        errors.append("deb does not contain executable Linux JCode sidecar")
+    jcode_binary = extract_root / "opt/drpa-next/usr/lib/DRPA Next/jcode/jcode.bin"
+    if not jcode_binary.is_file() or not jcode_binary.stat().st_mode & 0o111:
+        errors.append("deb does not contain executable JCode native binary")
     runtime_manifests = [
         path
         for path in extract_root.rglob("manifest.json")
@@ -144,6 +152,7 @@ def verify_deb_bundle(deb: Path, expected_version: str, extract_root: Path) -> d
             "sha256": sha256(deb),
         },
         "runtimeManifestPath": f"/{relative_runtime_manifest}",
+        "jcodePath": "/opt/drpa-next/usr/lib/DRPA Next/jcode/jcode",
         "binaryPaths": [f"/{path.relative_to(extract_root).as_posix()}" for path in binaries],
         "bundledDesktopRuntimePaths": [f"/{path}" for path in REQUIRED_BUNDLED_PATHS],
     }

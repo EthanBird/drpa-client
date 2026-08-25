@@ -16,7 +16,7 @@ DRPA Next `2.1.1` 正式提供 Linux x86_64 runtime-complete AppImage、现代�
 | Linux x86_64 runtime 规格 | 已声明 | `offline/runtime-spec.json` 的 `linux-x86_64` |
 | Linux sealed runtime 构建器 | 已有通路 | `tools/offline/build_runtime_bundle.py` 支持 `linux-x86_64` |
 | Linux sealed runtime CI | 已接入 | `.github/workflows/linux-desktop.yml` 的 Ubuntu 22.04 原生构建与 air-gap smoke |
-| AppImage 最终布局 | 已实现并发布，跨发行版回归持续进行 | `tauri.linux.conf.json` 把 runtime 放入只读 resource，Host 使用 `resource_dir` 定位 |
+| AppImage 最终布局 | 已实现并发布，跨发行版回归持续进行 | `tauri.linux.conf.json` 把 runtime 与 Linux JCode 放入只读 resource，Host 使用 `resource_dir` 定位 |
 | deb 最终布局 | 已实现并发布 | AppImage AppDir→`/opt/drpa-next` 私有桌面运行时、`dpkg-deb` manifest、无系统 WebKitGTK 安装/启动/卸载检查 |
 | UOS 20 deb | 已接入发布门禁 | `/opt/drpa-next-uos20` 私有 glibc/C++ 层、ELF 固定解释器/RPATH、Debian 10/glibc 2.28 运行验证 |
 | Linux 文件级热更新 | 未实现 | 当前命令、协议与独立 Worker 只接受 `windows-x86_64` |
@@ -241,7 +241,7 @@ python tools/linux/verify_runtime_layout.py --runtime-root /path/to/runtime
 
 ## 7. Tauri Linux 包
 
-Tauri 使用 `apps/desktop/src-tauri/tauri.linux.conf.json` 生成 AppImage，并把构建阶段临时目录 `resources/linux/runtime/` 映射到 `$RESOURCES/runtime/`；该临时目录被 `.gitignore` 排除，禁止把几百 MB 二进制提交进 Git。deb 不再使用 Tauri 默认模板，因为该模板声明系统 WebKitGTK；`tools/linux/build_bundled_deb.py` 从验证后的 AppImage AppDir 生成 `/opt/drpa-next` 安装布局、`/usr/bin/drpa-next` 启动器、桌面文件和基础 `Depends`。
+Tauri 使用 `apps/desktop/src-tauri/tauri.linux.conf.json` 生成 AppImage，并把构建阶段临时目录 `resources/linux/runtime/` 与 `resources/linux/jcode/` 分别映射到 `$RESOURCES/runtime/` 和 `$RESOURCES/jcode/`；临时二进制被 `.gitignore` 排除。JCode 必须由 `tools/linux/fetch_jcode.py` 按固定版本和 SHA-256 取回，并保留可执行位。deb 不再使用 Tauri 默认模板，因为该模板声明系统 WebKitGTK；`tools/linux/build_bundled_deb.py` 从验证后的 AppImage AppDir 生成 `/opt/drpa-next` 安装布局、`/usr/bin/drpa-next` 启动器、桌面文件和基础 `Depends`。
 
 本地完整构建顺序：
 
@@ -251,6 +251,9 @@ rm -rf apps/desktop/src-tauri/resources/linux/runtime
 mkdir -p apps/desktop/src-tauri/resources/linux/runtime
 cp -a "$runtime_stage/." apps/desktop/src-tauri/resources/linux/runtime/
 python tools/linux/verify_runtime_layout.py --runtime-root apps/desktop/src-tauri/resources/linux/runtime
+rm -rf apps/desktop/src-tauri/resources/linux/jcode
+python tools/linux/fetch_jcode.py --output-dir apps/desktop/src-tauri/resources/linux/jcode
+apps/desktop/src-tauri/resources/linux/jcode/jcode --version
 npm run tauri:build --workspace @drpa/desktop -- --bundles appimage
 ```
 
@@ -278,7 +281,7 @@ DRPA_DATA_DIR="$PWD/.drpa-appimage-data" \
   path/to/DRPA-Next_2.1.1_amd64.AppImage
 ```
 
-CI 会用 `--appimage-extract` 找到 AppImage 的最终 `runtime/manifest.json`，对解包后的真实文件再次运行布局检查和离线 bootstrap，再用 `APPIMAGE_EXTRACT_AND_RUN=1 + Xvfb` 确认 GUI 不早退。对 deb，`tools/linux/verify_deb_bundle.py` 会检查 architecture/version/Depends、`/usr/bin/drpa-next`、`/opt/drpa-next` 中的 WebKitGTK/JavaScriptCoreGTK/GTK/GStreamer/helper process、只读 runtime 与 wheel 散列，并生成机器可读 manifest。Runner 随后卸载系统 `libwebkit2gtk-4.1-0`，确认 `apt` 安装 deb 不会将其拉回，再完成 Xvfb 启动和卸载，确认 XDG 用户数据不被删除。
+构建门禁会用 `--appimage-extract` 找到 AppImage 的最终 `runtime/manifest.json` 与 `jcode/jcode`，对解包后的真实文件再次运行布局检查、JCode 版本检查和离线 bootstrap，再用 `APPIMAGE_EXTRACT_AND_RUN=1 + Xvfb` 确认 GUI 不早退。对 deb，`tools/linux/verify_deb_bundle.py` 会检查 architecture/version/Depends、`/usr/bin/drpa-next`、`/opt/drpa-next` 中的 WebKitGTK/JavaScriptCoreGTK/GTK/GStreamer/helper process、可执行 Linux JCode、只读 runtime 与 wheel 散列，并生成机器可读 manifest。
 
 deb 安装与卸载：
 
