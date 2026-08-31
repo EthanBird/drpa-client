@@ -55,6 +55,8 @@ button:disabled { cursor: not-allowed; opacity: 0.58; }
 .workspace-error { margin: 0; padding: 7px 10px; border-top: 1px solid color-mix(in srgb, var(--danger) 24%, var(--border-subtle)); background: color-mix(in srgb, var(--surface-1) 92%, var(--danger)); color: var(--danger); font-size: calc(8px * var(--font-scale)); line-height: 1.4; }
 .titlebar-spacer { align-self: stretch; flex: 1; min-width: 36px; }
 .sync-state { margin-right: 10px; padding: 6px 9px; }
+.sync-state-readonly { cursor: default; }
+.sync-state-readonly:hover { background: transparent; color: var(--text-2); }
 .pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
 .window-controls { display: flex; align-self: stretch; }
 .window-controls button { display: grid; place-items: center; width: 42px; border: 0; background: transparent; color: var(--text-3); cursor: pointer; }

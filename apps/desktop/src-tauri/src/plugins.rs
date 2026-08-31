@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use drpa_install::ComponentLeaseGuard;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::State;
@@ -542,6 +543,7 @@ struct RunningPlugin {
     child: Child,
     started_at: Instant,
     endpoint: String,
+    _runtime_lease: Option<ComponentLeaseGuard>,
 }
 
 #[derive(Debug, Clone)]
@@ -1021,9 +1023,10 @@ pub(crate) fn start_plugin_inner(
     workspace_root: &Path,
     plugin_id: &str,
     python: Option<&Path>,
+    runtime_lease: Option<ComponentLeaseGuard>,
     manager: &PluginManager,
 ) -> Result<(), String> {
-    let result = start_plugin_process(workspace_root, plugin_id, python, manager);
+    let result = start_plugin_process(workspace_root, plugin_id, python, runtime_lease, manager);
     if let Err(error) = &result
         && let Ok(mut errors) = manager.inner.last_errors.lock()
     {
@@ -1036,6 +1039,7 @@ fn start_plugin_process(
     workspace_root: &Path,
     plugin_id: &str,
     python: Option<&Path>,
+    runtime_lease: Option<ComponentLeaseGuard>,
     manager: &PluginManager,
 ) -> Result<(), String> {
     let manager_plugin_key = plugin_manager_key(workspace_root, plugin_id);
@@ -1103,6 +1107,7 @@ fn start_plugin_process(
             &state,
             service,
             python,
+            runtime_lease.clone(),
             Arc::clone(&log_buffer),
             Arc::clone(&redactions),
             manager,
@@ -1128,6 +1133,7 @@ fn start_plugin_process(
         workspace_root,
         plugin_id,
         python.map(Path::to_path_buf),
+        runtime_lease,
         manager,
     );
     Ok(())
@@ -1141,6 +1147,7 @@ fn start_plugin_service(
     state: &PluginStateFile,
     service: &ResolvedPluginService,
     python: Option<&Path>,
+    runtime_lease: Option<ComponentLeaseGuard>,
     log_buffer: Arc<Mutex<VecDeque<PluginLogLine>>>,
     redactions: Arc<Vec<String>>,
     manager: &PluginManager,
@@ -1237,6 +1244,7 @@ fn start_plugin_service(
                 child,
                 started_at: Instant::now(),
                 endpoint,
+                _runtime_lease: runtime_lease,
             },
         );
     if let Some(health) = resolve_plugin_health(service, &state.config, root, &config_path)? {
@@ -1248,6 +1256,7 @@ fn start_plugin_service(
 pub(crate) fn start_autostart_plugins(
     workspace_root: &Path,
     python: Option<&Path>,
+    runtime_lease: Option<ComponentLeaseGuard>,
     manager: &PluginManager,
 ) -> Result<(), String> {
     ensure_plugins_root(workspace_root)?;
@@ -1264,7 +1273,7 @@ pub(crate) fn start_autostart_plugins(
             && state.autostart
             && resolved_plugin_services(&manifest).is_ok_and(|services| !services.is_empty())
         {
-            let _ = start_plugin_inner(workspace_root, &id, python, manager);
+            let _ = start_plugin_inner(workspace_root, &id, python, runtime_lease.clone(), manager);
         }
     }
     Ok(())
@@ -1676,6 +1685,7 @@ fn ensure_plugin_supervisor(
     workspace_root: &Path,
     plugin_id: &str,
     python: Option<PathBuf>,
+    runtime_lease: Option<ComponentLeaseGuard>,
     manager: &PluginManager,
 ) {
     let manager_plugin_key = plugin_manager_key(workspace_root, plugin_id);
@@ -1692,6 +1702,7 @@ fn ensure_plugin_supervisor(
     let inner = Arc::downgrade(&manager.inner);
     thread::spawn(move || {
         let mut retry_delay = Duration::from_secs(1);
+        let runtime_lease = runtime_lease;
         loop {
             thread::sleep(Duration::from_millis(750));
             let Some(strong) = Weak::upgrade(&inner) else {
@@ -1704,8 +1715,10 @@ fn ensure_plugin_supervisor(
                 .lock()
                 .is_ok_and(|desired| desired.contains(&manager_plugin_key));
             if !desired {
-                retry_delay = Duration::from_secs(1);
-                continue;
+                if let Ok(mut supervising) = manager.inner.supervising.lock() {
+                    supervising.remove(&manager_plugin_key);
+                }
+                return;
             }
 
             let _ = refresh_processes(&manager);
@@ -1737,7 +1750,13 @@ fn ensure_plugin_supervisor(
             if !still_desired {
                 continue;
             }
-            match start_plugin_inner(&workspace_root, &plugin_id, python.as_deref(), &manager) {
+            match start_plugin_inner(
+                &workspace_root,
+                &plugin_id,
+                python.as_deref(),
+                runtime_lease.clone(),
+                &manager,
+            ) {
                 Ok(()) => {
                     push_plugin_system_log(&manager, &manager_plugin_key, "服务已由宿主自动恢复。");
                     retry_delay = Duration::from_secs(1);
@@ -4245,7 +4264,7 @@ default_config:
 
         assert!(!plugin_services_require_bundled_python(&workspace, "dify2api").unwrap());
 
-        if let Err(error) = start_plugin_inner(&workspace, "dify2api", None, &manager) {
+        if let Err(error) = start_plugin_inner(&workspace, "dify2api", None, None, &manager) {
             let logs = manager
                 .inner
                 .logs
@@ -4329,7 +4348,7 @@ default_config:
         let mut state = read_plugin_state(&root, &manifest).unwrap();
         state.autostart = true;
         write_plugin_state(&root, &state).unwrap();
-        start_autostart_plugins(&workspace, None, &manager).unwrap();
+        start_autostart_plugins(&workspace, None, None, &manager).unwrap();
         assert!(service_is_running(&workspace, "dify2api", "gateway", &manager).unwrap());
         stop_plugin_inner(&workspace, "dify2api", &manager).unwrap();
         drop(occupied_listener);

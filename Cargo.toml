@@ -2,13 +2,18 @@
 resolver = "2"
 members = [
   "apps/desktop/src-tauri",
+  "crates/drpa-cli",
+  "crates/drpa-component-installer",
   "crates/drpa-host",
+  "crates/drpa-install",
+  "crates/drpa-kernel",
+  "crates/drpa-launcher",
   "crates/drpa-package",
   "crates/drpa-protocol",
 ]
 
 [workspace.package]
-version = "2.1.1"
+version = "3.0.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"

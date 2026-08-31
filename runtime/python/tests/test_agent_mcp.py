@@ -13,6 +13,10 @@ def test_mcp_exposes_chrome_rpaz_and_run_debug_tools() -> None:
     assert {
         "browser_open",
         "browser_snapshot",
+        "browser_back",
+        "browser_reload",
+        "browser_select",
+        "browser_scroll",
         "browser_click",
         "browser_type",
         "browser_screenshot",

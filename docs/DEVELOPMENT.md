@@ -1,6 +1,6 @@
 # DRPA Next 开发与交接手册
 
-本文档描述 `codex/drpa-next-platform` 分支和 `2.1.1` 桌面基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
+本文档描述 `codex/drpa-next-platform` 分支和 `3.0.0` Windows 模块化桌面基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
 
 ## 1. 产品状态
 

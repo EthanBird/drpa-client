@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-31
+
+### 模块化 Core 与发布
+
+- Windows Setup 改为不写注册表的轻量 Core 安装包，只内置 `drpa.exe`、稳定 Launcher 和原生 egui 组件向导；桌面 UI、Python/RPAZ、Chromium、Fixed WebView2、JCode 与 Python 3.14 Minimal 作为可独立安装、校验、激活、回滚和卸载的 `.drpac` 发布。
+- 新增安装目录发现、组件能力解析、事务安装、修复、垃圾回收和运行前自检；缺少 WebView2 时仍可使用命令行及 egui 向导，系统已有 WebView2 或 Chrome 时默认复用系统能力。
+- Runtime Profile 支持热切换隔离 Python 包层，运行环境页使用 uv 优先、pip 降级完成包列表、安装与卸载。
+
+### 数据工作台与桌面体验
+
+- SQLite 快捷键执行与按钮执行共享当前连接上下文；查询结果支持服务端分页、可调页长及 CSV、JSON、SQL、XLS、XLSX 导出。
+- 数据表树新增搜索、排序、筛选和右键操作；页面导航支持普通用户、开发者和自定义入口模式。
+
+### AI Agent 与自动化
+
+- Agent、JCode 增强重复工具调用防护、运行轨迹保留、上下文项目和浏览器能力发现；Python runtime 补充 Profile 包路径、Agent MCP 与 Jupyter 生命周期处理。
+- UOS Dify2API gateway 增强自签名证书兼容、退出诊断和受监督重启。
+
 ### UOS 插件服务
 
 - UOS 包修订提升为 `2.1.1-1+uos20.4`；Dify2API gateway 升级至 1.0.2，DRPA 会监督用户已启动的插件服务，在 UOS 偶发异常退出后按退避策略自动恢复，显式停止或禁用仍保持停止。

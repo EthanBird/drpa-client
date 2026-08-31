@@ -1,4 +1,4 @@
-name: Publish Windows full offline desktop release
+name: Publish Windows modular desktop release
 
 on:
   workflow_dispatch:
@@ -26,17 +26,17 @@ permissions:
   contents: write
 
 concurrency:
-  group: desktop-full-release-${{ github.ref }}
+  group: desktop-modular-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'release(windows):')
-    name: Build Windows x64 full installer
+    name: Build Windows x64 Core and components
     runs-on: windows-latest
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 2.1.1
+      DRPA_VERSION: 3.0.0
       WEBVIEW2_VERSION: 150.0.4078.65
       WEBVIEW2_URL: https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/c00b9782-0422-4114-be27-8eec079b394d/Microsoft.WebView2.FixedVersionRuntime.150.0.4078.65.x64.cab
       WEBVIEW2_SHA256: ca01385bc232dea83242c35ed78e98403866a36b1a0952e97fa7fd870fc39ab4
@@ -61,7 +61,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-full-release-x86_64-pc-windows-msvc
+          key: desktop-modular-release-x86_64-pc-windows-msvc
       - run: npm ci
       - name: Generate native icon formats
         run: npm exec --workspace @drpa/desktop -- tauri icon src-tauri/icons/icon.png
@@ -69,7 +69,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           & ../../node_modules/.bin/tauri.cmd build --ci --target x86_64-pc-windows-msvc --no-bundle
-      - name: Assemble registry-free Windows installer
+      - name: Assemble registry-free modular Windows release
         shell: pwsh
         run: |
           $assets = Join-Path $env:RUNNER_TEMP "desktop-assets"
@@ -107,33 +107,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Installed-layout Python/Jupyter/Agent import smoke failed" }
           Remove-Item (Join-Path $portable "data") -Recurse -Force
 
-          python tools/windows/build_update_package.py --stage $portable --version "$env:DRPA_VERSION" --catalog-only
-          if ($LASTEXITCODE -ne 0) { throw "Failed to build the full install catalog" }
-          Copy-Item "$portable/install-manifest.json" (Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-install-manifest.json")
-
           choco install nsis --version=3.12.0 --no-progress --yes
           $makensis = "C:/Program Files (x86)/NSIS/makensis.exe"
           if (-not (Test-Path $makensis)) { throw "Pinned NSIS compiler is missing" }
           $installer = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-setup.exe"
-          & $makensis "/INPUTCHARSET" "UTF8" "/DPAYLOAD_DIR=$portable" "/DOUTPUT_FILE=$installer" "/DICON_FILE=$env:GITHUB_WORKSPACE/apps/desktop/src-tauri/icons/icon.ico" "installer/windows/drpa-next.nsi"
-          if ($LASTEXITCODE -ne 0) { throw "Failed to compile registry-free Windows installer" }
-          $registryCalls = Select-String -Path "installer/windows/drpa-next.nsi" -Pattern "WriteReg|DeleteReg|ReadReg|InstallDirRegKey" -CaseSensitive:$false
-          if ($registryCalls) { throw "Installer contains a forbidden registry instruction" }
-      - name: Upload full Windows package
+          & tools/windows/build_modular_setup.ps1 -Stage $portable -Version $env:DRPA_VERSION -Output $installer -ComponentsOutput (Join-Path $assets "components") -Makensis $makensis
+          if ($LASTEXITCODE -ne 0) { throw "Failed to build the modular Windows release" }
+      - name: Upload modular Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: drpa-next-${{ env.DRPA_VERSION }}-windows-x86_64-full
+          name: drpa-next-${{ env.DRPA_VERSION }}-windows-x86_64-modular
           path: ${{ runner.temp }}/desktop-assets/*
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
 
   publish:
-    name: Publish Windows v2.1.1 full release
+    name: Publish Windows v3.0.0 modular release
     needs: build
     runs-on: ubuntu-latest
     env:
-      DRPA_VERSION: 2.1.1
+      DRPA_VERSION: 3.0.0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -146,9 +140,11 @@ jobs:
           mkdir -p artifacts/example
           cp examples/bing_daily_image.rpaz "artifacts/example/drpa-example-bing-daily-image-${DRPA_VERSION}.rpaz"
           mapfile -t assets < <(find artifacts -type f | sort)
-          test "${#assets[@]}" -eq 3
+          test "${#assets[@]}" -ge 8
+          test "$(find artifacts -type f -name '*.drpac' | wc -l)" -ge 6
+          test "$(find artifacts -type f -name 'drpa-next-*-windows-x86_64-setup.exe' | wc -l)" -eq 1
           test "$(find artifacts -type f -name '*.drpa-update' | wc -l)" -eq 0
-      - name: Publish full Windows release
+      - name: Publish modular Windows release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -156,12 +152,11 @@ jobs:
           set -euo pipefail
           mapfile -t assets < <(find artifacts -type f | sort)
           tag="desktop-v${DRPA_VERSION}"
-          title="DRPA Next ${DRPA_VERSION} Windows x64 + UOS full offline release"
-          notes="$(printf 'DRPA Next %s full offline release.\n\nThis release adds Python Flow Beta to Studio with static AST projection, visual low-code editing, validation and source round-tripping. New Studio projects include an AI-oriented README, and the sealed runtime now bundles RPA for Python 1.50.0 plus the platform TagUI engine for offline execution.\n\nWindows assets contain the complete x64 Setup installer, install inventory and Bing example RPAZ. Verified Linux/UOS assets are added by the Linux packaging workflow. Incremental update packages are not produced.' "$DRPA_VERSION")"
+          title="DRPA Next ${DRPA_VERSION} · Windows x64 modular offline release"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" -f sha="$GITHUB_SHA" -F force=true >/dev/null
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes "$notes" --latest
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes-file "docs/releases/${DRPA_VERSION}.md" --latest
           else
-            gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title "$title" --notes "$notes"
+            gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title "$title" --notes-file "docs/releases/${DRPA_VERSION}.md"
           fi

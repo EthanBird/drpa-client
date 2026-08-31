@@ -35,6 +35,8 @@
 .remote-connection-settings:hover { background: var(--surface-3); color: var(--text-1); }
 .data-pane-section { display: flex; align-items: center; justify-content: space-between; flex: 0 0 30px; padding: 0 12px; color: var(--text-3); font-size: calc(9px * var(--font-scale)); font-weight: 720; letter-spacing: .06em; text-transform: uppercase; }
 .data-pane-section em { display: grid; place-items: center; min-width: 19px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--surface-3); color: var(--text-2); font-style: normal; font-size: calc(8px * var(--font-scale)); }
+.database-table-search { display: flex; flex: 0 0 28px; align-items: center; gap: 5px; margin: 0 7px 5px; padding: 0 7px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-2); color: var(--text-3); }
+.database-table-search input { min-width: 0; width: 100%; padding: 0; border: 0; outline: none; background: transparent; color: var(--text-1); font: calc(8px * var(--font-scale)) var(--font-sans); }
 .database-tables { flex: 1; min-height: 0; overflow: auto; padding: 0 7px 8px; }
 .database-tables button { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto 14px; align-items: center; gap: 5px; width: 100%; height: 32px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; text-align: left; }
 .database-tables button:hover { background: var(--surface-2); color: var(--text-1); }
@@ -60,6 +62,16 @@
 .query-results > header strong { font-size: calc(10px * var(--font-scale)); }
 .query-results > header span { color: var(--text-3); font-size: calc(8px * var(--font-scale)); }
 .query-results > header button { display: flex; align-items: center; gap: 5px; height: 26px; padding: 0 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text-2); font-size: calc(8px * var(--font-scale)); cursor: pointer; }
+.query-results > header { flex: 0 0 auto; min-height: 42px; gap: 10px; }
+.query-results > header .query-result-title { min-width: 130px; }
+.query-results > header .query-result-tools { display: flex; flex: 1; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.result-search { display: flex; align-items: center; gap: 4px; width: min(150px, 16vw); height: 26px; padding: 0 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text-3); }
+.result-search input { min-width: 0; width: 100%; padding: 0; border: 0; outline: none; background: transparent; color: var(--text-1); font: calc(8px * var(--font-scale)) var(--font-sans); }
+.result-page-size { display: flex; align-items: center; gap: 4px; height: 26px; padding-left: 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text-3); font-size: calc(8px * var(--font-scale)); white-space: nowrap; }
+.result-page-size select, .result-export-format select { height: 24px; padding: 0 4px; border: 0; outline: none; background: transparent; color: var(--text-2); font: calc(8px * var(--font-scale)) var(--font-sans); }
+.result-export-format { display: flex; height: 26px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); }
+.query-export-status { display: flex; flex: 0 0 25px; align-items: center; gap: 5px; min-width: 0; padding: 0 12px; border-bottom: 1px solid color-mix(in srgb, var(--success) 18%, var(--border-subtle)); background: var(--success-soft); color: var(--success); font-size: calc(8px * var(--font-scale)); }
+.query-export-status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .query-placeholder, .query-success { display: grid; flex: 1; place-content: center; justify-items: center; gap: 8px; color: var(--text-3); font-size: calc(9px * var(--font-scale)); }
 .query-success { color: var(--success); }
 .query-success span { color: var(--text-3); }
@@ -70,9 +82,16 @@
 .result-grid { min-width: 100%; border-collapse: separate; border-spacing: 0; font: calc(9px * var(--font-scale))/1.35 var(--font-mono); white-space: nowrap; }
 .result-grid th, .result-grid td { max-width: 360px; height: 29px; padding: 0 9px; overflow: hidden; border-right: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); text-align: left; text-overflow: ellipsis; }
 .result-grid th { position: sticky; z-index: 2; top: 0; background: var(--log-header); color: var(--text-2); font-weight: 700; }
+.result-grid th > button { display: flex; align-items: center; justify-content: space-between; gap: 7px; width: 100%; height: 28px; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.result-grid th > button em { color: var(--accent-strong); font-style: normal; }
 .result-grid tbody tr:hover td { background: var(--log-hover); }
 .result-grid .row-number { position: sticky; left: 0; width: 44px; min-width: 44px; background: var(--surface-2); color: var(--text-3); text-align: right; }
 .result-grid th.row-number { z-index: 3; background: var(--log-header); }
+.query-pagination { display: flex; flex: 0 0 34px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px 0 13px; border-top: 1px solid var(--border-subtle); background: var(--surface-2); color: var(--text-3); font-size: calc(8px * var(--font-scale)); }
+.query-pagination > div { display: flex; align-items: center; gap: 6px; }
+.query-pagination strong { min-width: 58px; color: var(--text-2); text-align: center; }
+.query-pagination button { display: flex; align-items: center; gap: 3px; height: 25px; padding: 0 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-1); color: var(--text-2); font-size: calc(8px * var(--font-scale)); cursor: pointer; }
+.query-pagination button:disabled, .query-results > header button:disabled { opacity: .45; cursor: not-allowed; }
 .inspector-table-name { display: flex; align-items: center; gap: 7px; flex: 0 0 39px; padding: 0 11px; border-bottom: 1px solid var(--border-subtle); }
 .inspector-table-name strong { flex: 1; overflow: hidden; font-size: calc(10px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }
 .inspector-table-name span { color: var(--text-3); font-size: calc(8px * var(--font-scale)); }
@@ -94,6 +113,18 @@
 .query-history button strong { color: var(--accent-strong); font: 700 calc(8px * var(--font-scale)) var(--font-mono); }
 .query-history button small { flex: 1; overflow: hidden; font-size: calc(8px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }
 .query-history button em { display: flex; align-items: center; gap: 4px; color: var(--text-3); font-size: calc(7px * var(--font-scale)); font-style: normal; }
+
+.data-table-context-menu { position: fixed; z-index: 80; width: 210px; overflow: hidden; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-1); box-shadow: 0 16px 44px rgba(10,18,32,.24); }
+.data-table-context-menu > header { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 7px 7px; border-bottom: 1px solid var(--border-subtle); color: var(--accent-strong); }
+.data-table-context-menu > header span { min-width: 0; }
+.data-table-context-menu > header strong, .data-table-context-menu > header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.data-table-context-menu > header strong { color: var(--text-1); font-size: calc(9px * var(--font-scale)); }
+.data-table-context-menu > header small { margin-top: 2px; color: var(--text-3); font-size: calc(7px * var(--font-scale)); font-weight: 500; }
+.data-table-context-menu > button { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 6px; width: 100%; height: 31px; padding: 0 7px; border: 0; border-radius: 5px; background: transparent; color: var(--text-2); cursor: pointer; font-size: calc(9px * var(--font-scale)); text-align: left; }
+.data-table-context-menu > button:hover { background: var(--surface-2); color: var(--text-1); }
+.data-table-context-menu > button:disabled { opacity: .4; cursor: not-allowed; }
+.data-table-context-menu > button kbd { color: var(--text-3); font-size: calc(7px * var(--font-scale)); }
+.context-menu-separator { height: 1px; margin: 4px 5px; background: var(--border-subtle); }
 
 .sql-ai-backdrop { position: absolute; z-index: 30; inset: 0; display: flex; justify-content: flex-end; background: rgba(12,18,28,.28); backdrop-filter: blur(1px); }
 .sql-ai-drawer { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(500px, calc(100% - 32px)); height: 100%; overflow: hidden; border-left: 1px solid var(--border); background: var(--surface-1); box-shadow: -18px 0 42px rgba(12,18,28,.18); animation: sql-ai-enter .18s ease-out; }

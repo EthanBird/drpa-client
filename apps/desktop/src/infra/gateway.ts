@@ -20,6 +20,8 @@ import type {
   AgentSkillPackage,
   CurrentUser,
   DatabaseColumn,
+  DatabaseExportFormat,
+  DatabaseExportResult,
   DatabaseInfo,
   DatabaseQueryResult,
   DatabaseTable,
@@ -60,6 +62,7 @@ import type {
   PluginToolDescriptor,
   PluginToolWorkbenchResult,
   SystemMetricsSnapshot,
+  RuntimePythonPackageCatalog,
   RuntimeStatus,
   RunDetail,
   StudioCellResult,
@@ -129,7 +132,9 @@ export interface DesktopGateway {
   getWorkspaceDatabaseInfo(): Promise<DatabaseInfo>;
   listDatabaseTables(): Promise<DatabaseTable[]>;
   describeDatabaseTable(tableName: string): Promise<DatabaseColumn[]>;
-  executeDatabaseSql(sql: string): Promise<DatabaseQueryResult>;
+  executeDatabaseSql(sql: string, offset?: number, limit?: number): Promise<DatabaseQueryResult>;
+  selectDatabaseExportPath(format: DatabaseExportFormat, suggestedName: string): Promise<string | null>;
+  exportDatabaseQueryResult(result: DatabaseQueryResult, format: DatabaseExportFormat, targetPath: string, tableName: string): Promise<DatabaseExportResult>;
   getDatabaseSchemaContext(): Promise<string>;
   openWorkspaceDatabaseDirectory(): Promise<void>;
   selectDatabaseSourceFile(engine: "sqlite" | "excel"): Promise<string | null>;
@@ -139,7 +144,7 @@ export interface DesktopGateway {
   testRemoteDatabaseConnection(profile: RemoteDatabaseProfile, password: string): Promise<RemoteConnectionTest>;
   listRemoteDatabaseTables(profileId: string, password: string): Promise<DatabaseTable[]>;
   describeRemoteDatabaseTable(profileId: string, password: string, tableName: string): Promise<DatabaseColumn[]>;
-  executeRemoteDatabaseSql(profileId: string, password: string, sql: string): Promise<DatabaseQueryResult>;
+  executeRemoteDatabaseSql(profileId: string, password: string, sql: string, offset?: number, limit?: number): Promise<DatabaseQueryResult>;
   getRemoteDatabaseSchemaContext(profileId: string, password: string): Promise<string>;
   getBiDashboard(): Promise<DashboardDocument>;
   saveBiDashboard(document: DashboardDocument): Promise<DashboardDocument>;
@@ -207,6 +212,10 @@ export interface DesktopGateway {
   setAgentExtensionEnabled(extensionId: string, enabled: boolean): Promise<AgentExtensionSummary>;
   removeAgentExtension(extensionId: string): Promise<void>;
   getRuntimeStatus(): Promise<RuntimeStatus>;
+  selectRuntimeProfile(profileId: string): Promise<RuntimeStatus>;
+  listRuntimePythonPackages(): Promise<RuntimePythonPackageCatalog>;
+  installRuntimePythonPackage(requirement: string): Promise<RuntimePythonPackageCatalog>;
+  uninstallRuntimePythonPackage(packageName: string): Promise<RuntimePythonPackageCatalog>;
   getSystemMetrics(): Promise<SystemMetricsSnapshot>;
   getPlatformCapabilities(): Promise<PlatformCapabilities>;
   initializeRuntime(): Promise<RuntimeStatus>;
@@ -1119,9 +1128,11 @@ const mockGateway: DesktopGateway = {
       { ordinal: 1, name: "name", dataType: "TEXT", notNull: true, primaryKey: false },
     ];
   },
-  async executeDatabaseSql(sql) {
-    return { columns: ["preview", "characters"], rows: [["浏览器预览", sql.length]], affectedRows: 0, durationMs: 1, truncated: false, statementType: "SELECT" };
+  async executeDatabaseSql(sql, offset = 0, limit = 1_000) {
+    return { columns: ["preview", "characters"], rows: [["浏览器预览", sql.length]], affectedRows: 0, durationMs: 1, truncated: false, statementType: "SELECT", offset, limit, hasMore: false };
   },
+  async selectDatabaseExportPath() { return null; },
+  async exportDatabaseQueryResult(result, format, targetPath) { return { path: targetPath, format, rowCount: result.rows.length }; },
   async getDatabaseSchemaContext() {
     return "-- SQLite 工作区数据库结构\n\nCREATE TABLE example_tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, status TEXT);\n";
   },
@@ -1151,8 +1162,8 @@ const mockGateway: DesktopGateway = {
   async describeRemoteDatabaseTable() {
     return [{ ordinal: 0, name: "id", dataType: "bigint", notNull: true, primaryKey: false }];
   },
-  async executeRemoteDatabaseSql(_profileId, _password, sql) {
-    return { columns: ["remote", "characters"], rows: [[true, sql.length]], affectedRows: 0, durationMs: 12, truncated: false, statementType: "SELECT" };
+  async executeRemoteDatabaseSql(_profileId, _password, sql, offset = 0, limit = 1_000) {
+    return { columns: ["remote", "characters"], rows: [[true, sql.length]], affectedRows: 0, durationMs: 12, truncated: false, statementType: "SELECT", offset, limit, hasMore: false };
   },
   async getRemoteDatabaseSchemaContext() {
     return "-- PostgreSQL 数据库结构\n\nCREATE TABLE public.remote_tasks (id bigint NOT NULL);\n";
@@ -1176,6 +1187,9 @@ const mockGateway: DesktopGateway = {
       durationMs: 3,
       truncated: false,
       statementType: "SELECT",
+      offset: 0,
+      limit: 1_000,
+      hasMore: false,
     };
   },
   async getVaultStatus() { return mockVaultStatus(); },
@@ -1680,7 +1694,44 @@ const mockGateway: DesktopGateway = {
     mockAgentExtensions = mockAgentExtensions.filter((item) => item.id !== extensionId);
   },
   async getRuntimeStatus() {
-    return { state: "ready", bundleVersion: "浏览器预览", pythonVersion: "3.11.9", runtimeRoot: "内存预览", environmentRoot: "内存预览", browserExecutable: "内存预览", message: "浏览器预览使用模拟运行环境" };
+    return {
+      state: "ready", bundleVersion: "浏览器预览", pythonVersion: "3.11.9",
+      runtimeRoot: "内存预览", environmentRoot: "内存预览", browserExecutable: "内存预览",
+      message: "浏览器预览使用模拟运行环境", profileId: "org.drpa.python-runtime",
+      profileName: "Python 3.11 Full", features: ["jupyter", "documents", "browser.drissionpage"],
+      profiles: [{
+        id: "org.drpa.python-runtime", name: "Python 3.11 Full", componentVersion: "preview",
+        pythonVersion: "3.11.9", environmentMode: "materialized", features: ["jupyter", "documents", "browser.drissionpage"],
+        selected: true, ready: true, inUse: 0, runtimeRoot: "内存预览", environmentRoot: "内存预览",
+      }],
+    };
+  },
+  async selectRuntimeProfile() { return this.getRuntimeStatus(); },
+  async listRuntimePythonPackages() {
+    return {
+      profileId: "org.drpa.python-runtime",
+      profileName: "Python 3.11 Full",
+      pythonVersion: "3.11.9",
+      backend: "uv",
+      backendVersion: "uv 0.11.28",
+      backendPath: "runtime/tools/uv",
+      overlayRoot: "浏览器预览数据/runtime-package-overlays/full/site-packages",
+      packages: [
+        { name: "pandas", version: "2.3.0", source: "runtime", location: "runtime", removable: false },
+        { name: "rich", version: "14.0.0", source: "user", location: "用户包层", removable: true },
+      ],
+    };
+  },
+  async installRuntimePythonPackage(requirement) {
+    const catalog = await this.listRuntimePythonPackages();
+    const name = requirement.split(/[<>=!~\s[]/, 1)[0] || requirement;
+    catalog.packages.unshift({ name, version: "preview", source: "user", location: catalog.overlayRoot, removable: true });
+    return catalog;
+  },
+  async uninstallRuntimePythonPackage(packageName) {
+    const catalog = await this.listRuntimePythonPackages();
+    catalog.packages = catalog.packages.filter((item) => item.name !== packageName);
+    return catalog;
   },
   async getSystemMetrics() {
     return {
@@ -2094,7 +2145,22 @@ const tauriGateway: DesktopGateway = {
   getWorkspaceDatabaseInfo: () => invoke<DatabaseInfo>("get_workspace_database_info"),
   listDatabaseTables: () => invoke<DatabaseTable[]>("list_database_tables"),
   describeDatabaseTable: (tableName) => invoke<DatabaseColumn[]>("describe_database_table", { tableName }),
-  executeDatabaseSql: (sql) => invoke<DatabaseQueryResult>("execute_database_sql", { sql }),
+  executeDatabaseSql: (sql, offset, limit) => invoke<DatabaseQueryResult>("execute_database_sql", { sql, offset, limit }),
+  selectDatabaseExportPath: async (format, suggestedName) => {
+    const labels: Record<DatabaseExportFormat, string> = {
+      xlsx: "Excel 工作簿",
+      xls: "Excel 97-2003 XML",
+      csv: "CSV 数据",
+      json: "JSON 数据",
+      sql: "SQL INSERT 脚本",
+    };
+    const selected = await import("@tauri-apps/plugin-dialog").then(({ save }) => save({
+      defaultPath: `${suggestedName}.${format}`,
+      filters: [{ name: labels[format], extensions: [format] }],
+    }));
+    return selected ?? null;
+  },
+  exportDatabaseQueryResult: (result, format, targetPath, tableName) => invoke<DatabaseExportResult>("export_database_query_result", { result, format, targetPath, tableName }),
   getDatabaseSchemaContext: () => invoke<string>("get_database_schema_context"),
   openWorkspaceDatabaseDirectory: () => invoke<void>("open_workspace_database_directory"),
   selectDatabaseSourceFile: async (engine) => {
@@ -2115,7 +2181,7 @@ const tauriGateway: DesktopGateway = {
   testRemoteDatabaseConnection: (profile, password) => invoke<RemoteConnectionTest>("test_remote_database_connection", { profile, password }),
   listRemoteDatabaseTables: (profileId, password) => invoke<DatabaseTable[]>("list_remote_database_tables", { profileId, password }),
   describeRemoteDatabaseTable: (profileId, password, tableName) => invoke<DatabaseColumn[]>("describe_remote_database_table", { profileId, password, tableName }),
-  executeRemoteDatabaseSql: (profileId, password, sql) => invoke<DatabaseQueryResult>("execute_remote_database_sql", { profileId, password, sql }),
+  executeRemoteDatabaseSql: (profileId, password, sql, offset, limit) => invoke<DatabaseQueryResult>("execute_remote_database_sql", { profileId, password, sql, offset, limit }),
   getRemoteDatabaseSchemaContext: (profileId, password) => invoke<string>("get_remote_database_schema_context", { profileId, password }),
   getBiDashboard: () => invoke<DashboardDocument>("get_bi_dashboard"),
   saveBiDashboard: (document) => invoke<DashboardDocument>("save_bi_dashboard", { document }),
@@ -2237,6 +2303,10 @@ const tauriGateway: DesktopGateway = {
   setAgentExtensionEnabled: (extensionId, enabled) => invoke<AgentExtensionSummary>("set_agent_extension_enabled", { extensionId, enabled }),
   removeAgentExtension: (extensionId) => invoke<void>("remove_agent_extension", { extensionId }),
   getRuntimeStatus: () => invoke<RuntimeStatus>("get_runtime_status"),
+  selectRuntimeProfile: (profileId) => invoke<RuntimeStatus>("select_runtime_profile", { profileId }),
+  listRuntimePythonPackages: () => invoke<RuntimePythonPackageCatalog>("list_runtime_python_packages"),
+  installRuntimePythonPackage: (requirement) => invoke<RuntimePythonPackageCatalog>("install_runtime_python_package", { requirement }),
+  uninstallRuntimePythonPackage: (packageName) => invoke<RuntimePythonPackageCatalog>("uninstall_runtime_python_package", { packageName }),
   getSystemMetrics: () => invoke<SystemMetricsSnapshot>("get_system_metrics"),
   getPlatformCapabilities: () => invoke<PlatformCapabilities>("get_platform_capabilities"),
   initializeRuntime: () => invoke<RuntimeStatus>("initialize_runtime"),

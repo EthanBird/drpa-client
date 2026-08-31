@@ -21,7 +21,8 @@ use crate::local_dify_workflow::{
     graph_to_dify, is_workflow_mode, normalize_graph, validate_graph,
 };
 use crate::{
-    AppPaths, installed_package_catalog, knowledge_base, locate_runtime, locate_runtime_python,
+    AppPaths, configure_python_module_command, installed_package_catalog, knowledge_base,
+    locate_runtime,
 };
 
 const LOCAL_DIFY_SCHEMA: u32 = 2;
@@ -2220,7 +2221,7 @@ fn execute_workflow_python(
         inputs.insert("input".to_owned(), json!(request.query));
     }
     let payload = json!({"code": code, "inputs": inputs});
-    let python = locate_runtime_python(paths)?;
+    let runtime = locate_runtime(paths)?;
     let temporary = local_dify_root(paths).join("tmp");
     fs::create_dir_all(&temporary).map_err(|error| error.to_string())?;
     let id = Uuid::new_v4().simple().to_string();
@@ -2228,7 +2229,13 @@ fn execute_workflow_python(
     let stderr_path = temporary.join(format!("{id}.stderr"));
     let stdout = fs::File::create(&stdout_path).map_err(|error| error.to_string())?;
     let stderr = fs::File::create(&stderr_path).map_err(|error| error.to_string())?;
-    let wrapper = r#"import json, sys
+    let wrapper = r#"import json, os, site, sys
+overlay = os.environ.get('DRPA_PYTHON_PACKAGE_PATH', '').strip()
+if overlay:
+    site.addsitedir(overlay)
+    if overlay in sys.path:
+        sys.path.remove(overlay)
+    sys.path.insert(0, overlay)
 payload = json.load(sys.stdin)
 scope = {}
 exec(compile(payload['code'], '<local-dify-code>', 'exec'), scope, scope)
@@ -2240,7 +2247,7 @@ if not isinstance(result, dict):
     result = {'result': result}
 print(json.dumps(result, ensure_ascii=False))
 "#;
-    let mut command = Command::new(python);
+    let mut command = Command::new(&runtime.python);
     command
         .args(["-I", "-c", wrapper])
         .stdin(Stdio::piped())
@@ -2249,7 +2256,8 @@ print(json.dumps(result, ensure_ascii=False))
         .env("PYTHONNOUSERSITE", "1")
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8");
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("DRPA_PYTHON_PACKAGE_PATH", &runtime.package_overlay);
     hide_workflow_child_window(&mut command);
     let mut child = command
         .spawn()
@@ -2354,9 +2362,15 @@ fn execute_workflow_rpaz(
     let runtime = locate_runtime(paths)?;
     let stdout = fs::File::create(&stdout_path).map_err(|error| error.to_string())?;
     let stderr = fs::File::create(&stderr_path).map_err(|error| error.to_string())?;
-    let mut command = Command::new(runtime.python);
+    let mut command = Command::new(&runtime.python);
+    configure_python_module_command(
+        &mut command,
+        "drpa_runner.cli",
+        &runtime.package_overlay,
+        runtime.python_path.as_deref(),
+    );
     command
-        .args(["-m", "drpa_runner.cli", "--request"])
+        .arg("--request")
         .arg(&request_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
@@ -2365,9 +2379,6 @@ fn execute_workflow_rpaz(
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8");
-    if let Some(python_path) = runtime.python_path {
-        command.env("PYTHONPATH", python_path);
-    }
     if let Some(browser) = runtime.browser {
         command.env("DRPA_BROWSER_PATH", browser);
     }

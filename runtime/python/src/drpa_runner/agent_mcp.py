@@ -148,6 +148,28 @@ def browser_click(arguments: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "ref": ref, "url": str(page.url), "summary": f"Clicked Chrome element {ref}"}
 
 
+def browser_back(_arguments: dict[str, Any]) -> dict[str, Any]:
+    page = _page()
+    page.back()
+    return {
+        "ok": True,
+        "url": str(page.url),
+        "title": str(page.title),
+        "summary": f"Chrome navigated back to {page.title or page.url}",
+    }
+
+
+def browser_reload(_arguments: dict[str, Any]) -> dict[str, Any]:
+    page = _page()
+    page.refresh()
+    return {
+        "ok": True,
+        "url": str(page.url),
+        "title": str(page.title),
+        "summary": f"Reloaded Chrome page {page.title or page.url}",
+    }
+
+
 def browser_type(arguments: dict[str, Any]) -> dict[str, Any]:
     ref = str(arguments.get("ref", "")).strip()
     text = str(arguments.get("text", ""))
@@ -177,6 +199,53 @@ def browser_type(arguments: dict[str, Any]) -> dict[str, Any]:
     if not result.get("ok"):
         raise RuntimeError(str(result.get("error", "type failed")))
     return {"ok": True, "ref": ref, "submitted": submit, "summary": f"Typed into Chrome element {ref}"}
+
+
+def browser_select(arguments: dict[str, Any]) -> dict[str, Any]:
+    ref = str(arguments.get("ref", "")).strip()
+    value = str(arguments.get("value", ""))
+    if not ref:
+        raise ValueError("ref is required")
+    encoded_value = json.dumps(value)
+    body = f"""
+      if (!(element instanceof HTMLSelectElement)) return JSON.stringify({{ok:false,error:'element is not a select'}});
+      const option = Array.from(element.options).find((item) => item.value === {encoded_value} || item.text === {encoded_value});
+      if (!option) return JSON.stringify({{ok:false,error:'select option not found'}});
+      element.value = option.value;
+      element.dispatchEvent(new Event('input', {{bubbles:true}}));
+      element.dispatchEvent(new Event('change', {{bubbles:true}}));
+      return JSON.stringify({{ok:true,value:option.value,text:option.text}});
+    """
+    result = _run_json(_element_script(ref, body))
+    if not result.get("ok"):
+        raise RuntimeError(str(result.get("error", "select failed")))
+    return {
+        "ok": True,
+        "ref": ref,
+        "value": result.get("value"),
+        "text": result.get("text"),
+        "summary": f"Selected Chrome option for {ref}",
+    }
+
+
+def browser_scroll(arguments: dict[str, Any]) -> dict[str, Any]:
+    direction = str(arguments.get("direction", "down")).strip().lower()
+    if direction not in {"up", "down", "left", "right"}:
+        raise ValueError("direction must be up, down, left, or right")
+    amount = max(100, min(5_000, int(arguments.get("amount", 700))))
+    dx = amount if direction == "right" else -amount if direction == "left" else 0
+    dy = amount if direction == "down" else -amount if direction == "up" else 0
+    result = _run_json(
+        f"window.scrollBy({{left:{dx},top:{dy},behavior:'auto'}}); return JSON.stringify({{ok:true,x:window.scrollX,y:window.scrollY}});"
+    )
+    return {
+        "ok": True,
+        "direction": direction,
+        "amount": amount,
+        "x": result.get("x"),
+        "y": result.get("y"),
+        "summary": f"Scrolled Chrome {direction} by {amount}px",
+    }
 
 
 def browser_wait(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -238,9 +307,13 @@ def _host_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 
 TOOLS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "browser_open": browser_open,
+    "browser_back": browser_back,
+    "browser_reload": browser_reload,
     "browser_snapshot": browser_snapshot,
     "browser_click": browser_click,
     "browser_type": browser_type,
+    "browser_select": browser_select,
+    "browser_scroll": browser_scroll,
     "browser_wait": browser_wait,
     "browser_screenshot": browser_screenshot,
     "browser_status": browser_status,
@@ -266,9 +339,13 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 
 TOOL_DEFINITIONS = [
     {"name": "browser_open", "description": "Open a URL in bundled persistent DRPA Chrome.", "inputSchema": _schema({"url": {"type": "string"}}, ["url"])},
+    {"name": "browser_back", "description": "Navigate the persistent DRPA Chrome tab back.", "inputSchema": _schema({})},
+    {"name": "browser_reload", "description": "Reload the current persistent DRPA Chrome page.", "inputSchema": _schema({})},
     {"name": "browser_snapshot", "description": "Read current Chrome text and interactive element refs.", "inputSchema": _schema({"maxChars": {"type": "integer", "minimum": 1000, "maximum": 100000}})},
     {"name": "browser_click", "description": "Click an element ref from browser_snapshot.", "inputSchema": _schema({"ref": {"type": "string"}}, ["ref"])},
     {"name": "browser_type", "description": "Type into an element ref and optionally submit its form.", "inputSchema": _schema({"ref": {"type": "string"}, "text": {"type": "string"}, "submit": {"type": "boolean"}}, ["ref", "text"])},
+    {"name": "browser_select", "description": "Select an option by value or visible text using an element ref.", "inputSchema": _schema({"ref": {"type": "string"}, "value": {"type": "string"}}, ["ref", "value"])},
+    {"name": "browser_scroll", "description": "Scroll the current page in one direction.", "inputSchema": _schema({"direction": {"type": "string", "enum": ["up", "down", "left", "right"]}, "amount": {"type": "integer", "minimum": 100, "maximum": 5000}})},
     {"name": "browser_wait", "description": "Wait for time or page text.", "inputSchema": _schema({"seconds": {"type": "number", "minimum": 0, "maximum": 120}, "text": {"type": "string"}})},
     {"name": "browser_screenshot", "description": "Save a Chrome screenshot as an Agent artifact.", "inputSchema": _schema({"fullPage": {"type": "boolean"}})},
     {"name": "browser_status", "description": "Inspect the shared DRPA Chrome connection.", "inputSchema": _schema({})},
@@ -306,7 +383,7 @@ def _serve_mcp() -> int:
                 response = _mcp_result(request_id, {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "drpa-agent-tools", "version": "2.1.1"},
+                    "serverInfo": {"name": "drpa-agent-tools", "version": "3.0.0"},
                 })
             elif method == "tools/list":
                 response = _mcp_result(request_id, {"tools": TOOL_DEFINITIONS})

@@ -1306,11 +1306,11 @@ mod tests {
             &root,
             Path::new("C:/DRPA/runtime/python.exe"),
             Some(Path::new("C:/DRPA/runtime/chrome.exe")),
-            Some(&AgentBrowserSession {
-                port: 43_124,
-                profile_root: PathBuf::from("C:/DRPA/browser/session"),
-                artifact_root: PathBuf::from("C:/DRPA/agent/session/browser"),
-            }),
+            Some(&AgentBrowserSession::for_test(
+                43_124,
+                PathBuf::from("C:/DRPA/browser/session"),
+                PathBuf::from("C:/DRPA/agent/session/browser"),
+            )),
             "127.0.0.1:43123",
             "test-token",
         )

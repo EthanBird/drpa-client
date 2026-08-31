@@ -5,18 +5,25 @@ import "monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js";
 import {
   Braces,
   Check,
+  ChevronLeft,
   ChevronRight,
   Clock3,
   Copy,
+  ClipboardCopy,
   Cable,
   Database,
+  Download,
+  Eye,
+  FileCode2,
   FolderOpen,
+  Hash,
   KeyRound,
   LoaderCircle,
   Play,
   Plus,
   RefreshCw,
   Rows3,
+  Search,
   Sparkles,
   Settings2,
   Table2,
@@ -29,7 +36,7 @@ import remarkGfm from "remark-gfm";
 
 import { useAppStore } from "../app/store";
 import { SidebarToggle, useSidebarCollapsed } from "../components/SidebarToggle";
-import type { DatabaseColumn, DatabaseInfo, DatabaseQueryResult, DatabaseTable, RemoteConnectionTest, RemoteDatabaseProfile } from "../domain/models";
+import type { DatabaseColumn, DatabaseExportFormat, DatabaseInfo, DatabaseQueryResult, DatabaseTable, RemoteConnectionTest, RemoteDatabaseProfile } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
@@ -57,10 +64,20 @@ export function DataPage() {
   const inspectorCollapsed = useSidebarCollapsed("data-inspector");
   const [database, setDatabase] = useState<DatabaseInfo | null>(null);
   const [tables, setTables] = useState<DatabaseTable[]>([]);
+  const [tableFilter, setTableFilter] = useState("");
   const [selectedTable, setSelectedTable] = useState("");
   const [columns, setColumns] = useState<DatabaseColumn[]>([]);
   const [sql, setSql] = useState(DEFAULT_SQL);
   const [result, setResult] = useState<DatabaseQueryResult | null>(null);
+  const [lastStatement, setLastStatement] = useState("");
+  const [pageSize, setPageSize] = useState(loadQueryPageSize);
+  const [resultFilter, setResultFilter] = useState("");
+  const [resultSort, setResultSort] = useState<ResultSort>(null);
+  const [exportFormat, setExportFormat] = useState<DatabaseExportFormat>("xlsx");
+  const [exportScope, setExportScope] = useState<"page" | "all">("all");
+  const [exporting, setExporting] = useState(false);
+  const [exportStatus, setExportStatus] = useState("");
+  const [tableMenu, setTableMenu] = useState<TableContextMenu | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [executing, setExecuting] = useState(false);
@@ -82,10 +99,15 @@ export function DataPage() {
   const [connectionTest, setConnectionTest] = useState<RemoteConnectionTest | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const executingRef = useRef(false);
+  const runSqlRef = useRef<(editor?: monaco.editor.IStandaloneCodeEditor | null, page?: number, requestedPageSize?: number) => Promise<void>>(async () => {});
   const activeProfile = useMemo(
     () => remoteProfiles.find((profile) => profile.id === activeConnectionId) ?? null,
     [activeConnectionId, remoteProfiles],
   );
+  const visibleTables = useMemo(() => {
+    const filter = tableFilter.trim().toLocaleLowerCase();
+    return filter ? tables.filter((table) => table.name.toLocaleLowerCase().includes(filter)) : tables;
+  }, [tableFilter, tables]);
 
   const refreshSchema = useCallback(async () => {
     if (activeProfile) {
@@ -177,6 +199,26 @@ export function DataPage() {
     localStorage.setItem(queryHistoryStorageKey(), JSON.stringify(history.slice(0, 30)));
   }, [history]);
 
+  useEffect(() => {
+    localStorage.setItem(queryPageSizeStorageKey(), String(pageSize));
+  }, [pageSize]);
+
+  useEffect(() => {
+    if (!tableMenu) return;
+    const close = () => setTableMenu(null);
+    const closeOnKey = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", closeOnKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", closeOnKey);
+    };
+  }, [tableMenu]);
+
   const inspectTable = async (table: DatabaseTable) => {
     setSelectedTable(table.name);
     setError("");
@@ -192,45 +234,58 @@ export function DataPage() {
 
   const openTableQuery = (table: DatabaseTable) => {
     void inspectTable(table);
-    setSql(`SELECT *\nFROM ${quoteTableIdentifier(table.name, activeProfile?.engine)}\nLIMIT 200;\n`);
+    setSql(`SELECT *\nFROM ${quoteTableIdentifier(table.name, activeProfile?.engine)};\n`);
     window.setTimeout(() => editorRef.current?.focus(), 0);
   };
 
-  const runSql = async (editor = editorRef.current) => {
-    if (!editor || executingRef.current) return;
-    const model = editor.getModel();
-    const selection = editor.getSelection();
-    const selected = model && selection && !selection.isEmpty() ? model.getValueInRange(selection) : "";
-    const statement = (selected || editor.getValue()).trim();
-    if (!statement) return;
+  const executeStatement = useCallback(async (statement: string, page = 1, requestedPageSize = pageSize, recordHistory = true) => {
+    statement = statement.trim();
+    if (!statement || executingRef.current) return;
+    const offset = Math.max(0, page - 1) * requestedPageSize;
     executingRef.current = true;
     setExecuting(true);
     setError("");
     setCopied(false);
+    setExportStatus("");
     try {
       const nextResult = activeProfile
-        ? await desktopGateway.executeRemoteDatabaseSql(activeProfile.id, connectionPasswords[activeProfile.id] ?? "", statement)
-        : await desktopGateway.executeDatabaseSql(statement);
+        ? await desktopGateway.executeRemoteDatabaseSql(activeProfile.id, connectionPasswords[activeProfile.id] ?? "", statement, offset, requestedPageSize)
+        : await desktopGateway.executeDatabaseSql(statement, offset, requestedPageSize);
       setResult(nextResult);
-      setHistory((current) => [{
-        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        sql: statement.slice(0, 20_000),
-        statementType: nextResult.statementType,
-        executedAt: Date.now(),
-        durationMs: nextResult.durationMs,
-        rowCount: nextResult.rows.length,
-      }, ...current].slice(0, 30));
+      setLastStatement(statement);
+      if (recordHistory) {
+        setResultFilter("");
+        setResultSort(null);
+        setHistory((current) => [{
+          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          sql: statement.slice(0, 20_000),
+          statementType: nextResult.statementType,
+          executedAt: Date.now(),
+          durationMs: nextResult.durationMs,
+          rowCount: nextResult.rows.length,
+        }, ...current].slice(0, 30));
+      }
       if (!["SELECT", "EXPLAIN", "PRAGMA", "WITH"].includes(nextResult.statementType)) {
         await refreshSchema();
       }
     } catch (reason) {
-      setResult(null);
       setError(String(reason));
     } finally {
       executingRef.current = false;
       setExecuting(false);
     }
-  };
+  }, [activeProfile, connectionPasswords, pageSize, refreshSchema]);
+
+  const runSql = useCallback(async (editor = editorRef.current, page = 1, requestedPageSize = pageSize) => {
+    if (!editor) return;
+    const model = editor.getModel();
+    const selection = editor.getSelection();
+    const selected = model && selection && !selection.isEmpty() ? model.getValueInRange(selection) : "";
+    const statement = (selected || editor.getValue()).trim();
+    await executeStatement(statement, page, requestedPageSize, page === 1);
+  }, [executeStatement, pageSize]);
+
+  runSqlRef.current = runSql;
 
   const handleEditorMount = (editor: monaco.editor.IStandaloneCodeEditor, _monaco: Monaco) => {
     editorRef.current = editor;
@@ -238,7 +293,7 @@ export function DataPage() {
       id: "drpa.execute-sql",
       label: "执行 SQL",
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
-      run: () => runSql(editor),
+      run: () => runSqlRef.current(editor),
     });
   };
 
@@ -420,6 +475,104 @@ export function DataPage() {
     }
   };
 
+  const currentPage = result ? Math.floor(result.offset / Math.max(1, result.limit)) + 1 : 1;
+  const displayedRows = useMemo(() => {
+    if (!result) return [];
+    const filter = resultFilter.trim().toLocaleLowerCase();
+    const rows = result.rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => !filter || row.some((value) => formatCell(value).toLocaleLowerCase().includes(filter)));
+    if (!resultSort) return rows;
+    return [...rows].sort((left, right) => {
+      const comparison = compareResultValues(left.row[resultSort.column], right.row[resultSort.column]);
+      return resultSort.direction === "asc" ? comparison : -comparison;
+    });
+  }, [result, resultFilter, resultSort]);
+
+  const changeResultSort = (column: number) => {
+    setResultSort((current) => current?.column === column
+      ? current.direction === "asc" ? { column, direction: "desc" } : null
+      : { column, direction: "asc" });
+  };
+
+  const exportResult = async () => {
+    if (!result || result.columns.length === 0 || exporting) return;
+    const sourceName = sanitizeExportName(selectedTable || activeProfile?.name || "query-result");
+    const targetPath = await desktopGateway.selectDatabaseExportPath(exportFormat, sourceName);
+    if (!targetPath) return;
+    setExporting(true);
+    setExportStatus(exportScope === "all" ? "正在读取全部结果…" : "");
+    try {
+      let exportPayload = result;
+      if (exportScope === "all" && lastStatement) {
+        const rows: unknown[][] = [];
+        let offset = 0;
+        let chunk: DatabaseQueryResult;
+        do {
+          chunk = activeProfile
+            ? await desktopGateway.executeRemoteDatabaseSql(activeProfile.id, connectionPasswords[activeProfile.id] ?? "", lastStatement, offset, 20_000)
+            : await desktopGateway.executeDatabaseSql(lastStatement, offset, 20_000);
+          rows.push(...chunk.rows);
+          offset += chunk.rows.length;
+          setExportStatus(`正在读取全部结果… ${offset.toLocaleString()} 行`);
+          if (rows.length >= 1_000_000 && chunk.hasMore) throw new Error("结果超过 1,000,000 行，请增加 WHERE 条件后分批导出");
+        } while (chunk.hasMore && chunk.rows.length > 0);
+        exportPayload = { ...chunk, rows, offset: 0, limit: rows.length, hasMore: false };
+      }
+      const exported = await desktopGateway.exportDatabaseQueryResult(exportPayload, exportFormat, targetPath, selectedTable || "query_result");
+      setExportStatus(`已导出 ${exported.rowCount} 行：${exported.path}`);
+    } catch (reason) {
+      setError(`导出失败：${String(reason)}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const setTableStatement = (table: DatabaseTable, statement: string) => {
+    setSelectedTable(table.name);
+    setSql(`${statement.trim()}\n`);
+    setTableMenu(null);
+    window.setTimeout(() => editorRef.current?.focus(), 0);
+  };
+
+  const browseTable = async (table: DatabaseTable) => {
+    const statement = `SELECT *\nFROM ${quoteTableIdentifier(table.name, activeProfile?.engine)};`;
+    setTableStatement(table, statement);
+    void inspectTable(table);
+    await executeStatement(statement, 1, pageSize);
+  };
+
+  const countTable = async (table: DatabaseTable) => {
+    const statement = `SELECT COUNT(*) AS row_count\nFROM ${quoteTableIdentifier(table.name, activeProfile?.engine)};`;
+    setTableStatement(table, statement);
+    await executeStatement(statement, 1, pageSize);
+  };
+
+  const createMutationTemplate = async (table: DatabaseTable, kind: "insert" | "update") => {
+    setTableMenu(null);
+    let tableColumns: DatabaseColumn[];
+    try {
+      tableColumns = activeProfile
+        ? await desktopGateway.describeRemoteDatabaseTable(activeProfile.id, connectionPasswords[activeProfile.id] ?? "", table.name)
+        : await desktopGateway.describeDatabaseTable(table.name);
+    } catch (reason) {
+      setError(`读取字段结构失败：${String(reason)}`);
+      return;
+    }
+    setSelectedTable(table.name);
+    setColumns(tableColumns);
+    const quotedTable = quoteTableIdentifier(table.name, activeProfile?.engine);
+    const quotedColumns = tableColumns.map((column) => quoteTableIdentifier(column.name, activeProfile?.engine));
+    if (kind === "insert") {
+      setSql(`INSERT INTO ${quotedTable} (\n  ${quotedColumns.join(",\n  ")}\n) VALUES (\n  ${tableColumns.map((column) => `:${parameterName(column.name)}`).join(",\n  ")}\n);\n`);
+    } else {
+      const key = tableColumns.find((column) => column.primaryKey) ?? tableColumns[0];
+      const editable = tableColumns.filter((column) => column !== key);
+      setSql(`UPDATE ${quotedTable}\nSET\n  ${editable.map((column) => `${quoteTableIdentifier(column.name, activeProfile?.engine)} = :${parameterName(column.name)}`).join(",\n  ")}\nWHERE ${key ? `${quoteTableIdentifier(key.name, activeProfile?.engine)} = :${parameterName(key.name)}` : "/* 请填写条件 */"};\n`);
+    }
+    window.setTimeout(() => editorRef.current?.focus(), 0);
+  };
+
   return (
     <div className="page data-page">
       <header className="page-header data-header">
@@ -457,18 +610,25 @@ export function DataPage() {
               </div>
             ))}
           </div>
-          <div className="data-pane-section"><span>数据表</span><em>{tables.length}</em></div>
+          <div className="data-pane-section"><span>数据表</span><em>{visibleTables.length === tables.length ? tables.length : `${visibleTables.length}/${tables.length}`}</em></div>
+          <label className="database-table-search"><Search size={12} /><input value={tableFilter} onChange={(event) => setTableFilter(event.target.value)} placeholder="搜索表或视图" /></label>
           <div className="database-tables">
             {loading && <div className="data-loading"><LoaderCircle className="spin" size={14} /> 正在读取结构</div>}
             {!loading && tables.length === 0 && <div className="data-empty">尚无数据表。执行 CREATE TABLE 开始建模。</div>}
-            {tables.map((table) => (
+            {!loading && tables.length > 0 && visibleTables.length === 0 && <div className="data-empty">没有匹配的表或视图。</div>}
+            {visibleTables.map((table) => (
               <button
                 className={selectedTable === table.name ? "selected" : ""}
                 key={table.name}
                 type="button"
                 onClick={() => void inspectTable(table)}
                 onDoubleClick={() => openTableQuery(table)}
-                title="单击查看字段，双击生成查询"
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setTableMenu({ table, x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 300) });
+                }}
+                title="单击查看字段，双击生成查询，右键打开表操作"
               >
                 {table.kind === "view" ? <Braces size={14} /> : <Table2 size={14} />}
                 <span>{table.name}</span>
@@ -509,20 +669,29 @@ export function DataPage() {
           </div>
           <section className="query-results">
             <header>
-              <div><strong>查询结果</strong>{result && <span>{result.rows.length} 行 · {result.durationMs} ms{result.truncated ? " · 已截断" : ""}</span>}</div>
-              <button type="button" onClick={() => void copyResult()} disabled={!result || result.columns.length === 0}>{copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "已复制" : "复制 TSV"}</button>
+              <div className="query-result-title"><strong>查询结果</strong>{result && <span>第 {currentPage} 页 · {result.rows.length} 行 · {result.durationMs} ms{result.hasMore ? " · 还有更多" : ""}{result.truncated ? " · 单元格/容量已截断" : ""}</span>}</div>
+              <div className="query-result-tools">
+                <label className="result-search" title="筛选当前页"><Search size={12} /><input value={resultFilter} onChange={(event) => setResultFilter(event.target.value)} placeholder="筛选当前页" /></label>
+                <label className="result-page-size"><span>每页</span><select value={pageSize} onChange={(event) => { const nextSize = Number(event.target.value); setPageSize(nextSize); if (lastStatement) void executeStatement(lastStatement, 1, nextSize, false); }} disabled={executing}>{[100, 500, 1_500, 5_000, 10_000, 20_000].map((size) => <option value={size} key={size}>{size.toLocaleString()}</option>)}</select></label>
+                <label className="result-export-format"><select aria-label="导出格式" value={exportFormat} onChange={(event) => setExportFormat(event.target.value as DatabaseExportFormat)}><option value="xlsx">XLSX</option><option value="xls">XLS</option><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">SQL</option></select></label>
+                <label className="result-export-format"><select aria-label="导出范围" value={exportScope} onChange={(event) => setExportScope(event.target.value as "page" | "all")}><option value="all">全部结果</option><option value="page">当前页</option></select></label>
+                <button type="button" onClick={() => void exportResult()} disabled={!result || result.columns.length === 0 || exporting} title={exportScope === "all" ? "重新执行查询并导出全部结果" : "导出当前页查询结果"}>{exporting ? <LoaderCircle className="spin" size={13} /> : <Download size={13} />} 导出</button>
+                <button type="button" onClick={() => void copyResult()} disabled={!result || result.columns.length === 0}>{copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "已复制" : "TSV"}</button>
+              </div>
             </header>
+            {exportStatus && <div className="query-export-status"><Check size={12} /> <span title={exportStatus}>{exportStatus}</span></div>}
             {error && <div className="query-error"><strong>SQL 执行失败</strong><pre>{error}</pre></div>}
             {!error && !result && <div className="query-placeholder"><Rows3 size={23} /><span>执行 SQL 后在这里查看结果</span></div>}
             {!error && result && result.columns.length === 0 && <div className="query-success"><Check size={22} /><strong>执行成功</strong><span>影响 {result.affectedRows} 行 · {result.durationMs} ms</span></div>}
             {!error && result && result.columns.length > 0 && (
               <div className="result-grid-wrap">
                 <table className="result-grid">
-                  <thead><tr><th className="row-number">#</th>{result.columns.map((column, index) => <th key={`${column}-${index}`}>{column}</th>)}</tr></thead>
-                  <tbody>{result.rows.map((row, rowIndex) => <tr key={rowIndex}><td className="row-number">{rowIndex + 1}</td>{row.map((value, columnIndex) => <td key={columnIndex} title={formatCell(value)}>{formatCell(value)}</td>)}</tr>)}</tbody>
+                  <thead><tr><th className="row-number">#</th>{result.columns.map((column, index) => <th key={`${column}-${index}`}><button type="button" onClick={() => changeResultSort(index)} title="按此列排序当前页"><span>{column}</span>{resultSort?.column === index && <em>{resultSort.direction === "asc" ? "↑" : "↓"}</em>}</button></th>)}</tr></thead>
+                  <tbody>{displayedRows.map(({ row, index: rowIndex }) => <tr key={rowIndex}><td className="row-number">{result.offset + rowIndex + 1}</td>{row.map((value, columnIndex) => <td key={columnIndex} title={formatCell(value)} onDoubleClick={() => void navigator.clipboard.writeText(formatCell(value))}>{formatCell(value)}</td>)}</tr>)}</tbody>
                 </table>
               </div>
             )}
+            {!error && result && result.columns.length > 0 && <footer className="query-pagination"><span>显示 {displayedRows.length} / {result.rows.length} 行{resultFilter ? "（当前页筛选）" : ""}</span><div><button type="button" disabled={executing || result.offset === 0} onClick={() => void executeStatement(lastStatement, currentPage - 1, pageSize, false)}><ChevronLeft size={13} /> 上一页</button><strong>第 {currentPage} 页</strong><button type="button" disabled={executing || !result.hasMore} onClick={() => void executeStatement(lastStatement, currentPage + 1, pageSize, false)}>下一页 <ChevronRight size={13} /></button></div></footer>}
           </section>
         </main>
 
@@ -540,6 +709,23 @@ export function DataPage() {
           </div>
         </aside>}
       </div>
+
+      {tableMenu && (
+        <div className="data-table-context-menu" style={{ left: tableMenu.x, top: tableMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+          <header>{tableMenu.table.kind === "view" ? <Braces size={14} /> : <Table2 size={14} />}<span><strong>{tableMenu.table.name}</strong><small>{tableMenu.table.kind === "view" ? "视图操作" : "数据表操作"}</small></span></header>
+          <button type="button" role="menuitem" onClick={() => void browseTable(tableMenu.table)}><Eye size={14} /><span>浏览数据</span><kbd>双击</kbd></button>
+          <button type="button" role="menuitem" onClick={() => void countTable(tableMenu.table)}><Hash size={14} /><span>统计行数</span></button>
+          <button type="button" role="menuitem" onClick={() => { void inspectTable(tableMenu.table); setTableMenu(null); }}><Rows3 size={14} /><span>查看字段结构</span></button>
+          <div className="context-menu-separator" />
+          <button type="button" role="menuitem" onClick={() => setTableStatement(tableMenu.table, `SELECT *\nFROM ${quoteTableIdentifier(tableMenu.table.name, activeProfile?.engine)};`)}><FileCode2 size={14} /><span>生成 SELECT</span></button>
+          <button type="button" role="menuitem" disabled={tableMenu.table.kind === "view" || activeProfile?.engine === "excel"} onClick={() => void createMutationTemplate(tableMenu.table, "insert")}><Plus size={14} /><span>生成 INSERT</span></button>
+          <button type="button" role="menuitem" disabled={tableMenu.table.kind === "view" || activeProfile?.engine === "excel"} onClick={() => void createMutationTemplate(tableMenu.table, "update")}><FileCode2 size={14} /><span>生成 UPDATE</span></button>
+          {(activeProfile?.engine === "sqlite" || !activeProfile) && <button type="button" role="menuitem" onClick={() => setTableStatement(tableMenu.table, `SELECT type, name, sql\nFROM sqlite_master\nWHERE name = '${escapeSqlString(tableMenu.table.name)}';`)}><Braces size={14} /><span>查看建表 SQL</span></button>}
+          <div className="context-menu-separator" />
+          <button type="button" role="menuitem" onClick={() => { void navigator.clipboard.writeText(tableMenu.table.name); setTableMenu(null); }}><ClipboardCopy size={14} /><span>复制表名</span></button>
+          <button type="button" role="menuitem" onClick={() => { setTableMenu(null); void refreshSchema(); }}><RefreshCw size={14} /><span>刷新数据库结构</span></button>
+        </div>
+      )}
 
       {connectionDraft && (
         <div className="database-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !connectionBusy) setConnectionDraft(null); }}>
@@ -644,9 +830,27 @@ function loadQueryHistory(): QueryHistoryEntry[] {
   }
 }
 
+interface TableContextMenu {
+  table: DatabaseTable;
+  x: number;
+  y: number;
+}
+
+type ResultSort = { column: number; direction: "asc" | "desc" } | null;
+
 function queryHistoryStorageKey(): string {
   const workspaceId = localStorage.getItem("drpa-active-workspace-id") ?? "personal";
   return `drpa-data-query-history:${workspaceId}`;
+}
+
+function loadQueryPageSize(): number {
+  const parsed = Number(localStorage.getItem(queryPageSizeStorageKey()));
+  return [100, 500, 1_500, 5_000, 10_000, 20_000].includes(parsed) ? parsed : 500;
+}
+
+function queryPageSizeStorageKey(): string {
+  const workspaceId = localStorage.getItem("drpa-active-workspace-id") ?? "personal";
+  return `drpa-data-query-page-size:${workspaceId}`;
 }
 
 function quoteTableIdentifier(value: string, engine?: RemoteDatabaseProfile["engine"]): string {
@@ -667,6 +871,28 @@ function createRemoteProfile(engine: RemoteDatabaseProfile["engine"] = "postgres
     username: "",
     tlsMode: "prefer",
   };
+}
+
+function escapeSqlString(value: string): string {
+  return value.replaceAll("'", "''");
+}
+
+function parameterName(value: string): string {
+  const normalized = value.replace(/[^\p{Letter}\p{Number}_]+/gu, "_").replace(/^\d+/, "");
+  return normalized || "value";
+}
+
+function sanitizeExportName(value: string): string {
+  const sanitized = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/g, "").slice(0, 80);
+  return sanitized || "query-result";
+}
+
+function compareResultValues(left: unknown, right: unknown): number {
+  if (left === right) return 0;
+  if (left === null || left === undefined) return -1;
+  if (right === null || right === undefined) return 1;
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  return formatCell(left).localeCompare(formatCell(right), "zh-CN", { numeric: true, sensitivity: "base" });
 }
 
 function isFileDatabase(engine: RemoteDatabaseProfile["engine"]): engine is "sqlite" | "excel" {

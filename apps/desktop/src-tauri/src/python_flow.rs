@@ -4,7 +4,10 @@ use std::process::{Command, Stdio};
 use serde_json::{Value, json};
 use tauri::State;
 
-use crate::{AppPaths, configure_linux_process_group, hide_child_window, locate_runtime};
+use crate::{
+    AppPaths, configure_linux_process_group, configure_python_module_command, hide_child_window,
+    locate_runtime,
+};
 
 const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -77,12 +80,14 @@ fn invoke_converter(paths: &AppPaths, request: Value) -> Result<Value, String> {
     }
 
     let runtime = locate_runtime(paths)?;
-    let mut command = Command::new(runtime.python);
-    if runtime.python_path.is_none() {
-        command.arg("-I");
-    }
+    let mut command = Command::new(&runtime.python);
+    configure_python_module_command(
+        &mut command,
+        "drpa_runner.python_flow",
+        &runtime.package_overlay,
+        runtime.python_path.as_deref(),
+    );
     command
-        .args(["-m", "drpa_runner.python_flow"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -90,9 +95,6 @@ fn invoke_converter(paths: &AppPaths, request: Value) -> Result<Value, String> {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8");
-    if let Some(python_path) = runtime.python_path {
-        command.env("PYTHONPATH", python_path);
-    }
     configure_linux_process_group(&mut command);
     hide_child_window(&mut command);
 

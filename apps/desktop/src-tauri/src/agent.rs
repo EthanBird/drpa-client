@@ -11,6 +11,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use drpa_install::ComponentLeaseGuard;
 use drpa_package::{Entrypoint, PackageManifest, safe_relative_path};
 use globset::Glob;
 use ignore::WalkBuilder;
@@ -270,8 +271,11 @@ struct AgentContext {
     project_root: Option<PathBuf>,
     context_files: Vec<PathBuf>,
     python: PathBuf,
+    package_overlay: PathBuf,
     browser: Option<PathBuf>,
     browser_session: Option<AgentBrowserSession>,
+    component_leases: Vec<ComponentLeaseGuard>,
+    runtime_features: Vec<String>,
     host: Option<AgentHostContext>,
     session_id: String,
     python_timeout: Duration,
@@ -512,6 +516,7 @@ impl<'a> ToolRegistry<'a> {
             &context.selected_skill_ids,
             context.python_timeout.as_secs(),
             &context.tool_policy,
+            &context.runtime_features,
         )?;
         let descriptors = definitions
             .iter()
@@ -803,8 +808,11 @@ pub(crate) fn run_agent_turn<F>(
     workspace_root: PathBuf,
     resource_dir: Option<PathBuf>,
     python: PathBuf,
+    package_overlay: PathBuf,
     browser: Option<PathBuf>,
     browser_session: Option<AgentBrowserSession>,
+    component_leases: Vec<ComponentLeaseGuard>,
+    runtime_features: Vec<String>,
     host: AgentHostContext,
     control: AgentRunControl,
     mut emit: F,
@@ -859,8 +867,11 @@ where
         project_root,
         context_files,
         python,
+        package_overlay,
         browser,
         browser_session,
+        component_leases,
+        runtime_features,
         host: Some(host),
         session_id: request.session_id.clone(),
         python_timeout: Duration::from_secs(request.python_timeout_seconds),
@@ -1563,6 +1574,7 @@ fn agent_tool_definitions(
     selected_skill_ids: &[String],
     python_timeout_seconds: u64,
     policy: &AgentToolPolicy,
+    runtime_features: &[String],
 ) -> Result<Vec<Value>, String> {
     if !policy.enabled {
         return Ok(Vec::new());
@@ -1572,6 +1584,16 @@ fn agent_tool_definitions(
             "browser_open",
             "在 DRPA 内置 Chrome 中打开 URL。浏览器使用与 RPAZ ctx.browser() 相同的持久化端口和用户目录，任务结束后继续保留。",
             json!({"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_back",
+            "让当前 DRPA Chrome 页面后退，并返回新的标题和 URL。",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_reload",
+            "刷新当前 DRPA Chrome 页面。",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
         ),
         tool_definition(
             "browser_snapshot",
@@ -1587,6 +1609,16 @@ fn agent_tool_definitions(
             "browser_type",
             "向 browser_snapshot 返回的输入元素写入文本并触发 input/change 事件。",
             json!({"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"submit":{"type":"boolean"}},"required":["ref","text"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_select",
+            "在 browser_snapshot 返回的 select 元素中按 value 或可见文字选择选项。",
+            json!({"type":"object","properties":{"ref":{"type":"string"},"value":{"type":"string"}},"required":["ref","value"],"additionalProperties":false}),
+        ),
+        tool_definition(
+            "browser_scroll",
+            "按指定方向滚动当前页面。",
+            json!({"type":"object","properties":{"direction":{"type":"string","enum":["up","down","left","right"]},"amount":{"type":"integer","minimum":100,"maximum":5000}},"additionalProperties":false}),
         ),
         tool_definition(
             "browser_wait",
@@ -1838,6 +1870,30 @@ fn agent_tool_definitions(
         tools.extend(plugins::plugin_tool_definitions(workspace_root)?);
         tools.extend(agent_extensions::tool_definitions(workspace_root)?);
     }
+    if !runtime_features.is_empty()
+        && !runtime_features
+            .iter()
+            .any(|feature| feature == "browser.drissionpage")
+    {
+        tools.retain(|tool| {
+            !tool
+                .pointer("/function/name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.starts_with("browser_"))
+        });
+    }
+    if !runtime_features.is_empty()
+        && !runtime_features
+            .iter()
+            .any(|feature| feature == "documents")
+    {
+        tools.retain(|tool| {
+            !tool
+                .pointer("/function/name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.starts_with("document_"))
+        });
+    }
     let authority = crate::agent_tools::CapabilityAuthority::new(policy);
     tools.retain(|definition| {
         definition
@@ -1932,8 +1988,7 @@ fn execute_tool(
         });
     }
     match name {
-        "browser_open" | "browser_snapshot" | "browser_click" | "browser_type" | "browser_wait"
-        | "browser_screenshot" | "browser_status" => {
+        name if name.starts_with("browser_") => {
             return execute_browser_tool(context, name, arguments);
         }
         "rpaz_list_packages"
@@ -2358,71 +2413,19 @@ fn execute_browser_tool(
     if context.python.as_os_str().is_empty() {
         return Err("DRPA Chrome Bridge 需要内置 Python 运行时".to_owned());
     }
-    let mut command = Command::new(&context.python);
-    command
-        .args(["-m", "drpa_runner.agent_mcp", "--call", name])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1");
     let browser_session = context
         .browser_session
         .as_ref()
         .ok_or_else(|| "Agent 浏览器会话尚未初始化".to_owned())?;
-    command
-        .env("DRPA_BROWSER_PROFILE_ROOT", &browser_session.profile_root)
-        .env("DRPA_BROWSER_PORT", browser_session.port.to_string())
-        .env("DRPA_AGENT_ARTIFACT_ROOT", &browser_session.artifact_root);
-    if let Some(browser) = &context.browser {
-        command.env("DRPA_BROWSER_PATH", browser);
-    }
-    configure_agent_python_process(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("启动 DRPA Chrome Bridge 失败：{error}"))?;
-    let started = Instant::now();
-    let mut process_tree = AgentPythonProcessTree::attach(&mut child)?;
-    if let Some(mut stdin) = child.stdin.take() {
-        serde_json::to_writer(&mut stdin, arguments)
-            .map_err(|error| format!("写入 Chrome Bridge 参数失败：{error}"))?;
-    }
-    let output_exceeded = Arc::new(AtomicBool::new(false));
-    let output_bytes = Arc::new(AtomicUsize::new(0));
-    let stdout_reader = capture_python_stream(
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| "无法捕获 Chrome Bridge 标准输出".to_owned())?,
-        output_exceeded.clone(),
-        output_bytes.clone(),
-    );
-    let stderr_reader = capture_python_stream(
-        child
-            .stderr
-            .take()
-            .ok_or_else(|| "无法捕获 Chrome Bridge 错误输出".to_owned())?,
-        output_exceeded.clone(),
-        output_bytes,
-    );
-    let captured = wait_for_python_process(
-        &mut child,
-        &mut process_tree,
-        stdout_reader,
-        stderr_reader,
-        output_exceeded,
-        started,
+    let value = browser_session.call(
+        &context.python,
+        context.browser.as_deref(),
+        context.component_leases.clone(),
+        name,
+        arguments,
         context.python_timeout.min(Duration::from_secs(180)),
-        &context.control,
+        || context.control.check(),
     )?;
-    if !captured.status.success() {
-        return Err(format!(
-            "Chrome Bridge 执行失败：{}",
-            captured.stderr.trim()
-        ));
-    }
-    let value: Value = serde_json::from_str(&captured.stdout)
-        .map_err(|error| format!("Chrome Bridge 返回无效 JSON：{error}"))?;
     Ok(ToolResult {
         summary: value
             .get("summary")
@@ -2887,22 +2890,39 @@ fn run_python(
     if code.len() > 50_000 {
         return Err("Python 辅助代码超过 50000 字符".to_owned());
     }
+    const RUNNER: &str = r#"import os, site, sys
+overlay = os.environ.get('DRPA_PYTHON_PACKAGE_PATH', '').strip()
+if overlay:
+    site.addsitedir(overlay)
+    if overlay in sys.path:
+        sys.path.remove(overlay)
+    sys.path.insert(0, overlay)
+source = sys.stdin.read()
+exec(compile(source, '<drpa-agent-python>', 'exec'), {'__name__': '__main__'})
+"#;
     let mut command = Command::new(&context.python);
     command
-        .args(["-I", "-c", code])
+        .args(["-I", "-c", RUNNER])
         .current_dir(project_root)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("PYTHONNOUSERSITE", "1")
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8");
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("DRPA_PYTHON_PACKAGE_PATH", &context.package_overlay);
     configure_agent_python_process(&mut command);
     let started = Instant::now();
     let mut child = command
         .spawn()
         .map_err(|error| format!("启动内置 Python 失败：{error}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "内置 Python 输入通道未建立".to_owned())?
+        .write_all(code.as_bytes())
+        .map_err(|error| format!("写入内置 Python 代码失败：{error}"))?;
     let mut process_tree = AgentPythonProcessTree::attach(&mut child)?;
     let output_exceeded = Arc::new(AtomicBool::new(false));
     let output_bytes = Arc::new(AtomicUsize::new(0));
@@ -3546,8 +3566,11 @@ mod tests {
             project_root: None,
             context_files: Vec::new(),
             python: PathBuf::from("python"),
+            package_overlay: PathBuf::new(),
             browser: None,
             browser_session: None,
+            component_leases: Vec::new(),
+            runtime_features: Vec::new(),
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
@@ -3711,8 +3734,11 @@ mod tests {
             project_root: Some(project.clone()),
             context_files: Vec::new(),
             python: PathBuf::from("python"),
+            package_overlay: PathBuf::new(),
             browser: None,
             browser_session: None,
+            component_leases: Vec::new(),
+            runtime_features: Vec::new(),
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
@@ -3795,6 +3821,7 @@ mod tests {
             &[],
             DEFAULT_PYTHON_TIMEOUT_SECONDS,
             &policy,
+            &[],
         )
         .unwrap();
         let names = definitions
@@ -3825,6 +3852,7 @@ mod tests {
             &[],
             DEFAULT_PYTHON_TIMEOUT_SECONDS,
             &AgentToolPolicy::default(),
+            &[],
         )
         .unwrap();
         let names = definitions
@@ -3857,6 +3885,7 @@ mod tests {
             &[],
             DEFAULT_PYTHON_TIMEOUT_SECONDS,
             &system_policy,
+            &[],
         )
         .unwrap();
         let names = definitions
@@ -3872,8 +3901,11 @@ mod tests {
             project_root: None,
             context_files: Vec::new(),
             python: PathBuf::from("python"),
+            package_overlay: PathBuf::new(),
             browser: None,
             browser_session: None,
+            component_leases: Vec::new(),
+            runtime_features: Vec::new(),
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
@@ -3924,6 +3956,31 @@ mod tests {
     }
 
     #[test]
+    fn minimal_runtime_hides_unavailable_browser_and_document_tools() {
+        let workspace =
+            std::env::temp_dir().join(format!("drpa-agent-minimal-tools-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace).unwrap();
+        let definitions = agent_tool_definitions(
+            &workspace,
+            true,
+            false,
+            &[],
+            DEFAULT_PYTHON_TIMEOUT_SECONDS,
+            &AgentToolPolicy::default(),
+            &["agent.python".to_owned(), "stdlib".to_owned()],
+        )
+        .unwrap();
+        let names = definitions
+            .iter()
+            .filter_map(|value| value.pointer("/function/name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(!names.iter().any(|name| name.starts_with("browser_")));
+        assert!(!names.iter().any(|name| name.starts_with("document_")));
+        assert!(names.contains(&"rpaz_python"));
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
     fn database_agent_tool_executes_select_but_never_update() {
         let workspace =
             std::env::temp_dir().join(format!("drpa-agent-database-{}", Uuid::new_v4()));
@@ -3942,8 +3999,11 @@ mod tests {
             project_root: None,
             context_files: Vec::new(),
             python: PathBuf::from("python"),
+            package_overlay: PathBuf::new(),
             browser: None,
             browser_session: None,
+            component_leases: Vec::new(),
+            runtime_features: Vec::new(),
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
@@ -3985,8 +4045,11 @@ mod tests {
             project_root: None,
             context_files: Vec::new(),
             python: PathBuf::from("python"),
+            package_overlay: PathBuf::new(),
             browser: None,
             browser_session: None,
+            component_leases: Vec::new(),
+            runtime_features: Vec::new(),
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),
@@ -4038,8 +4101,11 @@ mod tests {
             project_root: None,
             context_files: Vec::new(),
             python: PathBuf::from("python"),
+            package_overlay: PathBuf::new(),
             browser: None,
             browser_session: None,
+            component_leases: Vec::new(),
+            runtime_features: Vec::new(),
             host: None,
             session_id: "test-session".to_owned(),
             python_timeout: Duration::from_secs(DEFAULT_PYTHON_TIMEOUT_SECONDS),

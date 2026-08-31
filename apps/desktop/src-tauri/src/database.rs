@@ -1,8 +1,10 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use calamine::{Data, Reader, open_workbook_auto};
+use futures_util::TryStreamExt;
 use rusqlite::types::Value as SqliteValue;
 use rusqlite::types::ValueRef as SqliteValueRef;
 use rusqlite::{Connection, OpenFlags, params, params_from_iter};
@@ -16,7 +18,8 @@ use uuid::Uuid;
 use crate::AppPaths;
 
 const RESULT_ROW_LIMIT: usize = 1_000;
-const RESULT_BYTE_LIMIT: usize = 8 * 1024 * 1024;
+const MAX_QUERY_PAGE_SIZE: usize = 20_000;
+const RESULT_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 const CELL_BYTE_LIMIT: usize = 256 * 1024;
 const SCHEMA_CONTEXT_BYTE_LIMIT: usize = 100 * 1024;
 const REMOTE_CONNECTION_LIMIT: usize = 50;
@@ -77,7 +80,7 @@ pub(crate) struct DatabaseColumn {
     primary_key: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DatabaseQueryResult {
     columns: Vec<String>,
@@ -86,6 +89,43 @@ pub(crate) struct DatabaseQueryResult {
     duration_ms: u64,
     truncated: bool,
     statement_type: String,
+    offset: usize,
+    limit: usize,
+    has_more: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DatabaseExportResult {
+    path: String,
+    format: String,
+    row_count: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct QueryWindow {
+    offset: usize,
+    limit: usize,
+}
+
+impl Default for QueryWindow {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            limit: RESULT_ROW_LIMIT,
+        }
+    }
+}
+
+impl QueryWindow {
+    fn from_request(offset: Option<usize>, limit: Option<usize>) -> Self {
+        Self {
+            offset: offset.unwrap_or(0),
+            limit: limit
+                .unwrap_or(RESULT_ROW_LIMIT)
+                .clamp(1, MAX_QUERY_PAGE_SIZE),
+        }
+    }
 }
 
 #[tauri::command(async)]
@@ -123,9 +163,30 @@ pub(crate) fn describe_database_table(
 #[tauri::command(async)]
 pub(crate) fn execute_database_sql(
     sql: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
     paths: State<'_, AppPaths>,
 ) -> Result<DatabaseQueryResult, String> {
-    execute_sql_at(&workspace_database_path(&paths), &sql)
+    execute_sql_at_window(
+        &workspace_database_path(&paths),
+        &sql,
+        QueryWindow::from_request(offset, limit),
+    )
+}
+
+#[tauri::command(async)]
+pub(crate) fn export_database_query_result(
+    result: DatabaseQueryResult,
+    format: String,
+    target_path: String,
+    table_name: String,
+) -> Result<DatabaseExportResult, String> {
+    export_query_result(&result, &format, Path::new(&target_path), &table_name)?;
+    Ok(DatabaseExportResult {
+        path: target_path,
+        format: format.to_ascii_lowercase(),
+        row_count: result.rows.len(),
+    })
 }
 
 #[tauri::command(async)]
@@ -352,11 +413,14 @@ pub(crate) async fn execute_remote_database_sql(
     profile_id: String,
     password: String,
     sql: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
     paths: State<'_, AppPaths>,
 ) -> Result<DatabaseQueryResult, String> {
+    let window = QueryWindow::from_request(offset, limit);
     let profile = load_remote_profile(&remote_profiles_path(&paths), &profile_id)?;
     if profile.engine == "sqlite" {
-        return execute_sql_external(Path::new(&profile.database), &sql);
+        return execute_sql_external_window(Path::new(&profile.database), &sql, window);
     }
     if profile.engine == "excel" {
         let statement_type = first_sql_keyword(&sql);
@@ -369,10 +433,10 @@ pub(crate) async fn execute_remote_database_sql(
             );
         }
         let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
-        return execute_sql_with_connection(&connection, &sql);
+        return execute_sql_with_connection_window(&connection, &sql, window);
     }
     let pool = connect_remote_database(&profile, &password).await?;
-    let result = execute_remote_sql_with_pool(&pool, &sql).await;
+    let result = execute_remote_sql_with_pool(&pool, &sql, window).await;
     pool.close().await;
     result
 }
@@ -765,6 +829,7 @@ fn quote_qualified_identifier(profile: &RemoteDatabaseProfile, value: &str) -> S
 async fn execute_remote_sql_with_pool(
     pool: &AnyPool,
     sql: &str,
+    window: QueryWindow,
 ) -> Result<DatabaseQueryResult, String> {
     let sql = sql.trim();
     if sql.is_empty() {
@@ -788,18 +853,67 @@ async fn execute_remote_sql_with_pool(
             duration_ms: started.elapsed().as_millis() as u64,
             truncated: false,
             statement_type,
+            offset: 0,
+            limit: window.limit,
+            has_more: false,
         });
     }
 
-    let remote_rows = sqlx::query(sql)
-        .fetch_all(pool)
+    let mut stream = sqlx::query(sql).fetch(pool);
+    let mut columns = Vec::new();
+    let mut rows = Vec::new();
+    let mut seen_rows = 0_usize;
+    let mut result_bytes = 0_usize;
+    let mut truncated = false;
+    let mut has_more = false;
+    while let Some(row) = stream
+        .try_next()
         .await
-        .map_err(|error| format!("SQL 查询失败：{error}"))?;
-    Ok(remote_rows_to_result(
-        remote_rows,
+        .map_err(|error| format!("SQL 查询失败：{error}"))?
+    {
+        if seen_rows < window.offset {
+            seen_rows += 1;
+            continue;
+        }
+        if rows.len() >= window.limit {
+            has_more = true;
+            break;
+        }
+        if columns.is_empty() {
+            columns = row
+                .columns()
+                .iter()
+                .map(|column| column.name().to_owned())
+                .collect();
+        }
+        let mut values = Vec::with_capacity(row.len());
+        for index in 0..row.len() {
+            let value = remote_value_to_json(&row, index);
+            let value_bytes = value.to_string().len();
+            if result_bytes.saturating_add(value_bytes) > RESULT_BYTE_LIMIT {
+                truncated = true;
+                has_more = true;
+                break;
+            }
+            result_bytes += value_bytes;
+            values.push(value);
+        }
+        if truncated && values.len() != row.len() {
+            break;
+        }
+        rows.push(values);
+    }
+    Ok(DatabaseQueryResult {
+        columns,
+        rows,
+        affected_rows: 0,
+        duration_ms: started.elapsed().as_millis() as u64,
+        truncated,
         statement_type,
-        started.elapsed().as_millis() as u64,
-    ))
+        offset: window.offset,
+        limit: window.limit,
+        has_more,
+    })
 }
 
 async fn execute_remote_read_only_with_pool(
@@ -832,6 +946,7 @@ async fn execute_remote_read_only_with_pool(
             rows,
             first_sql_keyword(sql),
             started.elapsed().as_millis() as u64,
+            QueryWindow::default(),
         )),
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(error),
@@ -852,6 +967,7 @@ fn remote_rows_to_result(
     remote_rows: Vec<AnyRow>,
     statement_type: String,
     duration_ms: u64,
+    window: QueryWindow,
 ) -> DatabaseQueryResult {
     let columns = remote_rows
         .first()
@@ -865,9 +981,10 @@ fn remote_rows_to_result(
     let mut rows = Vec::new();
     let mut result_bytes = 0_usize;
     let mut truncated = false;
-    for row in remote_rows {
-        if rows.len() >= RESULT_ROW_LIMIT {
-            truncated = true;
+    let mut has_more = false;
+    for row in remote_rows.into_iter().skip(window.offset) {
+        if rows.len() >= window.limit {
+            has_more = true;
             break;
         }
         let mut values = Vec::with_capacity(row.len());
@@ -876,6 +993,7 @@ fn remote_rows_to_result(
             let value_bytes = value.to_string().len();
             if result_bytes.saturating_add(value_bytes) > RESULT_BYTE_LIMIT {
                 truncated = true;
+                has_more = true;
                 break;
             }
             result_bytes += value_bytes;
@@ -893,6 +1011,9 @@ fn remote_rows_to_result(
         duration_ms,
         truncated,
         statement_type,
+        offset: window.offset,
+        limit: window.limit,
+        has_more,
     }
 }
 
@@ -1169,27 +1290,63 @@ fn schema_context_with_connection(connection: &Connection, title: &str) -> Resul
     Ok(output)
 }
 
+#[cfg(test)]
 fn execute_sql_at(path: &Path, sql: &str) -> Result<DatabaseQueryResult, String> {
+    execute_sql_at_window(path, sql, QueryWindow::default())
+}
+
+fn execute_sql_at_window(
+    path: &Path,
+    sql: &str,
+    window: QueryWindow,
+) -> Result<DatabaseQueryResult, String> {
     let connection = open_database(path)?;
-    execute_sql_with_connection(&connection, sql)
+    execute_sql_with_connection_window(&connection, sql, window)
 }
 
+#[cfg(test)]
 fn execute_sql_external(path: &Path, sql: &str) -> Result<DatabaseQueryResult, String> {
-    let connection = open_external_database(path)?;
-    execute_sql_with_connection(&connection, sql)
+    execute_sql_external_window(path, sql, QueryWindow::default())
 }
 
+fn execute_sql_external_window(
+    path: &Path,
+    sql: &str,
+    window: QueryWindow,
+) -> Result<DatabaseQueryResult, String> {
+    let connection = open_external_database(path)?;
+    execute_sql_with_connection_window(&connection, sql, window)
+}
+
+#[cfg(test)]
 fn execute_sql_with_connection(
     connection: &Connection,
     sql: &str,
 ) -> Result<DatabaseQueryResult, String> {
-    execute_sql_with_connection_mode(connection, sql, false)
+    execute_sql_with_connection_window(connection, sql, QueryWindow::default())
+}
+
+fn execute_sql_with_connection_window(
+    connection: &Connection,
+    sql: &str,
+    window: QueryWindow,
+) -> Result<DatabaseQueryResult, String> {
+    execute_sql_with_connection_mode_window(connection, sql, false, window)
 }
 
 fn execute_sql_with_connection_mode(
     connection: &Connection,
     sql: &str,
     read_only: bool,
+) -> Result<DatabaseQueryResult, String> {
+    execute_sql_with_connection_mode_window(connection, sql, read_only, QueryWindow::default())
+}
+
+fn execute_sql_with_connection_mode_window(
+    connection: &Connection,
+    sql: &str,
+    read_only: bool,
+    window: QueryWindow,
 ) -> Result<DatabaseQueryResult, String> {
     let sql = sql.trim();
     if sql.is_empty() {
@@ -1215,6 +1372,9 @@ fn execute_sql_with_connection_mode(
             duration_ms: started.elapsed().as_millis() as u64,
             truncated: false,
             statement_type,
+            offset: 0,
+            limit: window.limit,
+            has_more: false,
         });
     }
 
@@ -1229,13 +1389,19 @@ fn execute_sql_with_connection_mode(
         .map_err(|error| format!("SQL 查询失败：{error}"))?;
     let mut rows = Vec::new();
     let mut truncated = false;
+    let mut has_more = false;
     let mut result_bytes = 0_usize;
+    let mut seen_rows = 0_usize;
     'rows: while let Some(row) = cursor
         .next()
         .map_err(|error| format!("读取查询结果失败：{error}"))?
     {
-        if rows.len() == RESULT_ROW_LIMIT {
-            truncated = true;
+        if seen_rows < window.offset {
+            seen_rows += 1;
+            continue;
+        }
+        if rows.len() == window.limit {
+            has_more = true;
             break;
         }
         let mut values = Vec::with_capacity(column_count);
@@ -1245,6 +1411,7 @@ fn execute_sql_with_connection_mode(
             let value_bytes = value.to_string().len();
             if result_bytes.saturating_add(value_bytes) > RESULT_BYTE_LIMIT {
                 truncated = true;
+                has_more = true;
                 break 'rows;
             }
             result_bytes += value_bytes;
@@ -1260,6 +1427,9 @@ fn execute_sql_with_connection_mode(
         duration_ms: started.elapsed().as_millis() as u64,
         truncated,
         statement_type,
+        offset: window.offset,
+        limit: window.limit,
+        has_more,
     })
 }
 
@@ -1620,6 +1790,316 @@ fn hex(bytes: &[u8]) -> String {
     output
 }
 
+fn export_query_result(
+    result: &DatabaseQueryResult,
+    format: &str,
+    target_path: &Path,
+    table_name: &str,
+) -> Result<(), String> {
+    if result.columns.is_empty() {
+        return Err("当前结果没有可导出的列".to_owned());
+    }
+    let parent = target_path
+        .parent()
+        .ok_or_else(|| "导出路径无效".to_owned())?;
+    if !parent.exists() {
+        return Err(format!("导出目录不存在：{}", parent.display()));
+    }
+    match format.trim().to_ascii_lowercase().as_str() {
+        "csv" => export_csv(result, target_path),
+        "json" => export_json(result, target_path),
+        "sql" => export_sql(result, target_path, table_name),
+        "xlsx" => export_xlsx(result, target_path),
+        "xls" => export_xls_xml(result, target_path),
+        other => Err(format!("不支持的导出格式：{other}")),
+    }
+}
+
+fn export_csv(result: &DatabaseQueryResult, target_path: &Path) -> Result<(), String> {
+    let mut file =
+        fs::File::create(target_path).map_err(|error| format!("创建 CSV 文件失败：{error}"))?;
+    file.write_all(&[0xef, 0xbb, 0xbf])
+        .map_err(|error| format!("写入 CSV 文件失败：{error}"))?;
+    write_csv_row(&mut file, result.columns.iter().map(String::as_str))?;
+    for row in &result.rows {
+        write_csv_row(&mut file, row.iter().map(export_cell_text))?;
+    }
+    Ok(())
+}
+
+fn write_csv_row<I, S>(writer: &mut impl Write, values: I) -> Result<(), String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut first = true;
+    for value in values {
+        if !first {
+            writer
+                .write_all(b",")
+                .map_err(|error| format!("写入 CSV 文件失败：{error}"))?;
+        }
+        first = false;
+        let value = value.as_ref();
+        if value.contains([',', '"', '\n', '\r']) {
+            writer
+                .write_all(b"\"")
+                .and_then(|_| writer.write_all(value.replace('"', "\"\"").as_bytes()))
+                .and_then(|_| writer.write_all(b"\""))
+                .map_err(|error| format!("写入 CSV 文件失败：{error}"))?;
+        } else {
+            writer
+                .write_all(value.as_bytes())
+                .map_err(|error| format!("写入 CSV 文件失败：{error}"))?;
+        }
+    }
+    writer
+        .write_all(b"\r\n")
+        .map_err(|error| format!("写入 CSV 文件失败：{error}"))
+}
+
+fn export_json(result: &DatabaseQueryResult, target_path: &Path) -> Result<(), String> {
+    let keys = unique_export_columns(&result.columns);
+    let rows = result
+        .rows
+        .iter()
+        .map(|row| {
+            let mut object = serde_json::Map::new();
+            for (index, key) in keys.iter().enumerate() {
+                object.insert(
+                    key.clone(),
+                    row.get(index).cloned().unwrap_or(serde_json::Value::Null),
+                );
+            }
+            serde_json::Value::Object(object)
+        })
+        .collect::<Vec<_>>();
+    let payload =
+        serde_json::to_vec_pretty(&rows).map_err(|error| format!("序列化 JSON 失败：{error}"))?;
+    fs::write(target_path, payload).map_err(|error| format!("写入 JSON 文件失败：{error}"))
+}
+
+fn export_sql(
+    result: &DatabaseQueryResult,
+    target_path: &Path,
+    table_name: &str,
+) -> Result<(), String> {
+    let table_name = if table_name.trim().is_empty() {
+        "query_result"
+    } else {
+        table_name.trim()
+    };
+    let table = table_name
+        .split('.')
+        .map(quote_sql_export_identifier)
+        .collect::<Vec<_>>()
+        .join(".");
+    let columns = result
+        .columns
+        .iter()
+        .map(|column| quote_sql_export_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut file =
+        fs::File::create(target_path).map_err(|error| format!("创建 SQL 文件失败：{error}"))?;
+    writeln!(file, "-- DRPA Next 查询结果导出")
+        .map_err(|error| format!("写入 SQL 文件失败：{error}"))?;
+    writeln!(file, "BEGIN;").map_err(|error| format!("写入 SQL 文件失败：{error}"))?;
+    for row in &result.rows {
+        let values = (0..result.columns.len())
+            .map(|index| sql_export_literal(row.get(index).unwrap_or(&serde_json::Value::Null)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(file, "INSERT INTO {table} ({columns}) VALUES ({values});")
+            .map_err(|error| format!("写入 SQL 文件失败：{error}"))?;
+    }
+    writeln!(file, "COMMIT;").map_err(|error| format!("写入 SQL 文件失败：{error}"))
+}
+
+fn export_xlsx(result: &DatabaseQueryResult, target_path: &Path) -> Result<(), String> {
+    use zip::write::SimpleFileOptions;
+
+    let file =
+        fs::File::create(target_path).map_err(|error| format!("创建 XLSX 文件失败：{error}"))?;
+    let mut archive = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let fixed_entries = [
+        (
+            "[Content_Types].xml",
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#,
+        ),
+        (
+            "_rels/.rels",
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+        ),
+        (
+            "xl/workbook.xml",
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Query Result" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+        ),
+    ];
+    for (name, contents) in fixed_entries {
+        archive
+            .start_file(name, options)
+            .map_err(|error| format!("写入 XLSX 文件失败：{error}"))?;
+        archive
+            .write_all(contents.as_bytes())
+            .map_err(|error| format!("写入 XLSX 文件失败：{error}"))?;
+    }
+    archive
+        .start_file("xl/worksheets/sheet1.xml", options)
+        .map_err(|error| format!("写入 XLSX 工作表失败：{error}"))?;
+    archive
+        .write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"#)
+        .map_err(|error| format!("写入 XLSX 工作表失败：{error}"))?;
+    write_xlsx_row(
+        &mut archive,
+        1,
+        result
+            .columns
+            .iter()
+            .map(|value| serde_json::Value::String(value.clone())),
+    )?;
+    for (index, row) in result.rows.iter().enumerate() {
+        write_xlsx_row(&mut archive, index + 2, row.iter().cloned())?;
+    }
+    archive
+        .write_all(b"</sheetData></worksheet>")
+        .map_err(|error| format!("写入 XLSX 工作表失败：{error}"))?;
+    archive
+        .finish()
+        .map_err(|error| format!("完成 XLSX 文件失败：{error}"))?;
+    Ok(())
+}
+
+fn write_xlsx_row<I>(writer: &mut impl Write, row_number: usize, values: I) -> Result<(), String>
+where
+    I: IntoIterator<Item = serde_json::Value>,
+{
+    write!(writer, "<row r=\"{row_number}\">")
+        .map_err(|error| format!("写入 XLSX 工作表失败：{error}"))?;
+    for value in values {
+        match value {
+            serde_json::Value::Null => writer.write_all(b"<c/>"),
+            serde_json::Value::Bool(value) => {
+                write!(writer, "<c t=\"b\"><v>{}</v></c>", usize::from(value))
+            }
+            serde_json::Value::Number(value) => write!(writer, "<c><v>{value}</v></c>"),
+            other => {
+                let text = excel_cell_text(&other);
+                write!(
+                    writer,
+                    "<c t=\"inlineStr\"><is><t xml:space=\"preserve\">{}</t></is></c>",
+                    escape_xml(&text)
+                )
+            }
+        }
+        .map_err(|error| format!("写入 XLSX 工作表失败：{error}"))?;
+    }
+    writer
+        .write_all(b"</row>")
+        .map_err(|error| format!("写入 XLSX 工作表失败：{error}"))
+}
+
+fn export_xls_xml(result: &DatabaseQueryResult, target_path: &Path) -> Result<(), String> {
+    let mut file =
+        fs::File::create(target_path).map_err(|error| format!("创建 XLS 文件失败：{error}"))?;
+    file.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="Query Result"><Table>"#)
+        .map_err(|error| format!("写入 XLS 文件失败：{error}"))?;
+    write_xls_xml_row(
+        &mut file,
+        result
+            .columns
+            .iter()
+            .map(|value| serde_json::Value::String(value.clone())),
+    )?;
+    for row in &result.rows {
+        write_xls_xml_row(&mut file, row.iter().cloned())?;
+    }
+    file.write_all(b"</Table></Worksheet></Workbook>")
+        .map_err(|error| format!("写入 XLS 文件失败：{error}"))
+}
+
+fn write_xls_xml_row<I>(writer: &mut impl Write, values: I) -> Result<(), String>
+where
+    I: IntoIterator<Item = serde_json::Value>,
+{
+    writer
+        .write_all(b"<Row>")
+        .map_err(|error| format!("写入 XLS 文件失败：{error}"))?;
+    for value in values {
+        let (kind, text) = match value {
+            serde_json::Value::Number(value) => ("Number", value.to_string()),
+            serde_json::Value::Bool(value) => ("Boolean", usize::from(value).to_string()),
+            serde_json::Value::Null => ("String", String::new()),
+            other => ("String", excel_cell_text(&other)),
+        };
+        write!(
+            writer,
+            "<Cell><Data ss:Type=\"{kind}\">{}</Data></Cell>",
+            escape_xml(&text)
+        )
+        .map_err(|error| format!("写入 XLS 文件失败：{error}"))?;
+    }
+    writer
+        .write_all(b"</Row>")
+        .map_err(|error| format!("写入 XLS 文件失败：{error}"))
+}
+
+fn export_cell_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(value) => value.clone(),
+        value => value.to_string(),
+    }
+}
+
+fn excel_cell_text(value: &serde_json::Value) -> String {
+    export_cell_text(value).chars().take(32_767).collect()
+}
+
+fn unique_export_columns(columns: &[String]) -> Vec<String> {
+    let mut counts = std::collections::HashMap::<&str, usize>::new();
+    columns
+        .iter()
+        .map(|column| {
+            let count = counts.entry(column.as_str()).or_insert(0);
+            *count += 1;
+            if *count == 1 {
+                column.clone()
+            } else {
+                format!("{column}_{}", *count)
+            }
+        })
+        .collect()
+}
+
+fn quote_sql_export_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn sql_export_literal(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "NULL".to_owned(),
+        serde_json::Value::Bool(value) => if *value { "TRUE" } else { "FALSE" }.to_owned(),
+        serde_json::Value::Number(value) => value.to_string(),
+        serde_json::Value::String(value) => format!("'{}'", value.replace('\'', "''")),
+        value => format!("'{}'", value.to_string().replace('\'', "''")),
+    }
+}
+
+fn escape_xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1680,6 +2160,93 @@ mod tests {
         assert!(truncated);
         assert!(value.as_str().unwrap().contains("已截断"));
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pages_large_sqlite_results_without_a_fixed_row_cap() {
+        let root = std::env::temp_dir().join(format!("drpa-page-test-{}", Uuid::new_v4()));
+        let path = root.join("workspace.sqlite3");
+        let connection = open_database(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE numbers(value INTEGER NOT NULL);\n\
+                 WITH RECURSIVE values_cte(value) AS (\n\
+                   SELECT 1 UNION ALL SELECT value + 1 FROM values_cte WHERE value < 2505\n\
+                 ) INSERT INTO numbers SELECT value FROM values_cte;",
+            )
+            .unwrap();
+
+        let first = execute_sql_with_connection_window(
+            &connection,
+            "SELECT value FROM numbers ORDER BY value",
+            QueryWindow {
+                offset: 0,
+                limit: 1_500,
+            },
+        )
+        .unwrap();
+        assert_eq!(first.rows.len(), 1_500);
+        assert_eq!(first.rows[0][0], 1);
+        assert!(first.has_more);
+        assert!(!first.truncated);
+
+        let second = execute_sql_with_connection_window(
+            &connection,
+            "SELECT value FROM numbers ORDER BY value",
+            QueryWindow {
+                offset: 1_500,
+                limit: 1_500,
+            },
+        )
+        .unwrap();
+        assert_eq!(second.rows.len(), 1_005);
+        assert_eq!(second.rows[0][0], 1_501);
+        assert!(!second.has_more);
+        assert_eq!(second.offset, 1_500);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exports_query_results_to_common_data_formats() {
+        let root = std::env::temp_dir().join(format!("drpa-export-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let result = DatabaseQueryResult {
+            columns: vec!["id".to_owned(), "名称".to_owned(), "active".to_owned()],
+            rows: vec![
+                vec![1.into(), "含,逗号".into(), true.into()],
+                vec![2.into(), serde_json::Value::Null, false.into()],
+            ],
+            affected_rows: 0,
+            duration_ms: 2,
+            truncated: false,
+            statement_type: "SELECT".to_owned(),
+            offset: 0,
+            limit: 500,
+            has_more: false,
+        };
+        for format in ["csv", "json", "sql", "xlsx", "xls"] {
+            let path = root.join(format!("result.{format}"));
+            export_query_result(&result, format, &path, "示例表").unwrap();
+            assert!(
+                fs::metadata(&path).unwrap().len() > 20,
+                "empty {format} export"
+            );
+        }
+        let csv = fs::read_to_string(root.join("result.csv")).unwrap();
+        assert!(csv.contains("\"含,逗号\""));
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("result.json")).unwrap()).unwrap();
+        assert_eq!(json[0]["名称"], "含,逗号");
+        let sql = fs::read_to_string(root.join("result.sql")).unwrap();
+        assert!(sql.contains("INSERT INTO \"示例表\""));
+        let xls = fs::read_to_string(root.join("result.xls")).unwrap();
+        assert!(xls.contains("Workbook"));
+
+        let mut workbook = open_workbook_auto(root.join("result.xlsx")).unwrap();
+        let range = workbook.worksheet_range("Query Result").unwrap();
+        assert_eq!(range.get_value((1, 1)).unwrap().to_string(), "含,逗号");
         let _ = fs::remove_dir_all(root);
     }
 

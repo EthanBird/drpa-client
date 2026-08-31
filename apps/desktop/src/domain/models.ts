@@ -156,6 +156,17 @@ export interface DatabaseQueryResult {
   durationMs: number;
   truncated: boolean;
   statementType: string;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+export type DatabaseExportFormat = "xlsx" | "xls" | "csv" | "json" | "sql";
+
+export interface DatabaseExportResult {
+  path: string;
+  format: DatabaseExportFormat;
+  rowCount: number;
 }
 
 export type DashboardWidgetKind = "metric" | "line" | "bar" | "pie" | "table" | "markdown";
@@ -499,6 +510,43 @@ export interface RuntimeStatus {
   environmentRoot: string;
   browserExecutable: string;
   message: string;
+  profileId: string;
+  profileName: string;
+  features: string[];
+  profiles: RuntimeProfileSummary[];
+}
+
+export interface RuntimeProfileSummary {
+  id: string;
+  name: string;
+  componentVersion: string;
+  pythonVersion: string;
+  environmentMode: "materialized" | "frozen" | string;
+  features: string[];
+  selected: boolean;
+  ready: boolean;
+  inUse: number;
+  runtimeRoot: string;
+  environmentRoot: string;
+}
+
+export interface RuntimePythonPackage {
+  name: string;
+  version: string;
+  source: "user" | "runtime" | string;
+  location: string;
+  removable: boolean;
+}
+
+export interface RuntimePythonPackageCatalog {
+  profileId: string;
+  profileName: string;
+  pythonVersion: string;
+  backend: "uv" | "pip" | "unavailable" | string;
+  backendVersion: string;
+  backendPath: string;
+  overlayRoot: string;
+  packages: RuntimePythonPackage[];
 }
 
 export interface SystemResourceMetric {

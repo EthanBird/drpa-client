@@ -1,49 +1,91 @@
-# DRPA Next Windows 全量离线版
+# DRPA Next Windows 模块化离线版
 
-Windows x64 发行只提供完整 Setup，包含 DRPA 桌面端、CPython 3.11、完整离线依赖、真实 Jupyter Kernel、Chrome for Testing、Fixed Version WebView2、JCode 开发者 Agent sidecar 和 Bing 每日一图示例包。目标机器无需预装 Python、Node.js、浏览器或联网下载 pip 依赖。
+Windows x64 Setup 现在只包含 DRPA Core、稳定 Launcher 和纯 Rust/egui 组件安装向导。桌面端、Python/RPAZ、Chromium、Fixed Version WebView2 与 JCode 分别发布为独立 `.drpac`，用户只下载实际需要的能力，基础安装不再携带约 800 MiB 的离线依赖。
+
+## 最小内核与桌面界面
+
+`drpa.exe` 是不依赖 WebView2、Chrome、Node.js 或系统 Python 的原生管理内核。即使机器没有 WebView2，也可以用它定位安装目录、管理隔离工作区、安装组件和运行 RPAZ。
+
+```powershell
+drpa status
+drpa doctor
+drpa component list
+drpa workspace list
+drpa rpaz list
+drpa rpaz run <package-id> --profile <profile-id> --params '@parameters.json'
+```
+
+`DRPA Next.exe` 是稳定 Launcher。真正的 Tauri 图形客户端安装在 `components/org.drpa.desktop-ui/<version>/`；Launcher 按活动版本启动它。尚未安装桌面 UI 时，Launcher 会自动打开 `DRPA Component Installer.exe`，因此没有 WebView2 的全新机器仍有可操作的原生界面。
 
 ## 安装与升级
 
-1. 下载 `drpa-next-<version>-windows-x86_64-setup.exe`。
+1. 下载轻量 `drpa-next-<version>-windows-x86_64-setup.exe`，并按需下载一个或多个 `.drpac`；文件可以放在 Setup 同目录，也可以放在下载目录任意位置。
 2. 退出正在运行的 DRPA。
-3. 首次安装时选择非系统盘目录；升级时选择原安装目录。
-4. 启动后打开“运行环境”执行验证，再运行一个 RPAZ 检查日志和产物。
+3. 首次安装选择非系统盘目录；升级选择原安装目录。
+4. Setup 完成后打开原生组件向导。向导会扫描 Setup 所在目录、安装目录、下载目录和桌面，也支持拖放或通过内置 egui 文件浏览器选择任意 `.drpac`。
+5. 选择所需组件并安装；向导会显示 Core、系统 WebView2、系统 Chromium 兼容浏览器、现有组件与包校验状态，逐包安装完成后可直接启动桌面工作台。检测到系统 Evergreen WebView2 或 Google Chrome/Chromium/Edge/Brave 时，相应的可选包默认不勾选，仍可手动选择固定版本组件。
 
-安装器不申请管理员权限、不注册卸载项、不读写应用注册表。升级会替换应用和随包运行时，但跳过安装目录中的 `data/`，因此 RPAZ 包、项目、会话、运行历史、知识文档、配置和产物会保留。
+组件页同时列出所有活动组件。使用“修复”可以从同版本 `.drpac` 执行事务重装；没有对应包时会先做完整性校验。使用“卸载”会在二次确认后移除该组件的全部版本，但不会删除 `data/` 下的工作区、项目或用户数据。桌面组件正在运行时，应先退出 DRPA Next 再修复或卸载。
+
+安装器不申请管理员权限，也不写注册表。安装位置由安装目录的 `.drpa-install.json` 与用户目录的 `installations-v1.json` 定位；系统 WebView2 状态通过微软官方 Loader 查询。轻量 Setup 升级只协调 Core 文件，不会擅自删除现有组件；组件升级、移除、激活与历史清理由向导或 `drpa component` 完成。
 
 ```text
 <install>/
 ├── DRPA Next.exe
-├── install-manifest.json
-├── runtime/
-├── webview2/
-├── jcode/
-├── examples/
-└── data/                 包、项目、环境、历史、产物和配置
+├── drpa.exe
+├── DRPA Component Installer.exe
+├── core-files.json
+├── .drpa-install.json
+├── components/<component>/<version>/ 已展开的版本化组件
+├── state/active-components.json      当前激活版本
+└── data/                             包、项目、环境、历史、产物和配置
 ```
 
-不要只复制 `DRPA Next.exe`、单独移动 `runtime/`，也不要把已初始化的 `data/runtime-environment` 复制到不同安装路径。生成环境含最终路径信息；移动后应在“运行环境”中确认并执行强制重建。
+## 组件管理与回滚
 
-## 全量发布策略
+```powershell
+# 从单独下载的离线包安装浏览器
+drpa component install D:\Downloads\org.drpa.browser.chromium.drpac
 
-- Windows Release 固定包含 Setup、`install-manifest.json` 和 Bing 示例 `.rpaz` 三个资产。
-- 不发布 `.drpa-update`，设置页也不提供本地增量更新入口。
-- 普通开发提交不触发 Windows 发行；手工运行 workflow 或使用 `release(windows):` 提交前缀才构建全量包。
-- 每次发行都重新构建 sealed runtime、JCode、Fixed Version WebView2 和 NSIS Setup，并执行断网 bootstrap 与 Python/Jupyter/Chrome 导入检查。
-- `install-manifest.json` 继续作为安装内容审计清单使用，不作为增量更新协议。
+# 校验清单中的长度和 SHA-256
+drpa component verify org.drpa.browser.chromium
 
-完整 stage 中的文件必须是实体文件。库存生成器拒绝 symlink、Junction 和 reparse point，防止安装包在构建机器上通过、复制到离线机器后才暴露缺失依赖。
+# 移除浏览器的全部版本
+drpa component remove org.drpa.browser.chromium --purge
 
-## 内存策略
+# 回滚到仍保留的版本
+drpa component activate org.drpa.python-runtime 2.1.0
 
-Windows WebView2 默认关闭 GPU 合成、后台联网、组件更新、扩展和同步。DRPA 的界面是本地二维工作台，不依赖 WebGL；该策略减少 GPU 进程的大块私有提交，同时保留普通页面请求、文件下载和本地服务访问。
+# 每个活动组件只保留活动版本和一个回滚点
+drpa component gc --all --keep 2
+```
 
-除首页外的业务页面按导航懒加载。Monaco、Markdown、流程设计器、插件管理和 Agent 对话只在进入对应工作台后载入，退出页面时由 React 卸载页面状态和监听器。
+`.drpac` 是 ZIP 容器，根目录包含 `component.json`，负载在 `payload/`。安装器拒绝绝对路径、父目录穿越、符号链接源、未声明文件、重复文件以及长度或 SHA-256 不一致的内容；组件先写入暂存目录，验证通过后再切换活动状态。
 
-## 卸载与备份
+桌面启动时 WebView2 的选择顺序为活动固定版组件、系统 Evergreen Runtime；两者都没有时自动回到 egui 组件向导，不会进入白屏或无响应的 Tauri 启动。浏览器自动化的选择顺序为显式 `DRPA_BROWSER_PATH`、活动 Chromium 组件、其他浏览器能力组件、系统 Chrome/Chromium/Edge/Brave。最终路径统一传给 DrissionPage、Agent Browser Host、JCode/MCP 与 RPAZ。
 
-由于安装器不写注册表，系统“应用和功能”中不会出现卸载项。退出 DRPA 后，备份需要保留的 `data/`，再删除整个安装目录和快捷方式即可。
+## 本地构建模块化 Setup
 
-升级或迁移前可备份整个 `data/`。恢复到不同目录后先运行环境验证；如果 Python 环境损坏，使用带确认窗口的“强制重建生成环境”，不要删除 `packages/`、`projects/` 或 `runs/`。
+先准备包含 `DRPA Next.exe`、`runtime/`、`webview2/` 和可选 `jcode/` 的完整 stage，再运行：
 
-开发和发布流程见 [`DEVELOPMENT.md`](DEVELOPMENT.md)，完整依赖处理见 [`../offline/README.md`](../offline/README.md)。
+```powershell
+tools\windows\build_modular_setup.ps1 `
+  -Stage D:\build\DRPA-Next-stage `
+  -Version 3.0.0 `
+  -Output D:\build\drpa-next-3.0.0-windows-x86_64-setup.exe `
+  -ComponentsOutput D:\build\components
+```
+
+脚本会先构建最新前端与 `drpa-desktop.exe`，并用仓库内的 Python adapter 重建 wheel、`wheelhouse-lock.json`、`manifest.json` 与 `SHA256SUMS`；随后编译 `drpa.exe`、稳定 Launcher 和 egui 向导，把桌面 UI、Python、Chromium、WebView2、JCode 写入独立发布目录，最后仅用三个 Core 可执行文件生成轻量、不写注册表的 Setup。`components/catalog.json` 同时记录每个发布包的大小和 SHA-256。
+
+桌面 Release 必须启用 Tauri `custom-protocol`，否则 WebView 会错误访问开发地址 `http://localhost:1420`。模块化构建脚本会强制启用该特性，源码也会拒绝缺少该特性的 Release 编译。Python adapter 使用当前构建环境中的 setuptools/wheel 并带 `--no-index` 构建，不访问 PyPI。
+
+若省略 `-ComponentsOutput`，组件默认输出到 Setup 同目录的 `components/`。若 NSIS 没安装在默认路径，可额外传入 `-Makensis D:\tools\nsis\makensis.exe`。输入 stage 保留完整运行时布局，便于重复构建和重新拆包。
+
+只修改了 Core、Launcher 或 egui 向导时，可追加 `-CoreOnly` 复用已生成的独立组件目录，跳过桌面构建、运行时重封和大包压缩。
+
+## 数据、卸载与迁移
+
+工作区数据仍在 `<install>/data/`，Core 或组件更新不会触碰该目录。卸载器会注销用户级安装定位信息，并删除核心文件、已安装组件和旧版依赖目录，但保留 `data/`，避免误删项目、会话、知识库、RPAZ 与运行产物。
+
+迁移时可整体复制安装目录；若只迁移数据，复制 `data/` 后运行 `drpa doctor`，确认 Python 生成环境与新路径一致。

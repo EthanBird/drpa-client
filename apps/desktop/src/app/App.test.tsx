@@ -10,6 +10,7 @@ import { SettingsPage } from "../pages/SettingsPage";
 import { desktopGateway } from "../infra/gateway";
 import { resetAgentWorkspaceRuntimesForTests } from "../features/agent/AgentWorkspaceRuntime";
 import { App } from "./App";
+import { CONFIGURABLE_NAVIGATION_IDS } from "./navigation";
 import { useAppStore } from "./store";
 
 const dialogMocks = vi.hoisted(() => ({
@@ -71,6 +72,8 @@ describe("DRPA Next desktop shell", () => {
       language: "zh-CN",
       uiDensity: "compact",
       hidePageHeaders: false,
+      navigationMode: "developer",
+      customVisibleNavigationIds: [...CONFIGURABLE_NAVIGATION_IDS],
       collapsedSidebars: {},
       inspectorOpen: true,
       selectedPackageId: "com.drpa.invoice-hub",
@@ -428,6 +431,32 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.queryByText("紧凑布局")).not.toBeInTheDocument();
   });
 
+  it("switches navigation presets and supports custom page entries without disabling settings", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+
+    fireEvent.click(await screen.findByRole("radio", { name: "普通用户" }));
+    expect(useAppStore.getState().navigationMode).toBe("normal");
+    expect(screen.getByRole("button", { name: "BI 主页" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "AI Agent" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^运行工作台/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "运行记录" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "开发工作室" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "数据工作台" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "设置" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("radio", { name: "自定义" }));
+    const dataWorkspaceSwitch = screen.getByRole("switch", { name: "数据工作台" });
+    expect(dataWorkspaceSwitch).not.toBeChecked();
+    fireEvent.click(dataWorkspaceSwitch);
+    expect(useAppStore.getState().customVisibleNavigationIds).toContain("data");
+    expect(screen.getByRole("button", { name: "数据工作台" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "搜索或运行命令" }));
+    expect(screen.getByText("打开数据工作台")).toBeVisible();
+    expect(screen.queryByText("打开开发工作室")).not.toBeInTheDocument();
+  });
+
   it("renders the low-code BI homepage and exposes the widget palette", async () => {
     useAppStore.setState({ activeNavigation: "overview" });
     render(<App />);
@@ -581,6 +610,10 @@ describe("DRPA Next desktop shell", () => {
       environmentRoot: "environment",
       browserExecutable: "browser",
       message: "ready",
+      profileId: "org.drpa.python-runtime",
+      profileName: "Python 3.11 Full",
+      features: ["jupyter"],
+      profiles: [],
     });
     render(<RuntimePage />);
 
@@ -618,6 +651,46 @@ describe("DRPA Next desktop shell", () => {
     expect(screen.getByRole("progressbar", { name: "内存使用率" })).toHaveAttribute("aria-valuenow", "50");
     expect(screen.getByRole("progressbar", { name: "磁盘使用率" })).toHaveAttribute("aria-valuenow", "40");
     expect(screen.getByText("C:\\")).toBeVisible();
+  });
+
+  it("manages Python packages in the selected runtime profile", async () => {
+    const catalog = {
+      profileId: "org.drpa.python-runtime",
+      profileName: "Python 3.11 Full",
+      pythonVersion: "3.11.9",
+      backend: "uv",
+      backendVersion: "uv 0.11.28",
+      backendPath: "runtime/tools/uv.exe",
+      overlayRoot: "data/runtime-package-overlays/full/site-packages",
+      packages: [
+        { name: "drpa-runner", version: "2.1.1", source: "runtime", location: "runtime", removable: false },
+        { name: "rich", version: "14.0.0", source: "user", location: "overlay", removable: true },
+      ],
+    };
+    vi.spyOn(desktopGateway, "listRuntimePythonPackages").mockResolvedValue(catalog);
+    const installPackage = vi.spyOn(desktopGateway, "installRuntimePythonPackage").mockResolvedValue({
+      ...catalog,
+      packages: [...catalog.packages, { name: "polars", version: "1.32.0", source: "user", location: "overlay", removable: true }],
+    });
+    const uninstallPackage = vi.spyOn(desktopGateway, "uninstallRuntimePythonPackage").mockResolvedValue({
+      ...catalog,
+      packages: catalog.packages.filter((item) => item.name !== "rich"),
+    });
+
+    render(<RuntimePage />);
+
+    expect(await screen.findByRole("region", { name: "Python 包管理" })).toBeVisible();
+    expect(await screen.findByText("uv 0.11.28")).toBeVisible();
+    expect(screen.getByText("Runtime 内置")).toBeVisible();
+    expect(screen.getByRole("button", { name: "卸载 rich" })).toBeVisible();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "要安装的 Python 包" }), { target: { value: "polars==1.32.0" } });
+    fireEvent.click(screen.getByRole("button", { name: "安装" }));
+    await waitFor(() => expect(installPackage).toHaveBeenCalledWith("polars==1.32.0"));
+    expect(await screen.findByText("polars")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "卸载 rich" }));
+    await waitFor(() => expect(uninstallPackage).toHaveBeenCalledWith("rich"));
   });
 
   it("shows the current system account instead of a hard-coded profile", async () => {

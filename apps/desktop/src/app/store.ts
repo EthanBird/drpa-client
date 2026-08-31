@@ -2,6 +2,12 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import type { AgentConversationMessage, AgentConversationSession, AgentMode, AgentProviderRef, AgentToolPolicy, NavigationId, WorkspaceSnapshot } from "../domain/models";
+import {
+  CONFIGURABLE_NAVIGATION_IDS,
+  getVisibleNavigationIds,
+  normalizeCustomNavigationIds,
+  type NavigationMode,
+} from "./navigation";
 
 export type FontScale = number;
 export type UiLanguage = "zh-CN" | "en-US";
@@ -43,6 +49,8 @@ interface AppStore {
   language: UiLanguage;
   uiDensity: UiDensity;
   hidePageHeaders: boolean;
+  navigationMode: NavigationMode;
+  customVisibleNavigationIds: NavigationId[];
   collapsedSidebars: Record<string, boolean>;
   inspectorOpen: boolean;
   dragActive: boolean;
@@ -78,6 +86,8 @@ interface AppStore {
   setLanguage: (language: UiLanguage) => void;
   setUiDensity: (density: UiDensity) => void;
   setHidePageHeaders: (hidden: boolean) => void;
+  setNavigationMode: (mode: NavigationMode) => void;
+  setNavigationVisible: (id: NavigationId, visible: boolean) => void;
   setSidebarCollapsed: (id: string, collapsed: boolean) => void;
   toggleInspector: () => void;
   selectPackage: (packageId: string, profileId?: string) => void;
@@ -123,6 +133,8 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   language: "zh-CN",
   uiDensity: "compact",
   hidePageHeaders: false,
+  navigationMode: "normal",
+  customVisibleNavigationIds: [...CONFIGURABLE_NAVIGATION_IDS],
   collapsedSidebars: {},
   inspectorOpen: true,
   dragActive: false,
@@ -177,6 +189,21 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   setLanguage: (language) => set({ language }),
   setUiDensity: (uiDensity) => set({ uiDensity }),
   setHidePageHeaders: (hidePageHeaders) => set({ hidePageHeaders }),
+  setNavigationMode: (navigationMode) => set((state) => ({
+    navigationMode,
+    customVisibleNavigationIds: navigationMode === "custom" && state.navigationMode !== "custom"
+      ? [...getVisibleNavigationIds(state.navigationMode, state.customVisibleNavigationIds)]
+      : state.customVisibleNavigationIds,
+  })),
+  setNavigationVisible: (id, visible) => set((state) => {
+    const selected = new Set(state.customVisibleNavigationIds);
+    if (visible) selected.add(id);
+    else selected.delete(id);
+    return {
+      navigationMode: "custom",
+      customVisibleNavigationIds: normalizeCustomNavigationIds([...selected]),
+    };
+  }),
   setSidebarCollapsed: (id, collapsed) => set((state) => ({
     collapsedSidebars: { ...state.collapsedSidebars, [id]: collapsed },
   })),
@@ -319,7 +346,7 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
   })),
 }), {
   name: "drpa-ui-preferences",
-  version: 11,
+  version: 12,
   migrate: (persistedState, version) => {
     const state = (persistedState ?? {}) as Partial<AppStore>;
     const migrated = { ...state };
@@ -417,6 +444,12 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
         fileReadScope: state.agentToolPolicy?.fileReadScope ?? "system",
       } as AgentToolPolicy;
     }
+    if (version < 12) {
+      // Preserve the full navigation existing users had before interface modes
+      // were introduced. They can opt into Normal or Custom mode in Settings.
+      migrated.navigationMode = "developer";
+      migrated.customVisibleNavigationIds = [...CONFIGURABLE_NAVIGATION_IDS];
+    }
     if (version < 6) {
       migrated.agentMode = state.agentMode === "developer" ? "developer" : "rpaz";
     }
@@ -452,6 +485,8 @@ export const useAppStore = create<AppStore>()(persist((set) => ({
     language: state.language,
     uiDensity: state.uiDensity,
     hidePageHeaders: state.hidePageHeaders,
+    navigationMode: state.navigationMode,
+    customVisibleNavigationIds: state.customVisibleNavigationIds,
     collapsedSidebars: state.collapsedSidebars,
     agentBaseUrl: state.agentBaseUrl,
     agentModel: state.agentModel,

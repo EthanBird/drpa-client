@@ -1,3 +1,8 @@
+#[cfg(all(not(debug_assertions), not(feature = "custom-protocol")))]
+compile_error!(
+    "DRPA Desktop release builds must enable `drpa-desktop/custom-protocol` so bundled UI assets are used instead of the localhost dev server"
+);
+
 use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
@@ -11,12 +16,17 @@ use std::sync::{
 
 use base64::Engine as _;
 use drpa_host::{HostState, RunLaunch};
+use drpa_install::{
+    BrowserSource, ComponentLeaseGuard, ComponentManifest, ComponentSelection, InstallLayout,
+    resolve_browser,
+};
 use drpa_package::{Entrypoint, PackageManifest, safe_relative_path, validate_package_id};
 use drpa_protocol::{
     PackageSummary, RUNTIME_PROTOCOL_VERSION, RuntimeEvent, WindowsUpdatePhase,
     WindowsUpdateSession, WindowsUpdateStatus, WorkspaceSnapshot,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
 use zip::{ZipArchive, write::SimpleFileOptions};
@@ -45,6 +55,7 @@ mod native_splash;
 mod plugins;
 mod provider;
 mod python_flow;
+mod runtime_packages;
 mod system_metrics;
 mod workspaces;
 
@@ -52,6 +63,41 @@ const WINDOWS_UPDATE_SCHEMA: u32 = 2;
 const WINDOWS_UPDATE_HOST_PROTOCOL: u32 = 2;
 const WINDOWS_UPDATE_WORKER_PROTOCOL: u32 = 2;
 const MAX_OPTICAL_TRANSFER_BYTES: usize = 64 * 1024 * 1024;
+const PYTHON_MODULE_BOOTSTRAP: &str = r#"import os, runpy, site, sys
+for key in ('DRPA_PYTHON_RUNTIME_SOURCE', 'DRPA_PYTHON_PACKAGE_PATH'):
+    path = os.environ.get(key, '').strip()
+    if path:
+        site.addsitedir(path)
+        if path in sys.path:
+            sys.path.remove(path)
+        sys.path.insert(0, path)
+module = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_module(module, run_name='__main__', alter_sys=True)
+"#;
+
+pub fn installation_root_from_process() -> Result<PathBuf, String> {
+    if let Some(root) = std::env::var_os("DRPA_INSTALL_ROOT") {
+        let root = PathBuf::from(root);
+        if root.is_dir() {
+            return Ok(root);
+        }
+        return Err(format!(
+            "DRPA_INSTALL_ROOT 指向不存在的目录：{}",
+            root.display()
+        ));
+    }
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    for candidate in executable.ancestors().skip(1).take(6) {
+        if candidate.join(drpa_install::INSTALL_MARKER).is_file() {
+            return Ok(candidate.to_path_buf());
+        }
+    }
+    executable
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "无法定位应用安装目录".to_owned())
+}
 
 #[derive(Clone)]
 pub(crate) struct AppPaths {
@@ -295,6 +341,8 @@ struct StudioKernel {
     child: Child,
     stdin: BufWriter<ChildStdin>,
     stdout: BufReader<ChildStdout>,
+    _runtime_lease: Option<ComponentLeaseGuard>,
+    _browser_lease: Option<ComponentLeaseGuard>,
 }
 
 impl Drop for StudioKernel {
@@ -1733,7 +1781,19 @@ async fn run_agent_turn(
                 .as_ref()
                 .map(|runtime| runtime.python.clone())
                 .unwrap_or_default();
-            let browser = runtime.and_then(|runtime| runtime.browser);
+            let package_overlay = runtime
+                .as_ref()
+                .map(|runtime| runtime.package_overlay.clone())
+                .unwrap_or_default();
+            let browser = runtime.as_ref().and_then(|runtime| runtime.browser.clone());
+            let component_leases = runtime
+                .as_ref()
+                .map(RuntimeEnvironment::component_leases)
+                .unwrap_or_default();
+            let runtime_features = runtime
+                .as_ref()
+                .map(|runtime| runtime.features.clone())
+                .unwrap_or_default();
             let browser_session_id = if request.session_id.trim().is_empty() {
                 request_id.as_str()
             } else {
@@ -1749,8 +1809,11 @@ async fn run_agent_turn(
                 paths.workspace_root.clone(),
                 paths.resource_dir.clone(),
                 python,
+                package_overlay,
                 browser,
                 browser_session,
+                component_leases,
+                runtime_features,
                 host,
                 control.clone(),
                 |event| {
@@ -1847,15 +1910,23 @@ async fn start_plugin(
     manager: State<'_, plugins::PluginManager>,
 ) -> Result<(), String> {
     let workspace_root = paths.workspace_root.clone();
-    let python = if plugins::plugin_services_require_bundled_python(&workspace_root, &plugin_id)? {
-        Some(locate_runtime(&paths)?.python)
+    let runtime = if plugins::plugin_services_require_bundled_python(&workspace_root, &plugin_id)? {
+        Some(locate_runtime(&paths)?)
     } else {
         None
     };
+    let python = runtime.as_ref().map(|runtime| runtime.python.clone());
+    let runtime_lease = runtime.as_ref().and_then(|runtime| runtime._lease.clone());
     let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        plugins::start_plugin_inner(&workspace_root, &plugin_id, python.as_deref(), &manager)
-            .map_err(|error| plugins::redact_plugin_error(&workspace_root, &plugin_id, error))
+        plugins::start_plugin_inner(
+            &workspace_root,
+            &plugin_id,
+            python.as_deref(),
+            runtime_lease,
+            &manager,
+        )
+        .map_err(|error| plugins::redact_plugin_error(&workspace_root, &plugin_id, error))
     })
     .await
     .map_err(|error| format!("插件后台启动任务失败：{error}"))?
@@ -1883,10 +1954,10 @@ async fn invoke_plugin_tool(
 ) -> Result<plugins::PluginToolWorkbenchResult, String> {
     let paths = paths.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let python = locate_runtime(&paths)?.python;
+        let runtime = locate_runtime(&paths)?;
         plugins::invoke_plugin_tool_for_workbench(
             &paths.workspace_root,
-            &python,
+            &runtime.python,
             &plugin_id,
             &tool_name,
             &input,
@@ -2275,21 +2346,98 @@ fn collect_files(root: &Path, current: &Path, output: &mut Vec<String>) -> std::
     Ok(())
 }
 
+#[derive(Clone)]
 struct RuntimeEnvironment {
     python: PathBuf,
     python_path: Option<PathBuf>,
     browser: Option<PathBuf>,
     rpa_bundle: Option<PathBuf>,
+    runtime_root: PathBuf,
+    package_overlay: PathBuf,
+    _profile_id: String,
+    _profile_name: String,
+    _environment_root: PathBuf,
+    features: Vec<String>,
+    _lease: Option<ComponentLeaseGuard>,
+    _browser_lease: Option<ComponentLeaseGuard>,
 }
 
-#[derive(Deserialize)]
+impl RuntimeEnvironment {
+    fn component_leases(&self) -> Vec<ComponentLeaseGuard> {
+        self._lease
+            .iter()
+            .chain(self._browser_lease.iter())
+            .cloned()
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OfflineRuntimeManifest {
     bundle_version: String,
     platform: String,
     python_version: String,
     python_executable: String,
+    #[serde(default)]
     browser_executable: String,
+    #[serde(default = "default_runtime_environment_mode")]
+    environment_mode: String,
+    #[serde(default = "default_runtime_features")]
+    features: Vec<String>,
+    #[serde(default)]
+    display_name: String,
+}
+
+fn default_runtime_environment_mode() -> String {
+    "materialized".to_owned()
+}
+
+fn default_runtime_features() -> Vec<String> {
+    vec![
+        "agent.python".to_owned(),
+        "rpaz.python".to_owned(),
+        "studio.kernel".to_owned(),
+        "jupyter".to_owned(),
+        "documents".to_owned(),
+        "browser.drissionpage".to_owned(),
+        "plugins.python".to_owned(),
+    ]
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeCandidate {
+    profile_id: String,
+    profile_name: String,
+    component: Option<(InstallLayout, ComponentSelection)>,
+    root: PathBuf,
+    manifest: OfflineRuntimeManifest,
+    environment_root: PathBuf,
+    package_overlay: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeProfileSelection {
+    schema: u32,
+    profile_id: String,
+    selected_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeProfileSummary {
+    id: String,
+    name: String,
+    component_version: String,
+    python_version: String,
+    environment_mode: String,
+    features: Vec<String>,
+    selected: bool,
+    ready: bool,
+    in_use: usize,
+    runtime_root: String,
+    environment_root: String,
 }
 
 #[derive(Serialize)]
@@ -2302,6 +2450,10 @@ struct RuntimeStatus {
     environment_root: String,
     browser_executable: String,
     message: String,
+    profile_id: String,
+    profile_name: String,
+    features: Vec<String>,
+    profiles: Vec<RuntimeProfileSummary>,
 }
 
 #[derive(Serialize)]
@@ -2414,9 +2566,7 @@ fn apply_windows_update(
         return Err("更新包版本标识无效".to_owned());
     }
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let install = executable
-        .parent()
-        .ok_or_else(|| "定位安装目录失败".to_owned())?;
+    let install = installation_root_from_process()?;
     let base_version = manifest
         .base_version
         .as_ref()
@@ -2563,7 +2713,7 @@ fn apply_windows_update(
     if let Err(error) = spawn_windows_update_worker(
         &updater,
         &stage,
-        install,
+        &install,
         launch,
         &status_path,
         &restart_request,
@@ -2750,6 +2900,33 @@ fn get_runtime_status(paths: State<'_, AppPaths>) -> Result<RuntimeStatus, Strin
     inspect_runtime_status(&paths)
 }
 
+#[tauri::command(async)]
+fn select_runtime_profile(
+    profile_id: String,
+    paths: State<'_, AppPaths>,
+    kernels: State<'_, StudioKernelManager>,
+) -> Result<RuntimeStatus, String> {
+    let profile_id = profile_id.trim();
+    let candidates = runtime_profile_candidates(&paths)?;
+    if !candidates
+        .iter()
+        .any(|candidate| candidate.profile_id == profile_id)
+    {
+        return Err(format!(
+            "运行时 Profile 不存在或与当前平台不兼容：{profile_id}"
+        ));
+    }
+    write_runtime_profile_selection(&paths, profile_id)?;
+    // Studio kernels are long-lived and keyed by project. Waiting for this lock lets
+    // any in-flight request finish, then ensures the next cell uses the new profile.
+    kernels
+        .sessions
+        .lock()
+        .map_err(|_| "Studio Kernel 状态已损坏".to_owned())?
+        .clear();
+    inspect_runtime_status(&paths)
+}
+
 #[tauri::command]
 fn get_platform_capabilities() -> PlatformCapabilities {
     let reduced_visual_effects = std::env::var("DRPA_UI_REDUCED_EFFECTS")
@@ -2801,6 +2978,7 @@ fn get_platform_capabilities() -> PlatformCapabilities {
 fn initialize_runtime(paths: State<'_, AppPaths>) -> Result<RuntimeStatus, String> {
     let runtime = locate_runtime(&paths)?;
     verify_runtime_imports(&runtime)?;
+    drop(runtime);
     inspect_runtime_status(&paths)
 }
 
@@ -2814,13 +2992,27 @@ fn repair_runtime(
         .lock()
         .map_err(|_| "无法停止 Studio Kernel".to_owned())?
         .clear();
-    let generated = paths.data_root.join("runtime-environment");
-    if generated.is_dir() {
-        fs::remove_dir_all(&generated)
-            .map_err(|error| format!("无法清理损坏的运行环境：{error}"))?;
+    let candidate = selected_runtime_candidate(&paths)?;
+    if candidate.manifest.environment_mode == "materialized" {
+        if let Some((layout, selection)) = &candidate.component {
+            let leases = layout
+                .active_component_leases(&candidate.profile_id, Some(&selection.version))
+                .map_err(|error| error.to_string())?;
+            if !leases.is_empty() {
+                return Err(format!(
+                    "该 Profile 仍被 {} 个任务或插件使用，请先停止它们再修复",
+                    leases.len()
+                ));
+            }
+        }
+        if candidate.environment_root.is_dir() {
+            fs::remove_dir_all(&candidate.environment_root)
+                .map_err(|error| format!("无法清理损坏的运行环境：{error}"))?;
+        }
     }
     let runtime = locate_runtime(&paths)?;
     verify_runtime_imports(&runtime)?;
+    drop(runtime);
     inspect_runtime_status(&paths)
 }
 
@@ -2830,13 +3022,22 @@ fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKerne
         python_path,
         browser,
         rpa_bundle,
+        package_overlay,
+        _lease,
+        _browser_lease,
+        ..
     } = locate_runtime(paths)?;
     let project_root = paths.workspace_root.join("projects").join(project_id);
     fs::create_dir_all(paths.workspace_root.join("rpa-python"))
         .map_err(|error| format!("准备 RPA for Python 工作目录失败：{error}"))?;
     let mut command = Command::new(python);
+    configure_python_module_command(
+        &mut command,
+        "drpa_runner.kernel",
+        &package_overlay,
+        python_path.as_deref(),
+    );
     command
-        .args(["-m", "drpa_runner.kernel"])
         .current_dir(project_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2845,14 +3046,12 @@ fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKerne
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
+        .env("DRPA_PYTHON_PACKAGE_PATH", &package_overlay)
         .env(
             "DRPA_BROWSER_PROFILE_ROOT",
             paths.workspace_root.join("browser").join("drissionpage"),
         )
         .env("DRPA_RPA_HOME", paths.workspace_root.join("rpa-python"));
-    if let Some(python_path) = python_path {
-        command.env("PYTHONPATH", python_path);
-    }
     if let Some(browser) = browser {
         command.env("DRPA_BROWSER_PATH", browser);
     }
@@ -2876,6 +3075,8 @@ fn spawn_studio_kernel(project_id: &str, paths: &AppPaths) -> Result<StudioKerne
         child,
         stdin: BufWriter::new(stdin),
         stdout: BufReader::new(stdout),
+        _runtime_lease: _lease,
+        _browser_lease,
     })
 }
 
@@ -2922,8 +3123,14 @@ fn execute_python_run(
     serde_json::to_writer_pretty(request_file, &request).map_err(|error| error.to_string())?;
 
     let mut command = Command::new(&runtime.python);
+    configure_python_module_command(
+        &mut command,
+        "drpa_runner.cli",
+        &runtime.package_overlay,
+        runtime.python_path.as_deref(),
+    );
     command
-        .args(["-m", "drpa_runner.cli", "--request"])
+        .arg("--request")
         .arg(&request_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -2932,14 +3139,12 @@ fn execute_python_run(
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
+        .env("DRPA_PYTHON_PACKAGE_PATH", &runtime.package_overlay)
         .env(
             "DRPA_BROWSER_PROFILE_ROOT",
             paths.workspace_root.join("browser").join("drissionpage"),
         )
         .env("DRPA_RPA_HOME", paths.workspace_root.join("rpa-python"));
-    if let Some(python_path) = runtime.python_path {
-        command.env("PYTHONPATH", python_path);
-    }
     if let Some(browser) = runtime.browser {
         command.env("DRPA_BROWSER_PATH", browser);
     }
@@ -3010,6 +3215,33 @@ fn execute_python_run(
     })();
     processes.unregister(&launch.run_id, process_group);
     result
+}
+
+pub(crate) fn set_python_search_path(
+    command: &mut Command,
+    package_overlay: &Path,
+    runtime_source: Option<&Path>,
+) {
+    let search_paths = std::iter::once(package_overlay)
+        .chain(runtime_source)
+        .collect::<Vec<_>>();
+    if let Ok(value) = std::env::join_paths(search_paths) {
+        command.env("PYTHONPATH", value);
+    }
+    command.env("DRPA_PYTHON_PACKAGE_PATH", package_overlay);
+    if let Some(runtime_source) = runtime_source {
+        command.env("DRPA_PYTHON_RUNTIME_SOURCE", runtime_source);
+    }
+}
+
+pub(crate) fn configure_python_module_command(
+    command: &mut Command,
+    module: &str,
+    package_overlay: &Path,
+    runtime_source: Option<&Path>,
+) {
+    command.args(["-I", "-c", PYTHON_MODULE_BOOTSTRAP, module]);
+    set_python_search_path(command, package_overlay, runtime_source);
 }
 
 fn installed_package_catalog(paths: &AppPaths) -> Result<serde_json::Value, String> {
@@ -3097,33 +3329,85 @@ fn decode_runtime_event_line(bytes: &[u8]) -> String {
 
 fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
     if let Some(python) = std::env::var_os("DRPA_RUNTIME_PYTHON") {
+        let python = PathBuf::from(python);
+        let (browser, browser_lease) = resolve_preferred_browser_with_lease()?;
         return Ok(RuntimeEnvironment {
-            python: PathBuf::from(python),
+            python: python.clone(),
             python_path: std::env::var_os("DRPA_RUNTIME_PYTHONPATH").map(PathBuf::from),
-            browser: std::env::var_os("DRPA_BROWSER_PATH").map(PathBuf::from),
+            browser,
             rpa_bundle: std::env::var_os("DRPA_RPA_BUNDLE").map(PathBuf::from),
+            runtime_root: python.parent().unwrap_or(Path::new("")).to_path_buf(),
+            package_overlay: paths
+                .data_root
+                .join("runtime-package-overlays/environment-override/site-packages"),
+            _profile_id: "environment.override".to_owned(),
+            _profile_name: "环境变量覆盖".to_owned(),
+            _environment_root: PathBuf::new(),
+            features: default_runtime_features(),
+            _lease: None,
+            _browser_lease: browser_lease,
         });
     }
 
-    for root in runtime_roots(paths)? {
-        if !root.join("manifest.json").is_file() {
-            continue;
-        }
-        let environment = paths.data_root.join("runtime-environment");
-        let python = prepare_sealed_runtime(&root, &environment)?;
-        let manifest = read_offline_runtime_manifest(&root)?;
+    if let Ok(candidate) = selected_runtime_candidate(paths) {
+        let lease = candidate
+            .component
+            .as_ref()
+            .map(|(layout, selection)| {
+                layout.acquire_component_lease(
+                    &candidate.profile_id,
+                    &selection.version,
+                    "desktop-runtime",
+                )
+            })
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let python = match candidate.manifest.environment_mode.as_str() {
+            "materialized" => {
+                migrate_legacy_runtime_environment(paths, &candidate);
+                prepare_sealed_runtime(&candidate.root, &candidate.environment_root)?
+            }
+            "frozen" => resolve_runtime_manifest_path(
+                &candidate.root,
+                &candidate.manifest.python_executable,
+            )?,
+            mode => return Err(format!("不支持的 Python 环境模式：{mode}")),
+        };
+        let python_path = candidate
+            .root
+            .join("vendor")
+            .is_dir()
+            .then(|| candidate.root.join("vendor"));
+        let (preferred_browser, browser_lease) = resolve_preferred_browser_with_lease()?;
+        let browser = preferred_browser.or_else(|| {
+            (!candidate.manifest.browser_executable.trim().is_empty())
+                .then(|| {
+                    resolve_runtime_manifest_path(
+                        &candidate.root,
+                        &candidate.manifest.browser_executable,
+                    )
+                    .ok()
+                })
+                .flatten()
+        });
         return Ok(RuntimeEnvironment {
             python,
-            python_path: None,
-            browser: Some(resolve_runtime_manifest_path(
-                &root,
-                &manifest.browser_executable,
-            )?),
-            rpa_bundle: root
+            python_path,
+            browser,
+            rpa_bundle: candidate
+                .root
                 .join("rpa")
                 .join("rpa_python.zip")
                 .is_file()
-                .then(|| root.join("rpa").join("rpa_python.zip")),
+                .then(|| candidate.root.join("rpa").join("rpa_python.zip")),
+            runtime_root: candidate.root,
+            package_overlay: candidate.package_overlay,
+            _profile_id: candidate.profile_id,
+            _profile_name: candidate.profile_name,
+            _environment_root: candidate.environment_root,
+            features: candidate.manifest.features,
+            _lease: lease,
+            _browser_lease: browser_lease,
         });
     }
 
@@ -3133,6 +3417,7 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
         if source.is_dir() {
             let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
             let venv_python = environment_python_path(&workspace.join(".venv"));
+            let (browser, browser_lease) = resolve_preferred_browser_with_lease()?;
             return Ok(RuntimeEnvironment {
                 python: if venv_python.is_file() {
                     venv_python
@@ -3140,8 +3425,18 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
                     PathBuf::from(if cfg!(windows) { "python" } else { "python3" })
                 },
                 python_path: Some(source),
-                browser: std::env::var_os("DRPA_BROWSER_PATH").map(PathBuf::from),
+                browser,
                 rpa_bundle: std::env::var_os("DRPA_RPA_BUNDLE").map(PathBuf::from),
+                runtime_root: workspace.clone(),
+                package_overlay: paths
+                    .data_root
+                    .join("runtime-package-overlays/development-source/site-packages"),
+                _profile_id: "development.source".to_owned(),
+                _profile_name: "源码开发环境".to_owned(),
+                _environment_root: workspace.join(".venv"),
+                features: default_runtime_features(),
+                _lease: None,
+                _browser_lease: browser_lease,
             });
         }
     }
@@ -3152,12 +3447,266 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
     ))
 }
 
-pub(crate) fn locate_runtime_python(paths: &AppPaths) -> Result<PathBuf, String> {
-    Ok(locate_runtime(paths)?.python)
+fn runtime_profile_selection_path(paths: &AppPaths) -> PathBuf {
+    paths
+        .workspace_root
+        .join("system")
+        .join("runtime-profile.json")
 }
 
+fn read_runtime_profile_selection(paths: &AppPaths) -> Option<String> {
+    if let Some(profile_id) = std::env::var_os("DRPA_RUNTIME_PROFILE") {
+        return Some(profile_id.to_string_lossy().trim().to_owned());
+    }
+    let source = fs::read_to_string(runtime_profile_selection_path(paths)).ok()?;
+    let selection: RuntimeProfileSelection = serde_json::from_str(&source).ok()?;
+    (selection.schema == 1 && !selection.profile_id.trim().is_empty())
+        .then_some(selection.profile_id)
+}
+
+fn write_runtime_profile_selection(paths: &AppPaths, profile_id: &str) -> Result<(), String> {
+    let path = runtime_profile_selection_path(paths);
+    let parent = path
+        .parent()
+        .ok_or_else(|| "运行时 Profile 配置路径无效".to_owned())?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let temporary = parent.join(format!(".runtime-profile-{}.tmp", Uuid::new_v4().simple()));
+    let selection = RuntimeProfileSelection {
+        schema: 1,
+        profile_id: profile_id.to_owned(),
+        selected_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+    };
+    let mut file = File::create(&temporary).map_err(|error| error.to_string())?;
+    serde_json::to_writer_pretty(&mut file, &selection).map_err(|error| error.to_string())?;
+    file.write_all(b"\n").map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    replace_runtime_selection_file(&temporary, &path).inspect_err(|_| {
+        let _ = fs::remove_file(&temporary);
+    })
+}
+
+#[cfg(windows)]
+fn replace_runtime_selection_file(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let moved = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(format!(
+            "无法原子更新运行时 Profile：{}",
+            std::io::Error::last_os_error()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_runtime_selection_file(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::rename(source, destination).map_err(|error| error.to_string())
+}
+
+fn runtime_environment_digest(
+    profile_id: &str,
+    component_version: &str,
+    root: &Path,
+) -> Result<String, String> {
+    let manifest = fs::read(root.join("manifest.json")).map_err(|error| error.to_string())?;
+    let mut digest = Sha256::new();
+    digest.update(profile_id.as_bytes());
+    digest.update([0]);
+    digest.update(component_version.as_bytes());
+    digest.update([0]);
+    digest.update(manifest);
+    Ok(hex::encode(digest.finalize())[..20].to_owned())
+}
+
+fn migrate_legacy_runtime_environment(paths: &AppPaths, candidate: &RuntimeCandidate) {
+    if candidate.environment_root.exists()
+        || !matches!(
+            candidate.profile_id.as_str(),
+            "org.drpa.python-runtime" | "legacy.bundled"
+        )
+    {
+        return;
+    }
+    let legacy = paths.data_root.join("runtime-environment/environment");
+    let marker = legacy.join(".drpa-runtime.json");
+    let compatible = fs::read_to_string(marker)
+        .ok()
+        .and_then(|source| serde_json::from_str::<serde_json::Value>(&source).ok())
+        .is_some_and(|marker| {
+            marker
+                .get("bundleVersion")
+                .and_then(serde_json::Value::as_str)
+                == Some(candidate.manifest.bundle_version.as_str())
+                && marker
+                    .get("pythonVersion")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(candidate.manifest.python_version.as_str())
+        });
+    if !compatible {
+        return;
+    }
+    let Some(parent) = candidate.environment_root.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_ok() {
+        let _ = fs::rename(legacy, &candidate.environment_root);
+    }
+}
+
+fn runtime_profile_candidates(paths: &AppPaths) -> Result<Vec<RuntimeCandidate>, String> {
+    let install_root = installation_root_from_process()?;
+    let mut candidates = Vec::new();
+    let mut roots = HashSet::new();
+    if let Ok(layout) = InstallLayout::open(&install_root) {
+        for (id, selection, root) in layout
+            .providers_for("runtime.python")
+            .map_err(|error| error.to_string())?
+        {
+            let Ok(manifest) = read_offline_runtime_manifest(&root) else {
+                continue;
+            };
+            let component_manifest = fs::read_to_string(root.join("component.json"))
+                .ok()
+                .and_then(|source| serde_json::from_str::<ComponentManifest>(&source).ok());
+            let name = if !manifest.display_name.trim().is_empty() {
+                manifest.display_name.clone()
+            } else {
+                component_manifest
+                    .map(|item| item.display_name)
+                    .unwrap_or_else(|| id.clone())
+            };
+            let digest = runtime_environment_digest(&id, &selection.version, &root)?;
+            let environment_root = if manifest.environment_mode == "frozen" {
+                root.clone()
+            } else {
+                paths
+                    .data_root
+                    .join("runtime-environments")
+                    .join(&digest)
+                    .join("environment")
+            };
+            let package_overlay = paths
+                .data_root
+                .join("runtime-package-overlays")
+                .join(&digest)
+                .join("site-packages");
+            roots.insert(root.clone());
+            candidates.push(RuntimeCandidate {
+                profile_id: id,
+                profile_name: name,
+                component: Some((layout.clone(), selection)),
+                root,
+                manifest,
+                environment_root,
+                package_overlay,
+            });
+        }
+    }
+    for root in legacy_runtime_roots(paths)? {
+        if roots.contains(&root) || !root.join("manifest.json").is_file() {
+            continue;
+        }
+        let Ok(manifest) = read_offline_runtime_manifest(&root) else {
+            continue;
+        };
+        let profile_id = "legacy.bundled".to_owned();
+        let digest = runtime_environment_digest(&profile_id, &manifest.bundle_version, &root)?;
+        let environment_root = if manifest.environment_mode == "frozen" {
+            root.clone()
+        } else {
+            paths
+                .data_root
+                .join("runtime-environments")
+                .join(&digest)
+                .join("environment")
+        };
+        let package_overlay = paths
+            .data_root
+            .join("runtime-package-overlays")
+            .join(&digest)
+            .join("site-packages");
+        candidates.push(RuntimeCandidate {
+            profile_name: if manifest.display_name.trim().is_empty() {
+                "内置 Python 运行环境".to_owned()
+            } else {
+                manifest.display_name.clone()
+            },
+            profile_id,
+            component: None,
+            root,
+            manifest,
+            environment_root,
+            package_overlay,
+        });
+    }
+    candidates.sort_by(|left, right| {
+        let left_priority = (left.profile_id != "org.drpa.python-runtime") as u8;
+        let right_priority = (right.profile_id != "org.drpa.python-runtime") as u8;
+        left_priority
+            .cmp(&right_priority)
+            .then_with(|| left.profile_name.cmp(&right.profile_name))
+    });
+    Ok(candidates)
+}
+
+fn selected_runtime_candidate(paths: &AppPaths) -> Result<RuntimeCandidate, String> {
+    let candidates = runtime_profile_candidates(paths)?;
+    if candidates.is_empty() {
+        return Err("未找到与当前平台匹配的封装运行时".to_owned());
+    }
+    let selected = read_runtime_profile_selection(paths);
+    Ok(selected
+        .as_deref()
+        .and_then(|id| {
+            candidates
+                .iter()
+                .find(|candidate| candidate.profile_id == id)
+        })
+        .cloned()
+        .unwrap_or_else(|| candidates[0].clone()))
+}
+
+#[allow(dead_code)]
 fn runtime_roots(paths: &AppPaths) -> Result<Vec<PathBuf>, String> {
+    let mut roots = runtime_profile_candidates(paths)?
+        .into_iter()
+        .map(|candidate| candidate.root)
+        .collect::<Vec<_>>();
+    for root in legacy_runtime_roots(paths)? {
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    Ok(roots)
+}
+
+fn legacy_runtime_roots(paths: &AppPaths) -> Result<Vec<PathBuf>, String> {
+    #[cfg(target_os = "macos")]
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let install_root = installation_root_from_process()?;
     let mut roots = Vec::new();
     if let Some(root) = std::env::var_os("DRPA_RUNTIME_ROOT") {
         roots.push(PathBuf::from(root));
@@ -3167,9 +3716,9 @@ fn runtime_roots(paths: &AppPaths) -> Result<Vec<PathBuf>, String> {
     {
         roots.push(resource_dir.join("runtime"));
     }
+    roots.push(install_root.join("runtime"));
+    #[cfg(target_os = "macos")]
     if let Some(parent) = executable.parent() {
-        roots.push(parent.join("runtime"));
-        #[cfg(target_os = "macos")]
         if let Some(contents) = parent.parent() {
             roots.push(contents.join("Resources/runtime"));
         }
@@ -3184,18 +3733,37 @@ fn runtime_roots(paths: &AppPaths) -> Result<Vec<PathBuf>, String> {
 }
 
 fn inspect_runtime_status(paths: &AppPaths) -> Result<RuntimeStatus, String> {
-    let root = runtime_roots(paths)?
-        .into_iter()
-        .find(|candidate| candidate.join("manifest.json").is_file())
-        .ok_or_else(|| "未找到与当前平台匹配的封装运行时".to_owned())?;
-    let manifest = read_offline_runtime_manifest(&root)?;
-    let browser = resolve_runtime_manifest_path(&root, &manifest.browser_executable)?;
-    let environment_root = paths.data_root.join("runtime-environment/environment");
-    let python = environment_python_path(&environment_root);
-    let marker = environment_root.join(".drpa-runtime.json");
-    let pyvenv = environment_root.join("pyvenv.cfg");
-    let (state, message) = if python.is_file() && marker.is_file() && pyvenv.is_file() {
-        ("ready", "Python、Jupyter Kernel 与浏览器自动化依赖已就绪")
+    let candidate = selected_runtime_candidate(paths)?;
+    let root = &candidate.root;
+    let manifest = &candidate.manifest;
+    let browser = resolve_preferred_browser().or_else(|| {
+        (!manifest.browser_executable.trim().is_empty())
+            .then(|| resolve_runtime_manifest_path(root, &manifest.browser_executable).ok())
+            .flatten()
+    });
+    let environment_root = &candidate.environment_root;
+    let python = if manifest.environment_mode == "frozen" {
+        resolve_runtime_manifest_path(root, &manifest.python_executable).ok()
+    } else {
+        Some(environment_python_path(environment_root))
+    };
+    let materialized_ready = python.as_ref().is_some_and(|path| path.is_file())
+        && environment_root.join(".drpa-runtime.json").is_file()
+        && environment_root.join("pyvenv.cfg").is_file();
+    let ready = if manifest.environment_mode == "frozen" {
+        python.as_ref().is_some_and(|path| path.is_file())
+    } else {
+        materialized_ready
+    };
+    let (state, message) = if ready {
+        if browser.is_some() {
+            ("ready", "所选 Python Profile 与浏览器自动化入口已就绪")
+        } else {
+            (
+                "ready",
+                "所选 Python Profile 已就绪；未检测到 Chromium 兼容浏览器",
+            )
+        }
     } else if environment_root.exists() {
         (
             "broken",
@@ -3207,14 +3775,60 @@ fn inspect_runtime_status(paths: &AppPaths) -> Result<RuntimeStatus, String> {
             "运行环境尚未初始化；首次初始化完全离线完成",
         )
     };
+    let selected_id = candidate.profile_id.clone();
+    let profiles = runtime_profile_candidates(paths)?
+        .into_iter()
+        .map(|profile| {
+            let ready = if profile.manifest.environment_mode == "frozen" {
+                resolve_runtime_manifest_path(&profile.root, &profile.manifest.python_executable)
+                    .is_ok()
+            } else {
+                environment_python_path(&profile.environment_root).is_file()
+                    && profile
+                        .environment_root
+                        .join(".drpa-runtime.json")
+                        .is_file()
+            };
+            let (component_version, in_use) = profile
+                .component
+                .as_ref()
+                .map(|(layout, selection)| {
+                    let in_use = layout
+                        .active_component_leases(&profile.profile_id, Some(&selection.version))
+                        .map(|leases| leases.len())
+                        .unwrap_or(0);
+                    (selection.version.clone(), in_use)
+                })
+                .unwrap_or_else(|| (profile.manifest.bundle_version.clone(), 0));
+            RuntimeProfileSummary {
+                id: profile.profile_id.clone(),
+                name: profile.profile_name,
+                component_version,
+                python_version: profile.manifest.python_version,
+                environment_mode: profile.manifest.environment_mode,
+                features: profile.manifest.features,
+                selected: profile.profile_id == selected_id,
+                ready,
+                in_use,
+                runtime_root: profile.root.display().to_string(),
+                environment_root: profile.environment_root.display().to_string(),
+            }
+        })
+        .collect();
     Ok(RuntimeStatus {
         state,
-        bundle_version: manifest.bundle_version,
-        python_version: manifest.python_version,
+        bundle_version: manifest.bundle_version.clone(),
+        python_version: manifest.python_version.clone(),
         runtime_root: root.display().to_string(),
         environment_root: environment_root.display().to_string(),
-        browser_executable: browser.display().to_string(),
+        browser_executable: browser
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "未安装可选 Chromium 浏览器组件".to_owned()),
         message: message.to_owned(),
+        profile_id: candidate.profile_id,
+        profile_name: candidate.profile_name,
+        features: manifest.features.clone(),
+        profiles,
     })
 }
 
@@ -3227,13 +3841,14 @@ fn environment_python_path(environment: &Path) -> PathBuf {
 }
 
 fn verify_runtime_imports(runtime: &RuntimeEnvironment) -> Result<(), String> {
+    let verification = if runtime.features.iter().any(|feature| feature == "jupyter") {
+        "import drpa_runner, DrissionPage, ipykernel, jupyter_client, rpa, tagui; from drpa_runner import agent_mcp, python_flow; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert agent_mcp.TOOL_DEFINITIONS; assert python_flow.SCHEMA_VERSION == 1; print('DRPA_RUNTIME_OK')"
+    } else {
+        "import drpa_runner; from drpa_runner import agent_mcp, python_flow; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert agent_mcp.TOOL_DEFINITIONS; assert python_flow.SCHEMA_VERSION == 1; print('DRPA_RUNTIME_MINIMAL_OK')"
+    };
     let mut command = Command::new(&runtime.python);
     command
-        .args([
-            "-I",
-            "-c",
-            "import drpa_runner, DrissionPage, ipykernel, jupyter_client, rpa, tagui; from drpa_runner import agent_mcp, python_flow; from drpa_runner.context import RuntimeContext; assert hasattr(RuntimeContext, 'open_output_directory'); assert agent_mcp.TOOL_DEFINITIONS; assert python_flow.SCHEMA_VERSION == 1; print('DRPA_RUNTIME_OK')",
-        ])
+        .args(["-I", "-c", verification])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -3252,7 +3867,7 @@ fn verify_runtime_imports(runtime: &RuntimeEnvironment) -> Result<(), String> {
 }
 
 fn prepare_sealed_runtime(root: &Path, environment: &Path) -> Result<PathBuf, String> {
-    let environment_python = environment_python_path(&environment.join("environment"));
+    let environment_python = environment_python_path(environment);
     let manifest = read_offline_runtime_manifest(root)?;
     let bundled = resolve_runtime_manifest_path(root, &manifest.python_executable)?;
     let bootstrap = root.join("bootstrap_runtime.py");
@@ -3263,7 +3878,7 @@ fn prepare_sealed_runtime(root: &Path, environment: &Path) -> Result<PathBuf, St
     command
         .arg(bootstrap)
         .arg("--environment")
-        .arg(environment.join("environment"))
+        .arg(environment)
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -3318,6 +3933,34 @@ fn resolve_runtime_manifest_path(root: &Path, relative: &str) -> Result<PathBuf,
     } else {
         Err(format!("封装运行时缺少文件：{}", path.display()))
     }
+}
+
+fn resolve_preferred_browser() -> Option<PathBuf> {
+    let install_root = installation_root_from_process().ok()?;
+    let layout = InstallLayout::open(install_root).ok();
+    resolve_browser(layout.as_ref())
+        .ok()
+        .flatten()
+        .map(|browser| browser.executable)
+}
+
+fn resolve_preferred_browser_with_lease()
+-> Result<(Option<PathBuf>, Option<ComponentLeaseGuard>), String> {
+    let install_root = installation_root_from_process()?;
+    let layout = InstallLayout::open(install_root).ok();
+    let browser = resolve_browser(layout.as_ref()).map_err(|error| error.to_string())?;
+    let lease = match (&layout, browser.as_ref().map(|item| &item.source)) {
+        (Some(layout), Some(BrowserSource::Component(id))) => layout
+            .active_component(id)
+            .map_err(|error| error.to_string())?
+            .map(|(selection, _)| {
+                layout.acquire_component_lease(id, &selection.version, "desktop-browser")
+            })
+            .transpose()
+            .map_err(|error| error.to_string())?,
+        _ => None,
+    };
+    Ok((browser.map(|item| item.executable), lease))
 }
 
 fn update_worker_command(
@@ -3465,11 +4108,7 @@ fn initialize_desktop(
     } else {
         #[cfg(windows)]
         {
-            std::env::current_exe()
-                .map_err(|error| format!("无法定位当前程序：{error}"))?
-                .parent()
-                .ok_or_else(|| "无法定位应用安装目录".to_owned())?
-                .join("data")
+            installation_root_from_process()?.join("data")
         }
         #[cfg(not(windows))]
         {
@@ -3510,12 +4149,14 @@ fn initialize_desktop(
                 let _ = plugins::start_autostart_plugins(
                     &autostart_workspace,
                     None,
+                    None,
                     &autostart_manager,
                 );
                 if let Ok(runtime) = locate_runtime(&autostart_paths) {
                     let _ = plugins::start_autostart_plugins(
                         &autostart_workspace,
                         Some(&runtime.python),
+                        runtime._lease.clone(),
                         &autostart_manager,
                     );
                 }
@@ -3763,6 +4404,7 @@ pub fn run() {
             database::list_database_tables,
             database::describe_database_table,
             database::execute_database_sql,
+            database::export_database_query_result,
             database::get_database_schema_context,
             database::open_workspace_database_directory,
             database::list_remote_database_profiles,
@@ -3879,6 +4521,10 @@ pub fn run() {
             plugins::validate_plugin_project,
             plugins::build_plugin_project,
             get_runtime_status,
+            select_runtime_profile,
+            runtime_packages::list_runtime_python_packages,
+            runtime_packages::install_runtime_python_package,
+            runtime_packages::uninstall_runtime_python_package,
             system_metrics::get_system_metrics,
             get_platform_capabilities,
             initialize_runtime,
@@ -3939,6 +4585,24 @@ mod tests {
         let root = std::env::temp_dir().join(format!("drpa-runtime-test-{}", Uuid::new_v4()));
         let error = resolve_runtime_manifest_path(&root, "../python.exe").unwrap_err();
         assert!(error.contains("不安全路径"));
+    }
+
+    #[test]
+    fn runtime_profile_selection_is_persisted_per_workspace() {
+        let root = std::env::temp_dir().join(format!("drpa-profile-test-{}", Uuid::new_v4()));
+        let paths = AppPaths {
+            data_root: root.join("data"),
+            workspace_root: root.join("workspace"),
+            resource_dir: None,
+        };
+
+        write_runtime_profile_selection(&paths, "org.drpa.python-runtime.py314-minimal").unwrap();
+
+        assert_eq!(
+            read_runtime_profile_selection(&paths).as_deref(),
+            Some("org.drpa.python-runtime.py314-minimal")
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(target_os = "linux")]

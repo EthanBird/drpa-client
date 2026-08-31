@@ -6,6 +6,9 @@ import io
 import json
 import os
 import queue
+import inspect as pyinspect
+import keyword
+import rlcompleter
 import subprocess
 import sys
 import time
@@ -55,6 +58,60 @@ class StudioKernel:
             "traceback": trace,
             "variables": self._variables(),
             "duration_ms": round((time.perf_counter() - started) * 1000),
+        }
+
+    def close(self) -> None:
+        return None
+
+    def complete(self, request_id: str, source: str, cursor_pos: int) -> dict[str, Any]:
+        cursor_pos = max(0, min(int(cursor_pos), len(source)))
+        start = cursor_pos
+        while start > 0 and (source[start - 1].isalnum() or source[start - 1] in "._"):
+            start -= 1
+        token = source[start:cursor_pos]
+        completer = rlcompleter.Completer(self.namespace)
+        matches: list[str] = []
+        index = 0
+        while len(matches) < 100:
+            match = completer.complete(token, index)
+            if match is None:
+                break
+            if match not in matches:
+                matches.append(match)
+            index += 1
+        if "." not in token:
+            matches.extend(word for word in keyword.kwlist if word.startswith(token) and word not in matches)
+        return {
+            "request_id": request_id,
+            "matches": matches,
+            "cursor_start": start,
+            "cursor_end": cursor_pos,
+            "metadata": {"runtime": "stdlib"},
+            "status": "ok",
+        }
+
+    def inspect(self, request_id: str, source: str, cursor_pos: int, detail_level: int = 0) -> dict[str, Any]:
+        del detail_level
+        cursor_pos = max(0, min(int(cursor_pos), len(source)))
+        start = cursor_pos
+        while start > 0 and (source[start - 1].isalnum() or source[start - 1] in "._"):
+            start -= 1
+        expression = source[start:cursor_pos]
+        value: Any = None
+        found = False
+        if expression:
+            try:
+                value = eval(expression, self.namespace, self.namespace)
+                found = True
+            except BaseException:
+                pass
+        documentation = pyinspect.getdoc(value) if found else None
+        return {
+            "request_id": request_id,
+            "found": found,
+            "data": {"text/plain": documentation or _safe_preview(value, limit=20_000)} if found else {},
+            "metadata": {"runtime": "stdlib"},
+            "status": "ok",
         }
 
     def _variables(self) -> list[dict[str, str]]:
@@ -256,7 +313,10 @@ def _decode_variables(user_expressions: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def main() -> int:
-    kernel = JupyterKernelBridge()
+    try:
+        kernel: StudioKernel | JupyterKernelBridge = JupyterKernelBridge()
+    except (ImportError, ModuleNotFoundError):
+        kernel = StudioKernel()
     try:
         for line in sys.stdin:
             request: dict[str, Any] = {}

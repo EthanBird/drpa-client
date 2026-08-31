@@ -2,6 +2,7 @@ import { ArrowRight, Blocks, BookOpen, BookOpenCheck, Bot, Code2, Command, Datab
 import { useEffect, useRef, useState } from "react";
 
 import type { NavigationId } from "../domain/models";
+import { isNavigationVisible } from "../app/navigation";
 import { useAppStore } from "../app/store";
 
 const commands: Array<{
@@ -32,9 +33,12 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const setActiveNavigation = useAppStore((state) => state.setActiveNavigation);
-  const filtered = commands.filter((item) =>
-    `${item.label} ${item.detail}`.toLowerCase().includes(query.toLowerCase()),
-  );
+  const navigationMode = useAppStore((state) => state.navigationMode);
+  const customVisibleNavigationIds = useAppStore((state) => state.customVisibleNavigationIds);
+  const filtered = commands.filter((item) => {
+    const matchesQuery = `${item.label} ${item.detail}`.toLowerCase().includes(query.toLowerCase());
+    return matchesQuery && (!item.navigation || isNavigationVisible(item.navigation, navigationMode, customVisibleNavigationIds));
+  });
 
   useEffect(() => inputRef.current?.focus(), []);
 

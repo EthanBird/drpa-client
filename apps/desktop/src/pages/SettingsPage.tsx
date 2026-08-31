@@ -10,6 +10,7 @@ import {
   Info,
   KeyRound,
   Languages,
+  LayoutGrid,
   Link2,
   Moon,
   Palette,
@@ -19,13 +20,43 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 
+import { CONFIGURABLE_NAVIGATION_IDS, type NavigationMode } from "../app/navigation";
 import { useAppStore } from "../app/store";
 import type { AgentWorkspaceConfig, PlatformCapabilities } from "../domain/models";
 import { desktopGateway } from "../infra/gateway";
-import { useI18n } from "../i18n";
+import { useI18n, type TranslationKey } from "../i18n";
 import appPackage from "../../package.json";
 
 const SkillWorkspace = lazy(() => import("../components/SkillWorkspace").then((module) => ({ default: module.SkillWorkspace })));
+
+const navigationLabelKeys: Record<(typeof CONFIGURABLE_NAVIGATION_IDS)[number], TranslationKey> = {
+  overview: "nav.overview",
+  library: "nav.library",
+  studio: "nav.studio",
+  data: "nav.data",
+  workbench: "nav.workbench",
+  runs: "nav.runs",
+  automations: "nav.automations",
+  localDify: "nav.localDify",
+  agent: "nav.agent",
+  knowledgeBase: "nav.knowledgeBase",
+  opticalTransfer: "nav.opticalTransfer",
+  extensionTools: "nav.extensionTools",
+  plugins: "nav.plugins",
+  runtimes: "nav.runtimes",
+  secrets: "nav.secrets",
+  docs: "nav.docs",
+};
+
+const navigationModes: Array<{
+  id: NavigationMode;
+  label: TranslationKey;
+  description: TranslationKey;
+}> = [
+  { id: "normal", label: "settings.normalMode", description: "settings.normalModeDescription" },
+  { id: "developer", label: "settings.developerMode", description: "settings.developerModeDescription" },
+  { id: "custom", label: "settings.customMode", description: "settings.customModeDescription" },
+];
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -42,6 +73,8 @@ export function SettingsPage() {
   const theme = useAppStore((state) => state.theme);
   const fontScale = useAppStore((state) => state.fontScale);
   const hidePageHeaders = useAppStore((state) => state.hidePageHeaders);
+  const navigationMode = useAppStore((state) => state.navigationMode);
+  const customVisibleNavigationIds = useAppStore((state) => state.customVisibleNavigationIds);
   const agentBaseUrl = useAppStore((state) => state.agentBaseUrl);
   const agentModel = useAppStore((state) => state.agentModel);
   const agentApiKey = useAppStore((state) => state.agentApiKey);
@@ -55,6 +88,8 @@ export function SettingsPage() {
   const setFontScale = useAppStore((state) => state.setFontScale);
   const setLanguage = useAppStore((state) => state.setLanguage);
   const setHidePageHeaders = useAppStore((state) => state.setHidePageHeaders);
+  const setNavigationMode = useAppStore((state) => state.setNavigationMode);
+  const setNavigationVisible = useAppStore((state) => state.setNavigationVisible);
   const setAgentBaseUrl = useAppStore((state) => state.setAgentBaseUrl);
   const setAgentModel = useAppStore((state) => state.setAgentModel);
   const setAgentApiKey = useAppStore((state) => state.setAgentApiKey);
@@ -182,6 +217,55 @@ export function SettingsPage() {
         <section className="settings-card">
           <header><Languages size={18} /><div><h2>{t("settings.language")}</h2><p>{t("settings.languageDescription")}</p></div></header>
           <div className="setting-row"><div><strong>{t("settings.displayLanguage")}</strong><span>{t("settings.languageReady")}</span></div><select className="settings-select" aria-label={t("settings.displayLanguage")} value={language} onChange={(event) => setLanguage(event.target.value as "zh-CN" | "en-US")}><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></div>
+        </section>
+
+        <section className="settings-card settings-card-wide navigation-settings-card">
+          <header><LayoutGrid size={18} /><div><h2>{t("settings.navigationMode")}</h2><p>{t("settings.navigationModeDescription")}</p></div></header>
+          <div className="navigation-mode-content">
+            <div className="navigation-mode-picker" role="radiogroup" aria-label={t("settings.navigationMode")}>
+              {navigationModes.map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  className={navigationMode === mode.id ? "navigation-mode-option active" : "navigation-mode-option"}
+                  role="radio"
+                  aria-label={t(mode.label)}
+                  aria-checked={navigationMode === mode.id}
+                  onClick={() => setNavigationMode(mode.id)}
+                >
+                  <strong>{t(mode.label)}</strong>
+                  <span>{t(mode.description)}</span>
+                </button>
+              ))}
+            </div>
+            {navigationMode === "custom" && (
+              <section className="navigation-visibility-panel" aria-label={t("settings.visiblePages")}>
+                <div className="navigation-visibility-heading">
+                  <div><strong>{t("settings.visiblePages")}</strong><span>{t("settings.visiblePagesDescription")}</span></div>
+                  <small>{t("settings.settingsAlwaysVisible")}</small>
+                </div>
+                <div className="navigation-visibility-grid">
+                  {CONFIGURABLE_NAVIGATION_IDS.map((id) => {
+                    const visible = customVisibleNavigationIds.includes(id);
+                    const label = t(navigationLabelKeys[id]);
+                    return (
+                      <div className="navigation-visibility-item" key={id}>
+                        <span>{label}</span>
+                        <button
+                          className={`switch ${visible ? "on" : ""}`}
+                          type="button"
+                          role="switch"
+                          aria-label={label}
+                          aria-checked={visible}
+                          onClick={() => setNavigationVisible(id, !visible)}
+                        ><span /></button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+          </div>
         </section>
 
         <section className="settings-card">

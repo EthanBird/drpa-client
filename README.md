@@ -2,13 +2,13 @@
 
 DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包运行管理器。用户无需配置系统 Python，即可安装、开发、运行和观察 `.rpaz` 自动化脚本包。
 
-当前版本为 `2.1.1`。Windows x64 交付完整离线 Setup；Linux x86_64 同步交付 runtime-complete AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。升级时直接安装新版完整包，用户工作区数据保持在原数据目录。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
+当前 Windows 版本为 `3.0.0`，交付轻量 Core Setup 与可独立下载、热插拔的 `.drpac` 组件；Linux x86_64 当前稳定包仍为 `2.1.1` runtime-complete AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。升级会保留原数据目录。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
 ## 当前能力
 
 - 中文默认界面，支持正常移动、缩放、最大化、最小化和关闭窗口。
-- 引导式、无注册表写入的 Windows NSIS 安装器；应用和用户数据均可放在非系统盘安装目录。
-- 内置 CPython 3.11、完整离线 wheels、RPA for Python/TagUI 平台闭包、Chrome for Testing、Fixed Version WebView2 和真实 Jupyter Kernel 依赖。
+- 引导式、无注册表写入的 Windows NSIS Core 安装器；应用和用户数据均可放在非系统盘安装目录。
+- 桌面 UI、CPython/RPAZ、Chrome、Fixed Version WebView2、JCode 与 Python 3.14 Minimal 分别作为 `.drpac` 安装；系统已有 WebView2 或兼容 Chromium 浏览器时可直接复用。
 - 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
 - 工作室可新建项目、通过 VS Code 风格多文件页签编辑源码和 Notebook，支持保存/全部保存/关闭/切换快捷键、脏页签确认、直接运行工作副本和导出 `.rpaz`，也可将已安装包复制为可编辑项目；每个新项目自动生成面向 AI 协作的 `README.md`。
 - Python Flow（Beta）把 `main.py` 静态投影为可拖拽、连线、自动布局、校验和属性编辑的流程图，识别 `ctx`、RPA for Python、普通调用、条件、循环和异常；图形修改会生成普通 Python 并写回同一 Monaco 页签，原有运行与 RPAZ 导出链路保持唯一。
@@ -24,18 +24,18 @@ DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包
 - 内置能力驱动的离线插件系统：支持 `.drpa-plugin` 安装、配置、启停、多服务、Provider、工具、调试端点、结构化事件和自定义面板；插件开发工作台可生成 Tool/Service/Bundle 模板并验证、构建、安装。内置 Dify2API 可把 Dify App API 转换为本地 OpenAI 兼容接口、适配 `tool_calls`，并提供服务与上游调试器。
 - 内置本地 Markdown 知识库：支持目录树、阅读/编辑/分栏渲染、相对文档跳转、内联新建/重命名/删除、拖拽导入、原生导入导出与自动保存，并首次初始化多篇详细 RPAZ 开发指南。
 - 内置开发凭据保险箱：完整字段 AES-256-GCM 加密、Windows DPAPI 设备保护、Google Authenticator 兼容 TOTP 初始化/解锁、一次性轮换恢复码、24 小时运行时会话、Bitwarden 风格三栏管理、显式启动的 loopback 读写 API，以及 RPAZ/JCode Agent 凭据工具。
-- Windows 版本统一使用全量离线 Setup；安装器覆盖应用与封装运行时，始终保留安装目录下的 `data/` 用户数据。
+- Windows 版本使用轻量 Core Setup 与事务化组件包；Core、组件升级或卸载始终保留安装目录下的 `data/` 用户数据。
 - Windows 上 `ctx.browser()` 使用工作区级持久 Chrome/Profile；任务成功、失败或调用 `page.quit()` 都只释放当前脚本句柄，不退出浏览器，后续 Studio 与多个 RPAZ 任务可直接复用登录态和调试页面。
 
-DRPA Next 2.1.1 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v2.1.1>
+DRPA Next 3.0.0 Windows 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v3.0.0>
 
-> `2.1.1` 是当前推荐的全量离线版本。Windows 升级时退出旧版并把 Setup 安装到原目录；安装器不会覆盖 `data/`。UOS Desktop 20 使用带 `uos20` 后缀的 deb。
+> Windows 推荐使用 `3.0.0` 模块化版本：先安装 Core Setup，再按需安装同一 Release 中的 `.drpac`。Linux/UOS 暂继续使用 `2.1.1` 平台包。
 
 ## 平台状态
 
 | 平台 | 源码开发 | CI | 正式发行 |
 | --- | --- | --- | --- |
-| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `2.1.1` 全量离线安装包 |
+| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `3.0.0` 轻量 Core Setup + `.drpac` |
 | Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 构建；Debian 10 与 Deepin 20.8/glibc 2.28 实装、React/IPC 和非白屏截图门禁 | `2.1.1` AppImage、现代 deb 与 UOS 20 专用 deb |
 | macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
 
@@ -95,7 +95,7 @@ python -m pytest -q runtime/python/tests
 python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 ```
 
-正式 Windows 安装包必须由 GitHub Actions 的原生 Windows runner 构建和进行最终安装布局验证，不要将本地前端 build 当成离线发布验收。
+正式 Windows 安装包必须在原生 Windows 环境完成版本、测试、NSIS、组件清单与 SHA-256 验证；单独的前端 build 不能作为离线发布验收。
 
 ## 文档导航
 
@@ -123,8 +123,8 @@ python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 
 ## 当前限制
 
-- 当前稳定 Release 为 `desktop-v2.1.1`，包含 Windows x64 Setup、Linux runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb。现代 Linux 包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。UOS 包固定 X11 软件渲染以换取老显卡兼容性，仍需要系统内核和 X11 server；真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland 人工回归仍需持续记录，macOS 仍只有编译级基础。
-- Windows 升级统一使用新版全量 Setup，不再发布或在界面中接受 `.drpa-update`。
+- 当前 Windows 稳定 Release 为 `desktop-v3.0.0`，包含轻量 Core Setup 与独立 `.drpac`；Linux runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb 暂沿用 `desktop-v2.1.1`。现代 Linux 包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland人工回归仍需持续记录，macOS 仍只有编译级基础。
+- Windows 升级使用新版 Core Setup 与组件包，不再发布或在界面中接受 `.drpa-update`。
 - Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
 - AI Agent 当前由工作区运行时与 Rust Run Manager 共同持有状态，已支持流式 Markdown、会话 revision CAS、逐轮上下文核算、可取消 Provider/子进程、动态 ToolRegistry、CapabilityAuthority、Skills 2.0、插件 Provider/Tool 和附件恢复；diff/checkpoint 恢复、会话导出、长期服务双向 JSON-RPC 和 Skill evaluation 仍在后续阶段。
 - Local Dify 已执行 Chat、Completion、Workflow 与 Chatflow；基础节点可本地运行，导入的扩展 Dify 节点会保留并标记兼容状态，Iteration/Loop、知识检索、Agent 与并行汇聚继续按节点逐步接入。
