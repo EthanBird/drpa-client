@@ -89,7 +89,9 @@ flowchart TD
 
 运行与界面共享同一套有序事件语义：一次用户请求是 `Turn`，每次模型请求是 `Step`，工具请求是 `Action`，工具返回是 `Observation`。工具事件携带跨步骤稳定的 `ordinal`、所属 `round`、脱敏后的输入、状态和耗时；`running` 到 `completed/failed` 必须按 `callId` 原位更新，不能重新追加导致顺序跳动。历史会话只持久化最终 Observation，流式运行同时投影正在执行的 Action。
 
-达到 rounds、tool calls、wall time 或重复调用熔断条件时，不把预算耗尽伪装成普通错误。运行关闭工具定义，再请求一次最终总结；结果通过 `stopReason`、`rounds` 和 `toolCalls` 说明实际停止原因与消耗。
+达到 rounds、tool calls 或 wall time 时，不把预算耗尽伪装成普通错误。运行关闭工具定义，再请求一次最终总结；结果通过 `stopReason`、`rounds` 和 `toolCalls` 说明实际停止原因与消耗。
+
+内置 RPAZ Agent 在实际 dispatch 边界维护单轮命令幂等账本。连续出现相同工具名与规范化参数时，只执行第一次调用，后续调用复用首次 `ToolResult`；任意不同工具调用都会结束这段连续复用。工具上下文使用结构化完成信封，明确给出 `status`、`executionPerformed`、`emptyOutput`、`result` 与可选 `reusedFromCallId`。因此 exit code 为 0 且 stdout/stderr 为空仍是已完成结果，而不是再次执行的依据。
 
 完整工具 stdout、HTML、凭据和大文件不进入下一轮。持久 assistant 消息只保存工具摘要；凭据读取和文档正文类工具使用脱敏摘要。
 
@@ -135,6 +137,8 @@ DRPA 启动 JCode 时固定关闭其默认 `auto-poke`，避免未完成 Todo �
 
 JCode 一旦报告 session id 就更新 DRPA 的可恢复索引；即使进程随后 502、退出或返回空答复，下一次“从失败处继续”仍使用该 session，而不是重新创建一个失忆的 JCode 进程。DRPA 不自动重放整个 JCode 进程，因为其中可能已经执行写文件或命令等副作用操作。
 
+JCode 的命令工具在 sidecar 内执行，单靠 NDJSON adapter 只能在执行后观察结果。DRPA 因此为每次会话生成隔离的 `pre_tool`/`post_tool`/`turn_end`/`session_end` hook：`pre_tool` 在第二次进程启动前按规范化参数和状态屏障判重，`post_tool` 记录成功或失败；只读工具不改变屏障，写文件或其他状态变更工具允许命令再次执行，失败命令也允许重试。hook 状态只保存在当前 DRPA 运行的 JCode home，进入新 turn 或结束会话时清理。
+
 ## 7. 附件、产物与外部进程
 
 - 对话打开时从 session 附件目录恢复索引，不依赖 React 内存。
@@ -168,6 +172,8 @@ npm run build
 - 取消信号能被 Provider 和子进程观察。
 - 首个流事件出现后，即使总流时长超过握手时限，Provider 仍持续接收直至 Run 预算结束。
 - MiniMax 累积式 reasoning/content 快照不会重复，推理字段和分片 `<think>` 标签不会进入正文事件。
+- 成功但无输出的命令只真实执行一次；模型重复提交相同调用时收到明确的已完成结果。
+- JCode 在只读工具前后仍拦截同状态屏障内的重复命令；文件变更、新 turn 与失败结果会解除对应判重。
 - 上下文裁剪不会拆开 tool-call/tool-result 组。
 - 工具 schema 计入 token 预算，禁用工具既不可见也不可执行。
 - 暂时性 Provider 错误会退避重试，认证/参数错误不会重试；失败后部分正文、工具顺序、错误和检查点仍可从会话恢复。

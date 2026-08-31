@@ -28,6 +28,10 @@ const JCODE_PROFILE: &str = "drpa-openai-compatible";
 const MAX_EVENT_OUTPUT_BYTES: usize = 40_000;
 const MAX_EVENT_TOOL_INPUT_BYTES: usize = 200_000;
 const JCODE_LOOP_STOP_SIGNAL: &str = "__DRPA_JCODE_LOOP_STOP__";
+const DUPLICATE_COMMAND_MARKER: &str = "DRPA_DUPLICATE_COMMAND";
+const COMMAND_EXECUTION_GUIDANCE: &str = "命令工具返回成功状态后，该命令已经执行完成；stdout/stderr 为空同样是有效成功结果。不要因为没有文本输出而重复运行相同命令。若确需重试失败命令，应说明原因并调整参数；若命令已转入后台，只查询原 task_id 的状态。";
+const JCODE_TOOL_GUARD_SOURCE: &str =
+    include_str!("../../../../runtime/python/src/drpa_runner/jcode_tool_guard.py");
 static JCODE_SESSION_INDEX_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -192,7 +196,8 @@ where
     };
     let jcode_home = developer_root.join("homes").join(home_key);
     fs::create_dir_all(&jcode_home).map_err(|error| format!("创建 JCode 工作目录失败：{error}"))?;
-    write_provider_config(&jcode_home, request)?;
+    let guard_script = prepare_tool_guard(&jcode_home)?;
+    write_provider_config(&jcode_home, request, python, &guard_script)?;
     let host = host.with_agent_scope(home_key, python, control.clone());
     let host_bridge = HostBridgeServer::start(host)?;
     write_mcp_config(
@@ -245,6 +250,7 @@ where
             .map(|project| project.root.as_path()),
         context_files,
     ));
+    agent_context.push_str(&format!("\n\n{COMMAND_EXECUTION_GUIDANCE}"));
     let prompt = if resume_session.is_some() {
         format!(
             "{}\n\n{}",
@@ -290,6 +296,10 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("JCODE_HOME", &jcode_home)
+        .env(
+            "DRPA_JCODE_TOOL_GUARD_STATE",
+            jcode_home.join("tool-guard-state"),
+        )
         .env("DRPA_JCODE_API_KEY", request.api_key.trim())
         .env("JCODE_RUN_MCP", "1")
         // DRPA owns the run lifecycle and budgets. JCode's default auto-poke
@@ -718,15 +728,28 @@ where
                 .or_else(|| state.tool_names.get(&id).cloned())
                 .unwrap_or_else(|| "tool".to_owned());
             let error = value.get("error").filter(|item| !item.is_null());
+            let error_text = error
+                .map(|item| {
+                    item.as_str()
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| item.to_string())
+                })
+                .unwrap_or_default();
+            let duplicate_skipped = error_text.contains(DUPLICATE_COMMAND_MARKER);
             let output = value.get("output").cloned().unwrap_or(Value::Null);
-            let output = truncate_text(
-                output
-                    .as_str()
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| output.to_string()),
-                MAX_EVENT_OUTPUT_BYTES,
-            );
-            let status = if error.is_some() {
+            let output = if duplicate_skipped {
+                "相同命令已在本轮成功执行或仍在运行；本次调用由 DRPA 去重器跳过，并沿用上次结果。"
+                    .to_owned()
+            } else {
+                truncate_text(
+                    output
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| output.to_string()),
+                    MAX_EVENT_OUTPUT_BYTES,
+                )
+            };
+            let status = if error.is_some() && !duplicate_skipped {
                 "failed"
             } else {
                 "completed"
@@ -748,9 +771,13 @@ where
                 call_id: id.clone(),
                 name: format!("jcode:{name}"),
                 status: status.to_owned(),
-                summary: error
-                    .map(|item| truncate_text(item.to_string(), 500))
-                    .unwrap_or_else(|| format!("JCode 已执行 {name}")),
+                summary: if duplicate_skipped {
+                    "重复命令已跳过，沿用上次执行结果".to_owned()
+                } else if error.is_some() {
+                    truncate_text(error_text, 500)
+                } else {
+                    format!("JCode 已执行 {name}")
+                },
                 output,
                 ordinal: state.tool_ordinals.get(&id).copied().unwrap_or(1),
                 round: 1,
@@ -955,13 +982,41 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
         .find(|path| is_executable_file(path))
 }
 
-fn write_provider_config(home: &Path, request: &AgentTurnRequest) -> Result<(), String> {
+fn prepare_tool_guard(home: &Path) -> Result<PathBuf, String> {
+    let state_root = home.join("tool-guard-state");
+    if state_root.exists() {
+        fs::remove_dir_all(&state_root)
+            .map_err(|error| format!("重置 JCode 命令去重状态失败：{error}"))?;
+    }
+    fs::create_dir_all(&state_root)
+        .map_err(|error| format!("创建 JCode 命令去重状态目录失败：{error}"))?;
+    let script = home.join("drpa-jcode-tool-guard.py");
+    fs::write(&script, JCODE_TOOL_GUARD_SOURCE)
+        .map_err(|error| format!("写入 JCode 命令去重器失败：{error}"))?;
+    Ok(script)
+}
+
+fn hook_command(python: &Path, script: &Path) -> Result<String, String> {
+    let quote = |path: &Path| {
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        format!("\"{}\"", normalized.replace('"', "\\\""))
+    };
+    json_string(&format!("{} -I {}", quote(python), quote(script)))
+}
+
+fn write_provider_config(
+    home: &Path,
+    request: &AgentTurnRequest,
+    python: &Path,
+    guard_script: &Path,
+) -> Result<(), String> {
     let base_url = request.base_url.trim().trim_end_matches('/');
     if !(base_url.starts_with("https://") || base_url.starts_with("http://")) {
         return Err("OpenAI 兼容 URL 必须是有效的 http(s) 地址".to_owned());
     }
     let base_url = json_string(base_url)?;
     let model = json_string(request.model.trim())?;
+    let guard_command = hook_command(python, guard_script)?;
     let reasoning_split = if request
         .model
         .trim()
@@ -1003,7 +1058,13 @@ fn write_provider_config(home: &Path, request: &AgentTurnRequest) -> Result<(), 
          max_tokens = {}\n\n\
          [[providers.{JCODE_PROFILE}.models]]\n\
          id = {model}\n\
-         context_window = {}\n",
+         context_window = {}\n\n\
+         [hooks]\n\
+         pre_tool = {guard_command}\n\
+         post_tool = {guard_command}\n\
+         turn_end = {guard_command}\n\
+         session_end = {guard_command}\n\
+         pre_tool_timeout_ms = 3000\n",
         request.temperature, request.max_output_tokens, request.context_window,
     );
     fs::write(home.join("config.toml"), config)
@@ -1252,6 +1313,17 @@ mod tests {
         }
     }
 
+    fn write_test_provider_config(root: &Path, request: &AgentTurnRequest) {
+        let guard = prepare_tool_guard(root).unwrap();
+        write_provider_config(
+            root,
+            request,
+            Path::new("C:/DRPA/runtime/python.exe"),
+            &guard,
+        )
+        .unwrap();
+    }
+
     #[test]
     fn bundled_jcode_name_matches_the_target_platform() {
         let expected = if cfg!(windows) { "jcode.exe" } else { "jcode" };
@@ -1262,13 +1334,16 @@ mod tests {
     fn provider_config_keeps_secret_out_of_file_and_exposes_full_model_limits() {
         let root = env::temp_dir().join(format!("drpa-jcode-config-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        write_provider_config(&root, &request("secret-token")).unwrap();
+        write_test_provider_config(&root, &request("secret-token"));
         let config = fs::read_to_string(root.join("config.toml")).unwrap();
 
         assert!(config.contains("api_key_env = \"DRPA_JCODE_API_KEY\""));
         assert!(!config.contains("secret-token"));
         assert!(config.contains("context_window = 128000"));
         assert!(config.contains("max_tokens = 4096"));
+        assert!(config.contains("[hooks]"));
+        assert!(config.contains("pre_tool = \"\\\"C:/DRPA/runtime/python.exe\\\" -I"));
+        assert!(root.join("drpa-jcode-tool-guard.py").is_file());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1276,7 +1351,7 @@ mod tests {
     fn provider_config_supports_keyless_local_endpoint() {
         let root = env::temp_dir().join(format!("drpa-jcode-config-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        write_provider_config(&root, &request("")).unwrap();
+        write_test_provider_config(&root, &request(""));
         let config = fs::read_to_string(root.join("config.toml")).unwrap();
 
         assert!(config.contains("auth = \"none\""));
@@ -1291,7 +1366,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let mut minimax = request("token");
         minimax.model = "minimax-m3".to_owned();
-        write_provider_config(&root, &minimax).unwrap();
+        write_test_provider_config(&root, &minimax);
         let config = fs::read_to_string(root.join("config.toml")).unwrap();
 
         assert!(config.contains("reasoning_split = true"));
@@ -1492,6 +1567,32 @@ mod tests {
             &emitted[0],
             AgentStreamEvent::Delta { content } if content == "Final answer"
         ));
+    }
+
+    #[test]
+    fn duplicate_command_guard_is_reported_as_reused_instead_of_failed() {
+        let mut state = StreamState::default();
+        let mut emitted = Vec::new();
+        consume_event(
+            &serde_json::json!({
+                "type":"tool_done",
+                "id":"duplicate-1",
+                "name":"bash",
+                "output":null,
+                "error":format!("{DUPLICATE_COMMAND_MARKER}: duplicate")
+            }),
+            true,
+            128,
+            &mut state,
+            &mut |event| emitted.push(event),
+        )
+        .unwrap();
+
+        let tool = &state.tools["duplicate-1"];
+        assert_eq!(tool.status, "completed");
+        assert!(tool.summary.contains("重复命令已跳过"));
+        assert!(tool.output.contains("沿用上次结果"));
+        assert_eq!(emitted.len(), 1);
     }
 
     #[test]

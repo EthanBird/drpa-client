@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "installer" / "windows" / "drpa-next.nsi"
 WORKFLOW = ROOT / ".github" / "workflows" / "desktop-release.yml"
+MODULAR_BUILD = ROOT / "tools" / "windows" / "build_modular_setup.ps1"
 
 
 def test_nsis_script_declares_utf8_before_non_ascii_text() -> None:
@@ -20,8 +21,10 @@ def test_nsis_script_declares_utf8_before_non_ascii_text() -> None:
 
 def test_release_workflow_forces_utf8_input_charset() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    modular_build = MODULAR_BUILD.read_text(encoding="utf-8")
 
-    assert '& $makensis "/INPUTCHARSET" "UTF8"' in workflow
+    assert "build_modular_setup.ps1" in workflow
+    assert '& $Makensis "/INPUTCHARSET" "UTF8"' in modular_build
 
 
 def test_full_rebuild_moves_the_existing_stable_tag() -> None:

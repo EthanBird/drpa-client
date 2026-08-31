@@ -19,7 +19,8 @@
 
 ### AI Agent 与自动化
 
-- Agent、JCode 增强重复工具调用防护、运行轨迹保留、上下文项目和浏览器能力发现；Python runtime 补充 Profile 包路径、Agent MCP 与 Jupyter 生命周期处理。
+- 内置 RPAZ Agent 增加单轮工具幂等账本与连续无进展守卫：相同工具和参数不会重复产生副作用，空 stdout/stderr 也被明确识别为有效成功结果；JCode 使用执行前/后 hook 在 sidecar 启动命令前去重，并保留失败后的正常重试。
+- JCode sidecar 更新至 `0.79.1`；Agent/JCode 同时增强运行轨迹保留、上下文项目和浏览器能力发现，Python runtime 补充 Profile 包路径、Agent MCP 与 Jupyter 生命周期处理。
 - UOS Dify2API gateway 增强自签名证书兼容、退出诊断和受监督重启。
 
 ### UOS 插件服务

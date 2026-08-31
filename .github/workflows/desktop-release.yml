@@ -111,7 +111,7 @@ jobs:
           $makensis = "C:/Program Files (x86)/NSIS/makensis.exe"
           if (-not (Test-Path $makensis)) { throw "Pinned NSIS compiler is missing" }
           $installer = Join-Path $assets "drpa-next-$env:DRPA_VERSION-windows-x86_64-setup.exe"
-          & tools/windows/build_modular_setup.ps1 -Stage $portable -Version $env:DRPA_VERSION -Output $installer -ComponentsOutput (Join-Path $assets "components") -Makensis $makensis
+          & .\tools\windows\build_modular_setup.ps1 -Stage $portable -Version $env:DRPA_VERSION -Output $installer -ComponentsOutput (Join-Path $assets "components") -Makensis $makensis
           if ($LASTEXITCODE -ne 0) { throw "Failed to build the modular Windows release" }
       - name: Upload modular Windows package
         uses: actions/upload-artifact@v4
