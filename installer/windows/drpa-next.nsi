@@ -19,6 +19,13 @@ Unicode true
 
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUTPUT_FILE}"
+VIProductVersion "${APP_VERSION}.0"
+VIAddVersionKey /LANG=2052 "ProductName" "${APP_NAME}"
+VIAddVersionKey /LANG=2052 "ProductVersion" "${APP_VERSION}"
+VIAddVersionKey /LANG=2052 "FileVersion" "${APP_VERSION}"
+VIAddVersionKey /LANG=2052 "FileDescription" "DRPA Next 模块化离线安装程序"
+VIAddVersionKey /LANG=2052 "CompanyName" "DRPA"
+VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright (c) DRPA contributors"
 InstallDir "$EXEDIR\DRPA Next"
 RequestExecutionLevel user
 BrandingText "DRPA Next | Offline-first | Registry-free"
