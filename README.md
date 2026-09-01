@@ -1,208 +1,130 @@
-# DRPA Client
+# DRPA Next
 
-DRPA Client 是一个轻量级 Python RPA 桌面客户端原型，目标是让用户安装一次 GUI 程序后，可以直接导入并运行 Python 脚本包。
+DRPA Next 是一个本地优先、面向 Windows 与 Linux 的可扩展代码包运行管理器。用户无需配置系统 Python，即可安装、开发、运行和观察 `.rpaz` 自动化脚本包。
 
-文档：
+当前 Windows 版本为 `3.0.0`，交付轻量 Core Setup 与可独立下载、热插拔的 `.drpac` 组件；Linux x86_64 当前稳定包仍为 `2.1.1` runtime-complete AppImage、现代发行版 deb 与 UOS Desktop 20 专用 deb。升级会保留原数据目录。原有 PySide6 客户端已冻结，只作为 `.rpaz` v1 行为和迁移参考；新功能只进入 Tauri + React + Rust 架构。
 
-- [功能设计文档](docs/FUNCTIONAL_DESIGN.md)
-- [开发文档](docs/DEVELOPMENT.md)
-- [使用文档](docs/USER_GUIDE.md)
-- [浏览器录制与脚本包生成设计规范](docs/BROWSER_RECORDER_DESIGN.md)
+## 当前能力
 
-当前首版聚焦：
+- 中文默认界面，支持正常移动、缩放、最大化、最小化和关闭窗口。
+- 引导式、无注册表写入的 Windows NSIS Core 安装器；应用和用户数据均可放在非系统盘安装目录。
+- 桌面 UI、CPython/RPAZ、Chrome、Fixed Version WebView2、JCode 与 Python 3.14 Minimal 分别作为 `.drpac` 安装；系统已有 WebView2 或兼容 Chromium 浏览器时可直接复用。
+- 安装、拖拽导入、运行、取消和卸载 `.rpaz`；包操作集中在右键菜单。
+- 工作室可新建项目、通过 VS Code 风格多文件页签编辑源码和 Notebook，支持保存/全部保存/关闭/切换快捷键、脏页签确认、直接运行工作副本和导出 `.rpaz`，也可将已安装包复制为可编辑项目；每个新项目自动生成面向 AI 协作的 `README.md`。
+- Python Flow（Beta）把 `main.py` 静态投影为可拖拽、连线、自动布局、校验和属性编辑的流程图，识别 `ctx`、RPA for Python、普通调用、条件、循环和异常；图形修改会生成普通 Python 并写回同一 Monaco 页签，原有运行与 RPAZ 导出链路保持唯一。
+- 基于 `ipykernel`、`jupyter_client`、`pyzmq`、`nbformat` 的真实 Jupyter 执行链路，并通过标准 `complete_request` / `inspect_request` 为 Python 文件和 Notebook 提供离线补全、悬停文档与参数提示。
+- 运行记录持久化到 Host SQLite；可进入详情查看完整时间线、筛选/复制日志、参数、产物、错误回溯和重启中断状态。
+- 内置自有数据工作台：工作区 SQLite、外部 SQLite、PostgreSQL/MySQL 与只读 Excel 工作簿数据源，对象树、Monaco SQL 编辑器、AI 写 SQL、结果网格、字段结构和查询历史；Excel sheet 会映射为可查询表，RPAZ 可通过 `ctx.sql` 事务化读写共享的工作区 SQLite。
+- BI 主页支持构建器式三栏编辑、组件搜索、内置/数据工作台数据源、指标、图表、表格与 Markdown；编辑时可实时拖拽、自动让位、缩放，并预览桌面、平板和手机布局。
+- 可编辑 BI 主页：工作区级响应式栅格、指标/折线图/柱状图/饼图/表格/Markdown 组件，既可读取 DRPA 运行数据，也可复用数据工作台连接执行只读 SQL；布局与数据适配器、组件渲染器解耦。
+- 基础设施内置双模式 AI Agent：RPAZ Agent 通过 Run Manager、CapabilityAuthority、ProviderAdapter 与 ToolRegistry 编排内置、Skills 2.0 和插件工具；JCode 开发者 Agent 提供完整文件、命令和开发工具。两种模式复用 OpenAI-compatible 配置、流式 Markdown、带 revision 的持久会话、逐会话项目绑定、统一取消和运行事件日志，开发工作室右侧可直接切换。
+- 光学文件传输通过循环动态二维码跨越物理隔离边界，支持摄像头乱序接收、CRC32 分片检测、SHA-256 完整文件校验和用户确认保存，全程不上传网络。
+- 内置 DRPA Local Dify：管理 Chat/Completion/Workflow/Chatflow 应用和 OpenAI-compatible Provider；提供可视化工作流画布、节点连线与属性、图校验、本地节点执行、流式 Markdown 调试、SQLite 运行轨迹、Dify YAML DSL 导入导出，以及带独立应用 Token 的本地 Dify Service API；通用 Provider 插件可把外部模型服务接入 AI Agent。
+- Skills 2.0 使用 `skill.yaml + instructions.md` 能力包，可携带工作流、资源、可执行 Python/Command 工具和可调用代码库；设置页提供目录树、Monaco 编辑及文件/目录创建、重命名、删除，旧版 `SKILL.md` 自动迁移。
+- 内置能力驱动的离线插件系统：支持 `.drpa-plugin` 安装、配置、启停、多服务、Provider、工具、调试端点、结构化事件和自定义面板；插件开发工作台可生成 Tool/Service/Bundle 模板并验证、构建、安装。内置 Dify2API 可把 Dify App API 转换为本地 OpenAI 兼容接口、适配 `tool_calls`，并提供服务与上游调试器。
+- 内置本地 Markdown 知识库：支持目录树、阅读/编辑/分栏渲染、相对文档跳转、内联新建/重命名/删除、拖拽导入、原生导入导出与自动保存，并首次初始化多篇详细 RPAZ 开发指南。
+- 内置开发凭据保险箱：完整字段 AES-256-GCM 加密、Windows DPAPI 设备保护、Google Authenticator 兼容 TOTP 初始化/解锁、一次性轮换恢复码、24 小时运行时会话、Bitwarden 风格三栏管理、显式启动的 loopback 读写 API，以及 RPAZ/JCode Agent 凭据工具。
+- Windows 版本使用轻量 Core Setup 与事务化组件包；Core、组件升级或卸载始终保留安装目录下的 `data/` 用户数据。
+- Windows 上 `ctx.browser()` 使用工作区级持久 Chrome/Profile；任务成功、失败或调用 `page.quit()` 都只释放当前脚本句柄，不退出浏览器，后续 Studio 与多个 RPAZ 任务可直接复用登录态和调试页面。
 
-- Windows / Linux 跨平台桌面客户端
-- PySide6 美观 UI，支持暗色/亮色 QSS 主题切换
-- `.rpaz` 脚本包安装
-- 任意界面拖拽 `.rpaz` / `.zip` 直接安装
-- 单个 `.py` 文件直接导入为脚本包
-- `manifest.yaml` 参数定义
-- 项目统一 `.venv`，用户无感创建和复用
-- 项目目录 `.drpa-data` 保存脚本包、任务配置、日志和输出
-- 支持脚本包内置 wheels 离线依赖
-- 仓库内置 Python 3.11/cp311 的 Windows/Linux wheelhouse：DrissionPage、requests、pandas、openpyxl 及完整依赖
-- 子进程运行脚本
-- JSON Lines 实时任务日志
-- 文件管理式任务配置：保存多个任务配置并支持多个运行实例并发执行
-- SQLite 运行历史
-- 镜像/容器式工作台：脚本包像镜像，任务配置和运行实例像容器
-- Monaco Web 代码编辑器入口
-- examples 示例脚本包：Hello、Bing 每日一图、Bilibili 搜索、营销销户派工
-- 浏览器录制 MVP：录制事件模型、JS Agent、草稿 `.rpaz` 生成器；作为高级功能默认隐藏，可在设置中启用
-- AI skill：构建 `.rpaz` 代码包，指定 Python 3.11.9
-- 面向 DrissionPage 的 SDK 入口
+DRPA Next 3.0.0 Windows 正式版下载：<https://github.com/EthanBird/drpa-client/releases/tag/desktop-v3.0.0>
 
-## 快速运行
+> Windows 推荐使用 `3.0.0` 模块化版本：先安装 Core Setup，再按需安装同一 Release 中的 `.drpac`。Linux/UOS 暂继续使用 `2.1.1` 平台包。
 
-**无需预装 Python**。项目通过 uv 自动下载并管理 Python 3.11.9（见 `.python-version`），所有运行都使用项目 `.venv/`。
+## 平台状态
 
-Windows：
+| 平台 | 源码开发 | CI | 正式发行 |
+| --- | --- | --- | --- |
+| Windows x64 | 完整支持 | 前端、Rust、Python、runtime、安装器 | `3.0.0` 轻量 Core Setup + `.drpac` |
+| Linux x86_64 | Host、Python/Jupyter、XDG 与平台 UI 已适配 | Ubuntu 22.04 构建；Debian 10 与 Deepin 20.8/glibc 2.28 实装、React/IPC 和非白屏截图门禁 | `2.1.1` AppImage、现代 deb 与 UOS 20 专用 deb |
+| macOS | Rust core 与桌面 Host 编译检查 | 编译检查 | 尚未发布 |
 
-```bat
-scripts\run-drpa-windows.bat
-```
+Linux x86_64 已把 sealed CPython 3.11/Jupyter/Chrome 作为只读 Tauri resource 放入 AppImage 与 deb，Host 通过 `resource_dir` 定位，生成环境与用户数据写入 XDG 目录。现代 deb `2.1.1-1` 把 WebKitGTK 4.1、JavaScriptCoreGTK、GTK、GStreamer 和 helper process 私有安装到 `/opt/drpa-next`，适用于 glibc 2.35+。UOS 包修订 `2.1.1-1+uos20.4` 面向 UOS Desktop 20 Professional（eagle）/glibc 2.28：固定安装到 `/opt/drpa-next-uos20`，内置 glibc/C++/NSS、WebKitGTK、GBM/libdrm，以及隔离的 GLVND、Mesa EGL 和 swrast/llvmpipe 软件渲染闭包，不再依赖目标机的 `libwebkit2gtk-4.1-0`、EGL/GL 或 DRI 包；GTK 模块路径只允许包内目录，清除会话注入的 GTK/AT-SPI 模块，默认使用内置简单输入上下文和 X11 core events，避免聚焦输入框或点击复杂控件后页面冻结。CI 会在 Debian 10 和 Deepin 20.8 用户态真实安装，主动注入 DDE/Fcitx 风格环境，再要求离线 Python/Jupyter、Chrome、React 挂载、真实 X11 输入框点击/键入/后续按钮点击、Tauri IPC、存活的 WebKitWebProcess、Dify2API 健康检查和非白屏截图全部通过；Debian 10 额外执行可见文字像素门禁，Deepin 固定镜像无系统字体时以布局与真实交互标记验收。内核、X11 server 和系统字体仍由目标机提供；真实 UOS 20/DDE/kernel 4.19/Fantasy II-M 实体机仍需人工复核。各平台升级均替换完整安装包并保留用户数据。接手 Linux 端请先阅读 [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md)；复现或维护 UOS 包请阅读 [UOS 20 构建与打包手册](docs/UOS20_PACKAGING.md)。
 
-Linux / macOS：
-
-```bash
-chmod +x scripts/run-drpa.sh
-./scripts/run-drpa.sh
-```
-
-开发环境（需已安装 uv）：
-
-```bash
-uv sync --reinstall-package drpa-client
-uv run drpa-client
-```
-
-如果只想做语法验证：
-
-```bash
-uv run python -m compileall src tests
-```
-
-## 脚本包格式
-
-脚本包使用 `.rpaz` 后缀，本质是 zip 文件：
+## 架构边界
 
 ```text
-my_bot.rpaz
-  manifest.yaml
-  main.py
-  requirements.txt
-  wheels/
-    common/
-    windows/
-    linux/
-  assets/
+React / TypeScript UI
+        │ typed Tauri invoke
+        ▼
+Rust Host ── package / runtime / run / update policy
+        │ versioned JSONL + Jupyter wire protocol + Agent tool broker
+        ▼
+Sealed Python 3.11 ── RPAZ worker / IPython kernel / Chrome
 ```
 
-`manifest.yaml` 示例：
+- `apps/desktop/`：Tauri 2 桌面壳、React UI、窗口和更新器。
+- `crates/drpa-package/`：manifest、归档和路径安全规则。
+- `crates/drpa-host/`：包、运行记录和 Host 领域服务。
+- `crates/drpa-protocol/`：前后端与运行时共享 DTO/事件协议。
+- `runtime/python/`：RPAZ Python adapter、Runtime Context 和 Jupyter bridge。
+- `offline/`：离线运行时规范、精确依赖锁和引导脚本。
+- `installer/windows/`：无注册表 NSIS 安装器。
+- `tools/windows/`：Windows 安装库存生成与安装器策略测试。
 
-```yaml
-id: invoice_downloader
-name: 发票下载机器人
-version: 1.0.0
-entry: main.py
+UI 不是安全边界。所有文件路径、包清单、更新清单和运行请求都必须由 Rust Host 再次验证。
 
-runtime:
-  python: ">=3.11"
-  isolation: venv
+## 本地开发
 
-dependencies:
-  strategy: offline-first
-  pip:
-    - DrissionPage
-    - openpyxl
-  local:
-    common:
-      - wheels/common/*.whl
-    windows:
-      - wheels/windows/*.whl
-    linux:
-      - wheels/linux/*.whl
-
-params:
-  - name: username
-    label: 用户名
-    type: string
-    required: true
-
-  - name: password
-    label: 密码
-    type: password
-    required: true
-```
-
-## 离线依赖策略
-
-脚本包可以携带 wheel 文件：
-
-- `wheels/common/*.whl`：所有平台通用
-- `wheels/windows/*.whl`：仅 Windows 安装
-- `wheels/linux/*.whl`：仅 Linux 安装
-
-安装依赖时一律禁用联网索引，pip 始终使用 `--no-index`。manifest 中的 `strategy` 只保留兼容语义，不允许联网安装。
-
-仓库还提供全局 wheelhouse：
-
-```text
-wheelhouse/linux-x86_64/
-wheelhouse/windows-amd64/
-```
-
-安装依赖时，DRPA Client 会根据当前平台自动把对应目录加入 pip `--find-links`，因此常用依赖可以直接复用仓库里的完整 wheels。
-
-查找优先级：
-
-1. 安装/运行目录下的全局 `wheelhouse`
-2. `.rpaz` 包内的 `wheels/common`、`wheels/windows`、`wheels/linux`
-
-全局 wheelhouse 还会生成 constraints 文件，确保已有安装目录 wheels 的版本优先于脚本包内同名 wheels。
-
-## 参数表与运行表单
-
-脚本包的 `manifest.yaml` 中 `params` 字段会自动生成两部分 UI：
-
-- 参数表：展示参数名、类型、必填、默认值、当前值和说明，其中“当前值”可直接编辑。
-- 运行表单：根据参数类型生成输入控件，例如文本框、密码框、数字框、日期框、复选框。
-
-参数表和运行表单会双向同步。保存任务配置后，下次选择该任务会自动回填保存过的参数。
-
-## 示例脚本包
-
-仓库内置示例源码和可直接安装的 `.rpaz`：
-
-```text
-examples/hello_web_bot.rpaz
-examples/bing_daily_image/
-examples/bing_daily_image.rpaz
-examples/bilibili_search/
-examples/bilibili_search.rpaz
-examples/marketing_cancel_order_dispatch/
-examples/marketing_cancel_order_dispatch.rpaz
-```
-
-在 GUI 的“工作台”页面点击“安装脚本包 / 导入 py”，默认会打开当前运行/安装目录，方便直接选择 `examples/*.rpaz`。
-
-也可以在任意页面直接拖拽 `.rpaz` 或 `.zip` 到窗口中安装，程序会自动切换到“工作台”页面并执行安装。
-
-其中：
-
-- `bing_daily_image`：访问 Bing 每日一图接口，下载图片和 JSON 元数据。
-- `bilibili_search`：使用 DrissionPage 打开 Bilibili 搜索页，按关键词导出搜索结果。
-- `marketing_cancel_order_dispatch`：整理自营销销户派工脚本，使用参数表配置人员、计划时间和业务字段。
-
-如需重新生成 examples 下的 `.rpaz`：
+要求 Node.js 24+ 和 Rust stable。桌面联调还需要目标平台的 Tauri 2 系统依赖；Python/RPA 联调建议使用 CPython 3.11.9。前端浏览器预览使用确定性的 mock gateway，不需要启动 Rust Host：
 
 ```bash
-python3 tools/build_example_packages.py
+npm ci
+npm run dev
+npm run typecheck
+npm run test
+npm run build
 ```
 
-## 脚本 SDK
+桌面 Host 联调：
 
-脚本入口需要定义 `main(ctx)`：
-
-```python
-def main(ctx):
-    ctx.log.info("任务启动")
-    username = ctx.params["username"]
-    page = ctx.browser(headless=True)
-    page.get("https://example.com")
-    ctx.progress(50, "已打开页面")
-    ctx.output_file("result.xlsx")
+```bash
+npm run tauri:dev
 ```
 
-`ctx.browser()` 默认创建 DrissionPage `ChromiumPage`，并把下载目录指向本次任务的输出目录。
+Linux **源码编译和 `tauri:dev`** 需要先安装 WebKitGTK 4.1 开发包，并为开发 Host 设置 `DRPA_DATA_DIR`、`DRPA_RUNTIME_PYTHON` 和 `DRPA_RUNTIME_PYTHONPATH`；正式 AppImage 与两种 deb 已携带桌面运行库。UOS 20 用户必须选择文件名带 `uos20` 的 deb。完整命令、平台边界和发布验收见 [`docs/LINUX_DEVELOPMENT.md`](docs/LINUX_DEVELOPMENT.md)。
 
-## 目录结构
+Rust 与 Python 验证：
 
-```text
-src/drpa_client/
-  app/          PySide6 GUI
-  core/         脚本包安装、runtime、任务运行
-  runtime/      子进程 bootstrap
-  sdk/          用户脚本上下文 API
-examples/      示例脚本包
+```bash
+cargo fmt --all --check
+cargo clippy -p drpa-protocol -p drpa-package -p drpa-host --all-targets -- -D warnings
+cargo test -p drpa-protocol -p drpa-package -p drpa-host
+python -m pip install -e "./runtime/python[test]"
+python -m pytest -q runtime/python/tests
+python tools/offline/validate_requirements.py offline/requirements/runtime.txt
 ```
+
+正式 Windows 安装包必须在原生 Windows 环境完成版本、测试、NSIS、组件清单与 SHA-256 验证；单独的前端 build 不能作为离线发布验收。
+
+## 文档导航
+
+- [开发与交接手册](docs/DEVELOPMENT.md)：当前实现、目录、数据、测试、发布和接手清单。
+- [Linux 开发与移植交接](docs/LINUX_DEVELOPMENT.md)：Ubuntu 开发环境、真实 Tauri 联调、sealed runtime、打包阻塞项与发布验收。
+- [UOS 20 构建与打包手册](docs/UOS20_PACKAGING.md)：glibc 2.28 兼容层、私有依赖、ELF 修补、容器门禁、故障复盘和实体机验收。
+- [功能扩展路线](docs/ROADMAP.md)：离线基础环境、自动化任务和 AI Agent 辅助开发。
+- [RPAZ 开发](docs/RPAZ_DEVELOPMENT.md)：schema v2、Runtime Context、直接运行和示例包。
+- [Python Flow 架构](docs/architecture/PYTHON_FLOW.md)：AST 投影、节点模型、源码往返、RPA for Python Adapter 与 RPAZ 演进边界。
+- [Jupyter 集成](docs/JUPYTER_INTEGRATION.md)：真实能力、VS Code Jupyter 对照和明确边界。
+- [数据工作台与 `ctx.sql`](docs/DATA_WORKBENCH.md)：SQLite 存储分层、Host API、脚本 API 与扩展约定。
+- [BI 主页架构](docs/architecture/BI_DASHBOARD.md)：仪表盘定义、数据适配器、只读查询和响应式栅格扩展约定。
+- [光学文件传输架构](docs/architecture/OPTICAL_TRANSFER.md)：动态二维码协议、摄像头接收、完整性校验和安全边界。
+- [光学传输 Web 版](docs/OPTICAL_WEB.md)：本地开发、离线缓存与 GitHub Pages 发布说明。
+- [凭据保险箱安全架构](docs/architecture/CREDENTIAL_VAULT.md)：密钥层级、TOTP/恢复流程、loopback API、Agent 脱敏和威胁模型。
+- [AI Agent 设计](docs/AI_AGENT_DESIGN.md)：OpenAI-compatible 对话循环、RPAZ 工具和配置边界。
+- [AI Agent 运行时架构](docs/architecture/AI_AGENT_RUNTIME.md)：会话唯一事实源、运行租约、逐轮上下文预算、工具权限、Provider 与外部进程生命周期。
+- [Local Dify 开发平台](docs/LOCAL_DIFY.md)：应用、Provider、调试、Service API、DSL 兼容和套娃链路。
+- [Local Dify 工作流设计器](docs/LOCAL_DIFY_WORKFLOW.md)：Workflow IR、可视化画布、节点执行、校验、调试和 Dify Graph 互操作。
+- [Skills 2.0 与插件系统](docs/SKILLS_AND_PLUGINS.md)：能力包代码工具、插件清单、进程生命周期与 Dify 工具桥。
+- [离线运行时](offline/README.md)：依赖策略、构建证明和缺包处理流程。
+- [Windows 发布说明](docs/PORTABLE_RELEASE.md)：安装、数据目录和热更新。
+- [架构设计](docs/architecture/DRPA_NEXT.md)：长期模块边界和安全原则。
+- [更新日志](CHANGELOG.md)：面向发布和接手者的变更记录。
+
+## 当前限制
+
+- 当前 Windows 稳定 Release 为 `desktop-v3.0.0`，包含轻量 Core Setup 与独立 `.drpac`；Linux runtime-complete AppImage、现代 deb 与 UOS 20 专用 deb 暂沿用 `desktop-v2.1.1`。现代 Linux 包要求系统 glibc 2.35+；UOS 包以系统 glibc 2.28、x86_64 为最低目标并携带私有 glibc/C++/WebKitGTK/Mesa llvmpipe 运行层。真实 UOS 20/Fantasy II-M、Ubuntu 24.04 与 Wayland人工回归仍需持续记录，macOS 仍只有编译级基础。
+- Windows 升级使用新版 Core Setup 与组件包，不再发布或在界面中接受 `.drpa-update`。
+- Jupyter 使用真实协议，但不是完整 VS Code Extension Host；远程 Kernel、ipywidgets、VS Code 调试器和所有第三方 MIME renderer 尚未实现。
+- AI Agent 当前由工作区运行时与 Rust Run Manager 共同持有状态，已支持流式 Markdown、会话 revision CAS、逐轮上下文核算、可取消 Provider/子进程、动态 ToolRegistry、CapabilityAuthority、Skills 2.0、插件 Provider/Tool 和附件恢复；diff/checkpoint 恢复、会话导出、长期服务双向 JSON-RPC 和 Skill evaluation 仍在后续阶段。
+- Local Dify 已执行 Chat、Completion、Workflow 与 Chatflow；基础节点可本地运行，导入的扩展 Dify 节点会保留并标记兼容状态，Iteration/Loop、知识检索、Agent 与并行汇聚继续按节点逐步接入。

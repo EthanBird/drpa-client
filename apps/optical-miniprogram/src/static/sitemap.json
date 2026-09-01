@@ -1,0 +1,9 @@
+{
+  "desc": "DRPA 光学传输页面索引规则",
+  "rules": [
+    {
+      "action": "allow",
+      "page": "pages/transfer/index"
+    }
+  ]
+}

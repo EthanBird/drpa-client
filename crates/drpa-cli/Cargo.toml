@@ -1,0 +1,21 @@
+[package]
+name = "drpa-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "drpa"
+path = "src/main.rs"
+
+[dependencies]
+drpa-host = { path = "../drpa-host" }
+drpa-install = { path = "../drpa-install" }
+drpa-kernel = { path = "../drpa-kernel" }
+drpa-protocol = { path = "../drpa-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

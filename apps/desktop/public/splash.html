@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>DRPA 正在启动</title>
+    <link rel="stylesheet" href="/splash.css" />
+  </head>
+  <body>
+    <main class="splash" aria-label="DRPA 启动进度">
+      <img class="splash-art" src="/splash-geometric.png" alt="" />
+      <div class="splash-wash"></div>
+      <section class="identity">
+        <div class="monogram" aria-hidden="true">
+          <i></i><i></i><i></i><i></i>
+        </div>
+        <div class="edition">DRPA <span>NEXT</span></div>
+        <h1>让数据、运行与流程<br />自然汇入 AI。</h1>
+        <p class="expansion">Data · Runtime · Process · AI</p>
+        <p class="translation">数据 · 运行 · 流程 · AI</p>
+      </section>
+      <section class="startup-status" aria-live="polite">
+        <div class="status-row">
+          <span id="startup-label">正在启动 DRPA</span>
+          <strong id="startup-percent">2%</strong>
+        </div>
+        <div class="progress-track"><i id="startup-progress"></i></div>
+        <div class="current-file">
+          <span class="pulse"></span>
+          <code id="startup-file">desktop://bootstrap</code>
+        </div>
+        <div id="startup-heartbeat" class="startup-heartbeat">应用仍在响应 · 已用时 00:00</div>
+      </section>
+      <span class="build-label">LOCAL-FIRST AUTOMATION WORKSPACE</span>
+    </main>
+    <script src="/splash.js"></script>
+  </body>
+</html>

@@ -1,0 +1,220 @@
+.agent-document-notice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 860px;
+  margin: 0 auto 7px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text-2);
+  font-size: calc(8px * var(--font-scale));
+}
+
+.agent-document-notice > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-document-notice > button,
+.agent-document-context button {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.agent-document-notice > button:hover,
+.agent-document-context button:hover {
+  background: var(--surface-3);
+  color: var(--text-1);
+}
+
+.agent-composer.document-drag-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 12px 30px rgba(0, 0, 0, .1);
+}
+
+.agent-composer.document-drag-active .agent-document-context-header {
+  background: color-mix(in srgb, var(--accent-soft) 74%, var(--surface-2));
+  color: var(--accent-strong);
+}
+
+.agent-document-context {
+  max-height: min(230px, 32vh);
+  overflow: auto;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-2) 91%, var(--accent));
+  scrollbar-gutter: stable;
+}
+
+.agent-document-context-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 29px;
+  padding: 3px 7px 3px 11px;
+  color: var(--text-3);
+  font-size: calc(7px * var(--font-scale));
+}
+
+.agent-document-context-header > span {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-document-context-header > svg,
+.agent-document-chip > svg,
+.agent-document-artifacts svg {
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+}
+
+.agent-document-chips {
+  display: flex;
+  gap: 5px;
+  padding: 0 9px 7px;
+  overflow-x: auto;
+}
+
+.agent-document-chip {
+  display: grid;
+  grid-template-columns: auto minmax(80px, 1fr) auto;
+  flex: 0 0 min(215px, 72%);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 4px 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border-subtle));
+  border-radius: 7px;
+  background: var(--surface-1);
+}
+
+.agent-document-chip > span,
+.agent-document-artifacts article > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.agent-document-chip strong,
+.agent-document-artifacts article strong {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: calc(7px * var(--font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-document-chip small,
+.agent-document-artifacts article small {
+  color: var(--text-3);
+  font: calc(6px * var(--font-scale)) var(--font-mono);
+}
+
+.agent-document-artifacts {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.agent-document-artifacts > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 29px;
+  padding: 4px 9px 4px 11px;
+  color: var(--text-2);
+  font-size: calc(7px * var(--font-scale));
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-document-artifacts > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-document-artifacts > summary em {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font: normal calc(6px * var(--font-scale)) var(--font-mono);
+  text-align: center;
+}
+
+.agent-document-artifacts > summary > svg:last-child {
+  color: var(--text-3);
+  transition: transform 140ms;
+}
+
+.agent-document-artifacts[open] > summary > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.agent-document-artifacts > div {
+  display: grid;
+  gap: 4px;
+  padding: 0 7px 7px;
+}
+
+.agent-document-artifacts article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 5px 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-1);
+}
+
+.agent-composer footer > .agent-attach-trigger {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-3);
+}
+
+.agent-composer footer > .agent-attach-trigger:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.studio-agent .agent-document-context {
+  max-height: 180px;
+}
+
+.studio-agent .agent-document-context-header {
+  padding-left: 8px;
+}
+
+.studio-agent .agent-document-chip {
+  flex-basis: min(185px, 84%);
+}
+
+@media (max-width: 1120px) {
+  .agent-document-chip {
+    flex-basis: min(190px, 82%);
+  }
+}

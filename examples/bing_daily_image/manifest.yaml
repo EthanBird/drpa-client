@@ -1,36 +1,35 @@
-id: bing_daily_image
+schema: 2
+id: com.drpa.bing-daily-image
 name: Bing 每日一图
-version: 0.1.0
-entry: main.py
-description: 访问 Bing 图片接口，下载当天每日一图和元数据。
-author: drpa-client
+version: 3.0.1
+
+entrypoint:
+  runtime: python
+  module: main.py
+  callable: main
 
 runtime:
-  python: ">=3.11"
-  isolation: venv
+  python: "3.11.*"
 
-dependencies:
-  strategy: offline-first
-  pip: []
-  local:
-    common:
-      - wheels/common/*.whl
-    windows:
-      - wheels/windows/*.whl
-    linux:
-      - wheels/linux/*.whl
+capabilities:
+  network:
+    allow:
+      - "www.bing.com"
+  filesystem:
+    read: []
+    write:
+      - "$outputs"
 
-params:
-  - name: market
-    label: 地区
+parameters:
+  - id: market
     type: string
-    required: true
+    required: false
     default: zh-CN
-    description: Bing 市场代码，例如 zh-CN、en-US、ja-JP。
-
-  - name: image_count
-    label: 图片数量
-    type: integer
-    required: true
+  - id: image_count
+    type: number
+    required: false
     default: 1
-    description: 获取最近几张 Bing 图片，范围 1 到 8。
+  - id: open_output_directory
+    type: boolean
+    required: false
+    default: false

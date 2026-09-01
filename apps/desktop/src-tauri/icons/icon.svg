@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="DRPA Next">
+  <defs>
+    <linearGradient id="surface" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1c2230"/>
+      <stop offset="1" stop-color="#0c0f15"/>
+    </linearGradient>
+    <linearGradient id="flow" x1="139" y1="151" x2="383" y2="370" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8fa7ff"/>
+      <stop offset="0.55" stop-color="#6f8cff"/>
+      <stop offset="1" stop-color="#57d6a0"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#surface)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#ffffff" stroke-opacity=".09" stroke-width="3"/>
+  <path d="M133 166c0-18.2 14.8-33 33-33h79c73.5 0 133 59.5 133 133s-59.5 133-133 133h-79c-18.2 0-33-14.8-33-33V166Z" fill="none" stroke="url(#flow)" stroke-width="38"/>
+  <path d="M226 215h40c28.2 0 51 22.8 51 51s-22.8 51-51 51h-40V215Z" fill="#f6f8ff"/>
+  <circle cx="384" cy="143" r="17" fill="#57d6a0"/>
+</svg>

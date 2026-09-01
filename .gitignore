@@ -13,6 +13,25 @@ temp/
 *.rpaz
 !examples/*.rpaz
 
+# DRPA Next desktop workspace
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+target/
+coverage/
+*.tsbuildinfo
+.DS_Store
+offline-build/
+apps/desktop/src-tauri/resources/linux/runtime/*
+!apps/desktop/src-tauri/resources/linux/runtime/.gitkeep
+apps/desktop/src-tauri/resources/linux/jcode/*
+!apps/desktop/src-tauri/resources/linux/jcode/.gitkeep
+apps/optical-miniprogram/project.private.config.json
+apps/optical-miniprogram/.miniprogram-ci/
+apps/optical-miniprogram/miniprogram/
+artifacts/
+
 # Internal-network example packages (local only, do not publish)
 examples/marketing_cancel_order_dispatch/
 examples/marketing_cancel_order_dispatch.rpaz

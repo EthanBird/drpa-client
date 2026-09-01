@@ -1,0 +1,264 @@
+.python-flow-designer {
+  position: relative;
+  display: grid;
+  grid-template-rows: 44px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  outline: 0;
+  background: var(--surface-0);
+  color: var(--text-1);
+}
+
+.python-flow-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+
+.python-flow-brand { display: flex; align-items: center; gap: 7px; min-width: 156px; color: var(--accent); }
+.python-flow-brand > span { display: grid; min-width: 0; gap: 1px; }
+.python-flow-brand strong { color: var(--text-1); font-size: calc(8px * var(--font-scale)); }
+.python-flow-brand small { overflow: hidden; max-width: 140px; color: var(--text-3); font: calc(5px * var(--font-scale)) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.python-flow-toolbar-spacer { flex: 1; }
+
+.python-flow-history { display: flex; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 5px; }
+.python-flow-history button,
+.python-flow-zoom button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-right: 1px solid var(--border-subtle); background: var(--surface-0); color: var(--text-3); cursor: pointer; }
+.python-flow-history button:last-of-type,
+.python-flow-zoom button:last-child { border-right: 0; }
+.python-flow-history button:hover:not(:disabled),
+.python-flow-zoom button:hover { background: var(--surface-2); color: var(--text-1); }
+.python-flow-history button:disabled { opacity: .38; cursor: default; }
+.python-flow-history-sentinel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+.python-flow-tool { display: inline-flex; align-items: center; gap: 5px; height: 29px; padding: 0 8px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--text-2); cursor: pointer; font-size: calc(7px * var(--font-scale)); white-space: nowrap; }
+.python-flow-tool:hover:not(:disabled), .python-flow-tool.active { border-color: var(--border-subtle); background: var(--surface-2); color: var(--text-1); }
+.python-flow-tool:disabled { opacity: .42; cursor: default; }
+.python-flow-tool > span { display: grid; place-items: center; min-width: 16px; height: 16px; border-radius: 8px; background: var(--surface-3); color: var(--text-3); font: calc(5px * var(--font-scale)) var(--font-mono); }
+.python-flow-tool.danger:hover:not(:disabled) { border-color: color-mix(in srgb, var(--danger) 25%, var(--border)); background: var(--danger-soft); color: var(--danger); }
+
+.python-flow-sync-state { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); font-size: calc(6px * var(--font-scale)); white-space: nowrap; }
+.python-flow-sync-state > span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+.python-flow-sync-state.synced > span { background: var(--success); }
+.python-flow-sync-state.graph-dirty > span, .python-flow-sync-state.source-stale > span { background: var(--warning); }
+.python-flow-sync-state.conflict { color: var(--danger); }
+.python-flow-sync-state.conflict > span { background: var(--danger); }
+
+.python-flow-grid { display: grid; grid-template-columns: 188px minmax(0, 1fr) 268px; min-width: 0; min-height: 0; overflow: hidden; }
+.python-flow-catalog { display: grid; grid-template-rows: 40px 38px minmax(0, 1fr) auto; min-height: 0; overflow: hidden; border-right: 1px solid var(--border-subtle); background: var(--surface-1); }
+.python-flow-catalog > header { display: flex; align-items: center; gap: 7px; padding: 0 10px; color: var(--text-2); }
+.python-flow-catalog > header svg { color: var(--accent); }
+.python-flow-catalog > header strong { font-size: calc(8px * var(--font-scale)); }
+.python-flow-search { display: flex; align-items: center; gap: 5px; height: 29px; margin: 2px 7px 7px; padding: 0 7px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--surface-0); color: var(--text-3); }
+.python-flow-search:focus-within { border-color: var(--accent); }
+.python-flow-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text-1); font-size: calc(7px * var(--font-scale)); }
+.python-flow-catalog-scroll { min-height: 0; overflow: auto; padding: 0 6px 10px; }
+.python-flow-catalog-scroll section + section { margin-top: 10px; }
+.python-flow-catalog-scroll h3 { margin: 4px 6px 5px; color: var(--text-3); font-size: calc(6px * var(--font-scale)); letter-spacing: .08em; text-transform: uppercase; }
+.python-flow-catalog-scroll section > button { display: grid; grid-template-columns: 28px minmax(0, 1fr) 12px; align-items: center; gap: 6px; width: 100%; margin-bottom: 3px; padding: 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-2); cursor: grab; text-align: left; }
+.python-flow-catalog-scroll section > button:hover:not(:disabled) { border-color: var(--border-subtle); background: var(--surface-2); }
+.python-flow-catalog-scroll section > button:active:not(:disabled) { cursor: grabbing; }
+.python-flow-catalog-scroll section > button:disabled { opacity: .55; cursor: default; }
+.python-flow-catalog-scroll section > button > span:first-child { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
+.python-flow-catalog-scroll section > button > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
+.python-flow-catalog-scroll strong { font-size: calc(7px * var(--font-scale)); }
+.python-flow-catalog-scroll small { overflow: hidden; color: var(--text-3); font-size: calc(5.5px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }
+.python-flow-catalog-scroll button > svg { color: var(--text-3); }
+.python-flow-catalog > footer { display: flex; align-items: flex-start; gap: 6px; padding: 8px 9px; border-top: 1px solid var(--border-subtle); color: var(--text-3); font-size: calc(6px * var(--font-scale)); line-height: 1.4; }
+.python-flow-empty { margin: 18px 8px; color: var(--text-3); font-size: calc(7px * var(--font-scale)); text-align: center; }
+
+.python-flow-canvas { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: color-mix(in srgb, var(--surface-0) 94%, var(--surface-2)); touch-action: none; }
+.python-flow-grid-dots { position: absolute; inset: 0; opacity: .62; background-image: radial-gradient(circle, color-mix(in srgb, var(--text-3) 28%, transparent) 1px, transparent 1px); background-size: 18px 18px; pointer-events: none; }
+.python-flow-canvas-content { position: absolute; top: 0; left: 0; width: 3200px; height: 2200px; transform-origin: 0 0; }
+.python-flow-edges { position: absolute; inset: 0; width: 3200px; height: 2200px; overflow: visible; }
+.python-flow-edges marker path { fill: color-mix(in srgb, var(--text-3) 65%, transparent); }
+.python-flow-edge-line { fill: none; stroke: color-mix(in srgb, var(--text-3) 55%, transparent); stroke-width: 1.7; vector-effect: non-scaling-stroke; }
+.python-flow-edge-hit { fill: none; stroke: transparent; stroke-width: 16; cursor: pointer; vector-effect: non-scaling-stroke; }
+.python-flow-edges g:hover .python-flow-edge-line, .python-flow-edges g.selected .python-flow-edge-line { stroke: var(--accent); stroke-width: 2.3; }
+.python-flow-edges g.selected marker path { fill: var(--accent); }
+.python-flow-edges text { fill: var(--text-3); font: 10px var(--font-mono); text-anchor: middle; paint-order: stroke; stroke: var(--surface-0); stroke-width: 4px; }
+
+.python-flow-node { position: absolute; z-index: 2; display: grid; align-content: start; overflow: visible; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); color: var(--text-2); cursor: grab; user-select: none; box-shadow: 0 2px 7px color-mix(in srgb, #000 8%, transparent); }
+.python-flow-node:active { cursor: grabbing; }
+.python-flow-node:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.python-flow-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), 0 4px 14px color-mix(in srgb, #000 10%, transparent); }
+.python-flow-node > header { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 48px; padding: 7px 9px; border-bottom: 1px solid var(--border-subtle); }
+.python-flow-node > header > span { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
+.python-flow-node.kind-condition > header > span, .python-flow-node.kind-loop > header > span { background: var(--warning-soft); color: var(--warning); }
+.python-flow-node.kind-rpa-action > header > span { background: var(--success-soft); color: var(--success); }
+.python-flow-node.kind-return > header > span { background: color-mix(in srgb, var(--violet) 12%, transparent); color: var(--violet); }
+.python-flow-node > header > div { display: grid; min-width: 0; gap: 2px; }
+.python-flow-node > header strong { overflow: hidden; font-size: calc(8px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }
+.python-flow-node > header code { overflow: hidden; color: var(--text-3); font: calc(5px * var(--font-scale)) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.python-flow-node > header small { color: var(--text-3); font: calc(5px * var(--font-scale)) var(--font-mono); }
+.python-flow-node > p { overflow: hidden; margin: 0; padding: 10px; color: var(--text-3); font-size: calc(6px * var(--font-scale)); line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.python-flow-port { position: absolute; z-index: 4; display: grid; place-items: center; width: 13px; height: 13px; padding: 0; transform: translateY(-50%); border: 2px solid var(--surface-1); border-radius: 50%; background: var(--text-3); color: white; cursor: crosshair; box-shadow: 0 0 0 1px var(--border); font: 6px var(--font-mono); }
+.python-flow-port.input { left: -7px; }
+.python-flow-port.output { right: -7px; }
+.python-flow-port:hover, .python-flow-port.ready, .python-flow-port.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.python-flow-port.output:not(:empty) { width: 17px; height: 17px; right: -9px; }
+
+.python-flow-canvas-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 7px; color: var(--text-3); text-align: center; pointer-events: none; }
+.python-flow-canvas-empty svg { color: var(--accent); opacity: .7; }
+.python-flow-canvas-empty strong { color: var(--text-2); font-size: calc(10px * var(--font-scale)); }
+.python-flow-canvas-empty p { margin: 0; font-size: calc(7px * var(--font-scale)); }
+.python-flow-zoom { position: absolute; right: 12px; bottom: 12px; z-index: 10; display: flex; align-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); box-shadow: var(--shadow-float); }
+.python-flow-zoom span { min-width: 44px; color: var(--text-3); font: calc(6px * var(--font-scale)) var(--font-mono); text-align: center; }
+.python-flow-connect-banner { position: absolute; top: 10px; left: 50%; z-index: 12; display: flex; align-items: center; gap: 7px; padding: 7px 9px; transform: translateX(-50%); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 6px; background: var(--surface-1); color: var(--accent); box-shadow: var(--shadow-float); font-size: calc(7px * var(--font-scale)); }
+.python-flow-connect-banner button { display: grid; place-items: center; width: 19px; height: 19px; padding: 0; border: 0; background: transparent; color: var(--text-3); cursor: pointer; }
+
+.python-flow-conflict { position: absolute; top: 12px; right: 12px; left: 12px; z-index: 14; display: flex; align-items: center; gap: 8px; min-height: 45px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border)); border-radius: 7px; background: var(--surface-1); color: var(--danger); box-shadow: var(--shadow-float); }
+.python-flow-conflict > span { display: grid; flex: 1; gap: 2px; }
+.python-flow-conflict strong { color: var(--text-1); font-size: calc(7px * var(--font-scale)); }
+.python-flow-conflict small { color: var(--text-3); font-size: calc(6px * var(--font-scale)); }
+.python-flow-conflict button, .python-flow-code-panel footer button { height: 27px; padding: 0 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text-2); cursor: pointer; font-size: calc(6px * var(--font-scale)); }
+.python-flow-conflict button:hover:not(:disabled), .python-flow-code-panel footer button:hover:not(:disabled) { border-color: var(--accent); color: var(--text-1); }
+.python-flow-conflict button:disabled, .python-flow-code-panel footer button:disabled { opacity: .5; cursor: default; }
+
+.python-flow-issues { position: absolute; z-index: 13; bottom: 48px; left: 12px; display: grid; grid-template-rows: 37px minmax(0, 1fr); width: min(470px, calc(100% - 24px)); max-height: min(310px, 45%); overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-1); box-shadow: var(--shadow-float); }
+.python-flow-issues > header { display: flex; align-items: center; gap: 7px; padding: 0 9px; border-bottom: 1px solid var(--border-subtle); color: var(--text-2); }
+.python-flow-issues > header strong { font-size: calc(7px * var(--font-scale)); }
+.python-flow-issues > header > span { color: var(--text-3); font: calc(6px * var(--font-scale)) var(--font-mono); }
+.python-flow-issues > header > button, .python-flow-code-panel > header > button { display: grid; place-items: center; width: 25px; height: 25px; margin-left: auto; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--text-3); cursor: pointer; }
+.python-flow-issues > div { min-height: 0; overflow: auto; padding: 5px; }
+.python-flow-issues > div > button { display: grid; grid-template-columns: 15px minmax(0, 1fr) auto; align-items: center; gap: 5px; width: 100%; min-height: 30px; padding: 4px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--text-2); cursor: pointer; text-align: left; }
+.python-flow-issues > div > button:hover { background: var(--surface-2); }
+.python-flow-issues > div > button.error > svg { color: var(--danger); }
+.python-flow-issues > div > button.warning > svg { color: var(--warning); }
+.python-flow-issues > div > button.info > svg { color: var(--accent); }
+.python-flow-issues > div > button span { font-size: calc(6.5px * var(--font-scale)); }
+.python-flow-issues > div > button code { color: var(--text-3); font: calc(5px * var(--font-scale)) var(--font-mono); }
+.python-flow-issues p.valid { display: flex; align-items: center; gap: 6px; margin: 9px; color: var(--success); font-size: calc(7px * var(--font-scale)); }
+
+.python-flow-code-panel { position: absolute; z-index: 15; right: 12px; bottom: 48px; display: grid; grid-template-rows: 42px minmax(130px, 1fr) 39px; width: min(680px, calc(100% - 24px)); height: min(440px, calc(100% - 72px)); overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-1); box-shadow: var(--shadow-float); }
+.python-flow-code-panel > header { display: flex; align-items: center; gap: 7px; padding: 0 9px; border-bottom: 1px solid var(--border-subtle); }
+.python-flow-code-panel > header > svg { color: var(--accent); }
+.python-flow-code-panel > header > span { display: grid; flex: 1; gap: 1px; }
+.python-flow-code-panel > header strong { font-size: calc(7px * var(--font-scale)); }
+.python-flow-code-panel > header small { color: var(--text-3); font-size: calc(5.5px * var(--font-scale)); }
+.python-flow-code-panel textarea { width: 100%; min-width: 0; min-height: 0; padding: 11px 13px; resize: none; border: 0; outline: 0; background: var(--surface-0); color: var(--text-1); font: calc(7px * var(--font-scale))/1.55 var(--font-mono); tab-size: 4; }
+.python-flow-code-panel textarea:read-only { color: var(--text-2); }
+.python-flow-code-panel footer { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-top: 1px solid var(--border-subtle); }
+.python-flow-code-panel footer > span { overflow: hidden; flex: 1; color: var(--text-3); font-size: calc(6px * var(--font-scale)); text-overflow: ellipsis; white-space: nowrap; }
+.python-flow-code-panel footer button { display: inline-flex; align-items: center; gap: 5px; }
+
+.python-flow-inspector { display: grid; grid-template-rows: 51px minmax(0, 1fr); min-height: 0; overflow: hidden; border-left: 1px solid var(--border-subtle); background: var(--surface-1); }
+.python-flow-inspector > header { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-bottom: 1px solid var(--border-subtle); }
+.python-flow-inspector > header > span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
+.python-flow-inspector > header > div { display: grid; min-width: 0; gap: 2px; }
+.python-flow-inspector > header strong { font-size: calc(8px * var(--font-scale)); }
+.python-flow-inspector > header small { overflow: hidden; color: var(--text-3); font: calc(5px * var(--font-scale)) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.python-flow-inspector > header > button { display: grid; place-items: center; width: 27px; height: 27px; margin-left: auto; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--text-3); cursor: pointer; }
+.python-flow-inspector > header > button:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+.python-flow-inspector-scroll { min-height: 0; overflow: auto; padding: 10px 10px 70px; }
+.python-flow-inspector-scroll > label, .python-flow-property-pair label { display: grid; gap: 5px; margin-bottom: 10px; color: var(--text-2); font-size: calc(7px * var(--font-scale)); }
+.python-flow-inspector input, .python-flow-inspector textarea { width: 100%; min-width: 0; height: 32px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: 5px; outline: 0; background: var(--surface-0); color: var(--text-1); font: calc(7px * var(--font-scale))/1.5 var(--font-sans); }
+.python-flow-inspector textarea { min-height: 66px; padding: 7px 8px; resize: vertical; }
+.python-flow-inspector textarea.code { min-height: 210px; font-family: var(--font-mono); tab-size: 2; }
+.python-flow-inspector input:focus, .python-flow-inspector textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.python-flow-inspector input:read-only, .python-flow-inspector textarea:read-only { color: var(--text-3); }
+.python-flow-property-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.python-flow-edge-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 5px; margin-bottom: 12px; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-0); }
+.python-flow-edge-summary code { overflow: hidden; color: var(--text-3); font: calc(6px * var(--font-scale)) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.python-flow-edge-summary span { color: var(--accent); }
+.python-flow-source-binding, .python-flow-ports-summary { display: grid; gap: 6px; margin-bottom: 12px; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-0); }
+.python-flow-source-binding > header, .python-flow-ports-summary > header { display: flex; align-items: center; gap: 5px; color: var(--text-2); }
+.python-flow-source-binding strong, .python-flow-ports-summary strong { font-size: calc(7px * var(--font-scale)); }
+.python-flow-source-binding > code { overflow: hidden; color: var(--accent); font: calc(6px * var(--font-scale)) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.python-flow-source-binding > span { color: var(--text-3); font-size: calc(6px * var(--font-scale)); }
+.python-flow-source-binding > button, .python-flow-apply { height: 29px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-1); color: var(--text-2); cursor: pointer; font-size: calc(6.5px * var(--font-scale)); }
+.python-flow-source-binding > button:hover, .python-flow-apply:hover:not(:disabled) { border-color: var(--accent); color: var(--text-1); }
+.python-flow-apply { width: 100%; margin-top: -4px; margin-bottom: 12px; background: var(--accent-soft); color: var(--accent); }
+.python-flow-apply:disabled { opacity: .5; cursor: default; }
+.python-flow-config-error { display: flex; align-items: center; gap: 5px; margin: -5px 0 10px; color: var(--danger); font-size: calc(6px * var(--font-scale)); }
+.python-flow-ports-summary > div { display: grid; gap: 4px; }
+.python-flow-ports-summary > div > span { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 5px; color: var(--text-2); font-size: calc(6px * var(--font-scale)); }
+.python-flow-ports-summary i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+.python-flow-ports-summary i.input { background: var(--success); }
+.python-flow-ports-summary i.output { background: var(--accent); }
+.python-flow-ports-summary code { color: var(--text-3); font: calc(5px * var(--font-scale)) var(--font-mono); }
+.python-flow-inspector-empty { display: grid; place-content: center; justify-items: center; gap: 7px; padding: 20px; color: var(--text-3); text-align: center; }
+.python-flow-inspector-empty strong { color: var(--text-2); font-size: calc(8px * var(--font-scale)); }
+.python-flow-inspector-empty p { margin: 0; font-size: calc(7px * var(--font-scale)); line-height: 1.45; }
+
+@media (max-width: 1180px) {
+  .python-flow-grid { grid-template-columns: 164px minmax(0, 1fr) 244px; }
+  .python-flow-brand { min-width: 128px; }
+  .python-flow-catalog-scroll small { display: none; }
+  .python-flow-tool { padding: 0 6px; }
+}
+
+@media (max-width: 940px) {
+  .python-flow-grid { grid-template-columns: 148px minmax(0, 1fr) 220px; }
+  .python-flow-brand small, .python-flow-sync-state { display: none; }
+  .python-flow-tool { width: 29px; padding: 0; justify-content: center; font-size: 0; }
+  .python-flow-tool > span { position: absolute; margin: -18px 0 0 18px; font-size: 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .python-flow-designer *, .python-flow-designer *::before, .python-flow-designer *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+:root[data-reduced-visual-effects="true"] .python-flow-designer *,
+:root[data-reduced-visual-effects="true"] .python-flow-designer *::before,
+:root[data-reduced-visual-effects="true"] .python-flow-designer *::after {
+  animation: none !important;
+  transition: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  will-change: auto !important;
+}
+
+:root[data-reduced-visual-effects="true"] .python-flow-canvas-content {
+  transform-style: flat;
+}
+.studio-editor-view-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  box-shadow: -8px 0 14px color-mix(in srgb, var(--surface-2) 88%, transparent);
+}
+
+.studio-editor-view-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  font: calc(8px * var(--font-scale)) var(--font-sans);
+  cursor: pointer;
+}
+
+.studio-editor-view-switch button:hover,
+.studio-editor-view-switch button.active {
+  background: var(--surface-3);
+  color: var(--text-1);
+}
+
+.studio-editor-view-switch em {
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-strong);
+  font-size: calc(6px * var(--font-scale));
+  font-style: normal;
+  text-transform: uppercase;
+}

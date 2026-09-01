@@ -1,0 +1,61 @@
+{
+  "type": "object",
+  "properties": {
+    "dify_base_url": {
+      "type": "string",
+      "title": "Dify API 地址",
+      "description": "Dify 云服务或自建实例的 /v1 根地址。"
+    },
+    "dify_api_key": {
+      "type": "string",
+      "title": "Dify App API Key",
+      "description": "只交给上游 Dify；不会作为本地代理凭据返回给客户端。",
+      "secret": true
+    },
+    "listen_addr": {
+      "type": "string",
+      "title": "本地监听地址",
+      "description": "必须使用 127.0.0.1:端口，避免把调试服务暴露到局域网。",
+      "pattern": "^127\\.0\\.0\\.1:[0-9]{2,5}$"
+    },
+    "model_name": {
+      "type": "string",
+      "title": "对外模型名",
+      "description": "OpenAI 兼容客户端看到并填写的模型名称。"
+    },
+    "proxy_api_key": {
+      "type": "string",
+      "title": "本地代理 API Key",
+      "description": "DRPA 首次安装会随机生成；客户端只使用这个 Key，不要填写上游 Dify Key。",
+      "secret": true,
+      "minLength": 24
+    },
+    "enable_tool_emu": {
+      "type": "boolean",
+      "title": "启用客户端工具调用适配",
+      "description": "把 OpenAI tools 转换为 Dify 可理解的提示，并还原为标准 tool_calls。"
+    },
+    "strip_think_tags": {
+      "type": "boolean",
+      "title": "移除 think 标签",
+      "description": "从最终回复中移除 <think>…</think> 内容。"
+    },
+    "default_user": {
+      "type": "string",
+      "title": "默认用户标识",
+      "description": "客户端没有传 user 时发给 Dify 的稳定标识。"
+    },
+    "show_agent_thought": {
+      "type": "boolean",
+      "title": "显示 Agent Thought",
+      "description": "调试时把 Dify agent_thought 拼入回复；可能包含敏感推理数据。"
+    }
+  },
+  "required": [
+    "dify_base_url",
+    "dify_api_key",
+    "listen_addr",
+    "model_name",
+    "proxy_api_key"
+  ]
+}

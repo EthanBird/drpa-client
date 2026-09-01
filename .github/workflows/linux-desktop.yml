@@ -1,0 +1,398 @@
+name: Build and publish Linux x86_64 offline desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload the verified Linux/UOS assets to desktop-v3.0.1
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches:
+      - codex/drpa-next-platform
+    paths:
+      - ".github/workflows/linux-desktop.yml"
+      - "apps/desktop/**"
+      - "crates/**"
+      - "offline/**"
+      - "plugins/**"
+      - "runtime/python/**"
+      - "tools/linux/**"
+      - "tools/offline/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "package-lock.json"
+      - "package.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-offline-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  packages:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release(windows):')
+    name: Ubuntu 22.04 AppImage + deb + sealed runtime
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      DRPA_VERSION: 3.0.1
+      DRPA_DEB_VERSION: 3.0.1-1
+      DRPA_UOS20_DEB_VERSION: 3.0.1-1+uos20.1
+      DRPA_RELEASE_TAG: desktop-v3.0.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux desktop and smoke-test libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            dbus-x11 \
+            dpkg-dev \
+            fakeroot \
+            file \
+            libayatana-appindicator3-dev \
+            libegl1 \
+            libegl-mesa0 \
+            libfuse2 \
+            libgbm1 \
+            libgl1 \
+            libgl1-mesa-dri \
+            libglx-mesa0 \
+            libnss3 \
+            libopengl0 \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            xdg-utils \
+            xauth \
+            xvfb
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+          cache: pip
+      - name: Install pinned runtime builder
+        run: python -m pip install "uv==0.11.28"
+      - name: Validate dependency policy
+        run: |
+          python tools/offline/validate_requirements.py offline/requirements/runtime.txt
+          python -m unittest discover -s tools/offline/tests -v
+          python -m unittest discover -s tools/linux/tests -v
+          python -m pytest -q tools/linux/tests/test_fetch_linux_jcode.py
+      - name: Build and air-gap test Linux sealed runtime
+        run: python tools/offline/build_runtime_bundle.py --platform linux-x86_64 --work-dir "${{ runner.temp }}/drpa-linux"
+      - name: Stage sealed runtime as a Tauri resource
+        run: |
+          runtime_stage="$(find "${{ runner.temp }}/drpa-linux" -maxdepth 1 -type d -name 'drpa-runtime-*-linux-x86_64' -print -quit)"
+          test -n "$runtime_stage"
+          rm -rf apps/desktop/src-tauri/resources/linux/runtime
+          mkdir -p apps/desktop/src-tauri/resources/linux/runtime
+          # Tauri's resource walker does not retain every symbolic link from the
+          # standalone Python distribution. Materialize link targets before
+          # bundling so the manifest executable survives AppImage/deb creation.
+          cp -aL "$runtime_stage/." apps/desktop/src-tauri/resources/linux/runtime/
+          if find apps/desktop/src-tauri/resources/linux/runtime -type l -print -quit | grep -q .; then
+            echo "sealed runtime still contains symbolic links" >&2
+            exit 1
+          fi
+          python tools/linux/verify_runtime_layout.py --runtime-root apps/desktop/src-tauri/resources/linux/runtime
+      - name: Stage pinned Linux JCode sidecar
+        run: |
+          rm -rf apps/desktop/src-tauri/resources/linux/jcode
+          python tools/linux/fetch_jcode.py \
+            --output-dir apps/desktop/src-tauri/resources/linux/jcode
+          test -x apps/desktop/src-tauri/resources/linux/jcode/jcode
+          apps/desktop/src-tauri/resources/linux/jcode/jcode --version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-appimage-x86_64
+      - run: npm ci
+      - name: Verify source before packaging
+        run: |
+          npm run typecheck
+          npm run test
+          cargo fmt --all --check
+          cargo clippy -p drpa-desktop --all-targets -- -D warnings
+          cargo test -p drpa-desktop
+      - name: Build runtime-complete AppImage
+        run: npm run tauri:build --workspace @drpa/desktop -- --ci --bundles appimage
+      - name: Verify extracted AppImage runtime and offline bootstrap
+        shell: bash
+        run: |
+          appimage="$(find target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          chmod +x "$appimage"
+          extract_root="${{ runner.temp }}/appimage-extract"
+          mkdir -p "$extract_root"
+          (
+            cd "$extract_root"
+            "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null
+          )
+          runtime_manifest="$(find "$extract_root/squashfs-root" -type f -path '*/runtime/manifest.json' -print -quit)"
+          test -n "$runtime_manifest"
+          jcode="$(find "$extract_root/squashfs-root" -type f -path '*/jcode/jcode' -print -quit)"
+          test -x "$jcode"
+          "$jcode" --version
+          runtime_root="$(dirname "$runtime_manifest")"
+          python tools/linux/verify_runtime_layout.py --runtime-root "$runtime_root"
+          runtime_python="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["pythonExecutable"])' "$runtime_manifest")"
+          smoke_environment="${{ runner.temp }}/installed-layout-environment"
+          env \
+            PIP_NO_INDEX=1 \
+            UV_OFFLINE=1 \
+            UV_NO_MANAGED_PYTHON=1 \
+            UV_PYTHON_DOWNLOADS=never \
+            "$runtime_root/$runtime_python" "$runtime_root/bootstrap_runtime.py" --environment "$smoke_environment"
+          "$smoke_environment/bin/python" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat, docx, openpyxl, pptx, pypdf, reportlab; from drpa_runner import document_worker; assert document_worker.PROTOCOL_VERSION == 1; print('DRPA_LINUX_APPIMAGE_RUNTIME_OK')"
+      - name: Build self-contained Debian package from verified AppDir
+        shell: bash
+        run: |
+          python tools/linux/build_bundled_deb.py \
+            --appdir "${{ runner.temp }}/appimage-extract/squashfs-root" \
+            --package-version "$DRPA_DEB_VERSION" \
+            --output "${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64.deb" \
+            --work-dir "${{ runner.temp }}/bundled-deb-work"
+      - name: Build fixed-runtime UOS Desktop 20 Debian package
+        shell: bash
+        run: |
+          test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.35"
+          python tools/linux/build_uos20_deb.py \
+            --appdir "${{ runner.temp }}/appimage-extract/squashfs-root" \
+            --package-version "$DRPA_UOS20_DEB_VERSION" \
+            --output "${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb" \
+            --work-dir "${{ runner.temp }}/uos20-deb-work"
+      - name: Launch AppImage in an isolated X11 session
+        shell: bash
+        run: |
+          appimage="$(find target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          set +e
+          timeout 20s xvfb-run -a env \
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            DRPA_DATA_DIR="${{ runner.temp }}/drpa-linux-gui-data" \
+            "$appimage" >"${{ runner.temp }}/drpa-linux-gui.log" 2>&1
+          status=$?
+          set -e
+          if [[ "$status" -ne 124 ]]; then
+            cat "${{ runner.temp }}/drpa-linux-gui.log"
+            exit "$status"
+          fi
+      - name: Verify, install and launch Debian package
+        shell: bash
+        run: |
+          deb="${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64.deb"
+          test -f "$deb"
+          deb_extract="${{ runner.temp }}/deb-extract"
+          deb_manifest="${{ runner.temp }}/deb-package-manifest.json"
+          python tools/linux/verify_deb_bundle.py \
+            --deb "$deb" \
+            --expected-version "$DRPA_DEB_VERSION" \
+            --extract-root "$deb_extract" \
+            --manifest-output "$deb_manifest"
+          runtime_manifest="$(find "$deb_extract" -type f -path '*/runtime/manifest.json' -print -quit)"
+          runtime_root="$(dirname "$runtime_manifest")"
+          runtime_python="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["pythonExecutable"])' "$runtime_manifest")"
+          deb_environment="${{ runner.temp }}/deb-installed-layout-environment"
+          env \
+            PIP_NO_INDEX=1 \
+            UV_OFFLINE=1 \
+            UV_NO_MANAGED_PYTHON=1 \
+            UV_PYTHON_DOWNLOADS=never \
+            "$runtime_root/$runtime_python" "$runtime_root/bootstrap_runtime.py" --environment "$deb_environment"
+          "$deb_environment/bin/python" -I -c "import drpa_runner, DrissionPage, ipykernel, jupyter_client, zmq, nbformat, rpa, tagui; from drpa_runner import python_flow; assert python_flow.SCHEMA_VERSION == 1; print('DRPA_LINUX_DEB_RUNTIME_OK')"
+          package="$(dpkg-deb -f "$deb" Package)"
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+            libwebkit2gtk-4.1-dev \
+            libwebkit2gtk-4.1-0 \
+            libjavascriptcoregtk-4.1-dev \
+            libjavascriptcoregtk-4.1-0
+          if dpkg-query -W -f='${Status}' libwebkit2gtk-4.1-0 2>/dev/null | grep -Fq 'install ok installed'; then
+            echo "system libwebkit2gtk-4.1-0 was not removed" >&2
+            exit 1
+          fi
+          sudo apt-get install -y "$deb"
+          if dpkg-query -W -f='${Status}' libwebkit2gtk-4.1-0 2>/dev/null | grep -Fq 'install ok installed'; then
+            echo "deb unexpectedly reinstalled system libwebkit2gtk-4.1-0" >&2
+            exit 1
+          fi
+          installed_binary="/usr/bin/drpa-next"
+          test -x "$installed_binary"
+          deb_data="${{ runner.temp }}/drpa-linux-deb-data"
+          mkdir -p "$deb_data"
+          touch "$deb_data/user-data-sentinel"
+          set +e
+          timeout 20s xvfb-run -a env DRPA_DATA_DIR="$deb_data" "$installed_binary" >"${{ runner.temp }}/drpa-linux-deb-gui.log" 2>&1
+          status=$?
+          set -e
+          if [[ "$status" -ne 124 ]]; then
+            cat "${{ runner.temp }}/drpa-linux-deb-gui.log"
+            exit "$status"
+          fi
+          sudo apt-get remove -y "$package"
+          test -f "$deb_data/user-data-sentinel"
+      - name: Verify UOS package metadata and private ELF runtime
+        shell: bash
+        run: |
+          uos_deb="${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          python tools/linux/verify_uos20_deb.py \
+            --deb "$uos_deb" \
+            --expected-version "$DRPA_UOS20_DEB_VERSION" \
+            --extract-root "${{ runner.temp }}/uos20-deb-extract" \
+            --manifest-output "${{ runner.temp }}/uos20-deb-package-manifest.json"
+      - name: Stage release assets and reclaim build disk
+        shell: bash
+        run: |
+          assets="${{ runner.temp }}/linux-assets"
+          mkdir -p "$assets"
+          appimage="$(find target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          mv "$appimage" "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64.AppImage"
+          mv "${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64.deb" \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64.deb"
+          mv "${{ runner.temp }}/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb" \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          mv "${{ runner.temp }}/deb-package-manifest.json" \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-deb-manifest.json"
+          mv "${{ runner.temp }}/uos20-deb-package-manifest.json" \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20-deb-manifest.json"
+          cp apps/desktop/src-tauri/resources/linux/runtime/wheelhouse-lock.json \
+            "$assets/drpa-next-${DRPA_VERSION}-linux-x86_64-wheelhouse-lock.json"
+          (
+            cd "$assets"
+            sha256sum "drpa-next-${DRPA_VERSION}-linux-x86_64.AppImage" \
+              >"drpa-next-${DRPA_VERSION}-linux-x86_64.AppImage.sha256"
+            sha256sum "drpa-next-${DRPA_VERSION}-linux-x86_64.deb" \
+              >"drpa-next-${DRPA_VERSION}-linux-x86_64.deb.sha256"
+            sha256sum "drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb" \
+              >"drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb.sha256"
+          )
+          rm -rf \
+            target \
+            apps/desktop/src-tauri/resources/linux/runtime \
+            apps/desktop/src-tauri/resources/linux/jcode \
+            "${{ runner.temp }}/drpa-linux" \
+            "${{ runner.temp }}/appimage-extract" \
+            "${{ runner.temp }}/bundled-deb-work" \
+            "${{ runner.temp }}/uos20-deb-work" \
+            "${{ runner.temp }}/deb-extract" \
+            "${{ runner.temp }}/uos20-deb-extract" \
+            "${{ runner.temp }}/installed-layout-environment" \
+            "${{ runner.temp }}/deb-installed-layout-environment"
+          docker system prune --all --force
+          sudo apt-get clean
+          df -h /
+      - name: Install and run UOS package on glibc 2.28
+        shell: bash
+        run: |
+          context="${{ runner.temp }}/uos20-container-context"
+          mkdir -p "$context"
+          uos_deb="${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          cp "$uos_deb" "$context/$(basename "$uos_deb")"
+          cp tools/linux/uos20_container_smoke.sh "$context/uos20_container_smoke.sh"
+          diagnostics="${{ runner.temp }}/uos20-diagnostics"
+          mkdir -p "$diagnostics"
+          docker build \
+            --progress=plain \
+            --build-arg "DEB_FILENAME=$(basename "$uos_deb")" \
+            --file tools/linux/uos20-smoke.Dockerfile \
+            --tag drpa-next-uos20-smoke \
+            "$context"
+          docker run --rm \
+            --volume "$diagnostics:/diagnostics" \
+            drpa-next-uos20-smoke
+      - name: Upload UOS visual diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drpa-next-uos20-ui-diagnostics
+          path: ${{ runner.temp }}/uos20-diagnostics/*
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Install and render UOS package on Deepin 20.8 userspace
+        shell: bash
+        run: |
+          context="${{ runner.temp }}/uos20-deepin-container-context"
+          diagnostics="${{ runner.temp }}/uos20-deepin-diagnostics"
+          mkdir -p "$context" "$diagnostics"
+          uos_deb="${{ runner.temp }}/linux-assets/drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb"
+          cp "$uos_deb" "$context/$(basename "$uos_deb")"
+          cp tools/linux/uos20_container_smoke.sh "$context/uos20_container_smoke.sh"
+          docker build \
+            --progress=plain \
+            --build-arg "DEB_FILENAME=$(basename "$uos_deb")" \
+            --file tools/linux/uos20-deepin-smoke.Dockerfile \
+            --tag drpa-next-uos20-deepin-smoke \
+            "$context"
+          base_image="$(awk 'NR == 1 { print $2 }' tools/linux/uos20-deepin-smoke.Dockerfile)"
+          printf '{"image":"%s"}\n' "$base_image" >"$diagnostics/base-image-digests.json"
+          docker run --rm \
+            --volume "$diagnostics:/diagnostics" \
+            drpa-next-uos20-deepin-smoke
+      - name: Upload Deepin 20 visual diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drpa-next-uos20-deepin-ui-diagnostics
+          path: ${{ runner.temp }}/uos20-deepin-diagnostics/*
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Verify collected Linux desktop assets
+        shell: bash
+        run: |
+          assets="${{ runner.temp }}/linux-assets"
+          mapfile -t files < <(find "$assets" -maxdepth 1 -type f -print | sort)
+          test "${#files[@]}" -eq 9
+          (
+            cd "$assets"
+            sha256sum --check "drpa-next-${DRPA_VERSION}-linux-x86_64.AppImage.sha256"
+            sha256sum --check "drpa-next-${DRPA_VERSION}-linux-x86_64.deb.sha256"
+            sha256sum --check "drpa-next-${DRPA_VERSION}-linux-x86_64-uos20.deb.sha256"
+          )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drpa-next-linux-x86_64
+          path: ${{ runner.temp }}/linux-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Publish verified Linux assets
+        if: >-
+          (github.event_name == 'workflow_dispatch' && inputs.publish) ||
+          (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release(linux):'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRPA_RELEASE_NOTES: |
+            DRPA Next 2.1.1 Windows x64 与 Linux/UOS x86_64 全量离线桌面版。
+
+            2.1.1 增强光学文件传输：桌面端加入手机零安装入口，接收端修复喷泉码尾部完成阶段停滞，并优化高帧率解码稳定性。
+
+            新建开发项目自带面向 AI 的 README。Windows、Linux/UOS sealed runtime 同步内置 RPA for Python 1.50.0 与平台 TagUI 离线引擎；发布包继续包含 Python 3.11、Chrome/Jupyter 和完整运行记录链路。UOS 专用 deb 版本为 2.1.1-1+uos20.4，固定安装到 /opt/drpa-next-uos20，面向 x86_64、glibc 2.28 基线，并执行 Debian 10 与 Deepin 20.8 输入、IPC、WebKitWebProcess、Dify2API 和非白屏截图验证。
+        shell: bash
+        run: |
+          mapfile -t assets < <(find "${{ runner.temp }}/linux-assets" -maxdepth 1 -type f -print | sort)
+          test "${#assets[@]}" -eq 9
+          gh release view "$DRPA_RELEASE_TAG" >/dev/null
+          gh release upload "$DRPA_RELEASE_TAG" "${assets[@]}" --clobber
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${DRPA_RELEASE_TAG}" \
+            -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          gh release edit "$DRPA_RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
+            --title "DRPA Next 2.1.1 Windows x64 + Linux/UOS x86_64 全量离线包" \
+            --notes "$DRPA_RELEASE_NOTES"
+          published_assets="$(gh release view "$DRPA_RELEASE_TAG" --json assets --jq '.assets[].name')"
+          for asset in "${assets[@]}"; do
+            grep -Fxq "$(basename "$asset")" <<<"$published_assets"
+          done

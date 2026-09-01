@@ -1,0 +1,30 @@
+[package]
+name = "drpa-component-installer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "drpa-component-installer"
+path = "src/main.rs"
+
+[dependencies]
+drpa-install = { path = "../drpa-install" }
+semver = "1"
+
+[target.'cfg(windows)'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow", "wayland"] }
+egui-winit = { version = "0.31.1", default-features = false, features = ["x11"] }
+glutin-winit = { version = "0.5.0", default-features = false, features = ["egl", "x11"] }
+winit = { version = "0.30.7", default-features = false, features = ["rwh_06", "x11"] }
+
+[dev-dependencies]
+tempfile = "3"

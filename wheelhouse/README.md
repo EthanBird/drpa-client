@@ -1,61 +1,15 @@
-# DRPA Wheelhouse
+# DRPA Wheelhouse（旧版兼容）
 
-This directory stores offline wheels for common DRPA script package dependencies.
+本目录只服务旧 PySide6 / RPAZ v1 兼容流程，不是 DRPA Next Windows Release 的依赖来源，也不保证内容与当前 sealed runtime 同步。
 
-Target Python version:
+DRPA Next 使用 [`offline/README.md`](../offline/README.md) 描述的 sealed runtime：CPython、uv、完整 Windows wheel closure、浏览器和清单作为同一个可验证资产构建。新增依赖应修改 `offline/requirements/runtime.txt` 并通过原生 Windows air-gap workflow，不能只向本目录复制 wheel。
 
-```text
-Python 3.11 / CPython cp311
-```
-
-Primary packages included:
-
-- DrissionPage
-- requests
-- pandas
-- openpyxl
-- xlwt
-
-The wheelhouse also includes transitive dependencies required by those packages.
-Windows-specific conditional dependencies are included as well, for example:
-
-- colorama, required by click on Windows
-
-Platform directories:
+旧版目标为 CPython 3.11，历史目录包括：
 
 ```text
-wheelhouse/linux-x86_64/
+wheelhouse/common/
 wheelhouse/windows-amd64/
+wheelhouse/linux-x86_64/
 ```
 
-Runtime behavior:
-
-- Dependency installation is offline-only. DRPA Client always runs pip with `--no-index`.
-- During dependency installation, DRPA Client adds the matching platform wheelhouse directory to pip `--find-links`.
-- Package-local wheels are still supported through `manifest.yaml -> dependencies.local`.
-- Wheel priority is global install-directory wheelhouse first, package-local wheels second.
-- DRPA Client generates a constraints file from this global wheelhouse so global wheel versions win over same-name wheels embedded in a `.rpaz`.
-
-Regenerate command:
-
-```bash
-mkdir -p wheelhouse/linux-x86_64 wheelhouse/windows-amd64
-
-python3 -m pip download \
-  --dest wheelhouse/linux-x86_64 \
-  --only-binary=:all: \
-  --platform manylinux2014_x86_64 \
-  --implementation cp \
-  --python-version 311 \
-  --abi cp311 \
-  DrissionPage requests pandas openpyxl xlwt
-
-python3 -m pip download \
-  --dest wheelhouse/windows-amd64 \
-  --only-binary=:all: \
-  --platform win_amd64 \
-  --implementation cp \
-  --python-version 311 \
-  --abi cp311 \
-  DrissionPage requests pandas openpyxl xlwt
-```
+其中 Linux 目录不表示 DRPA Next 当前发布 Linux 安装包。除非修复明确的 v1 兼容问题，否则不要扩展本目录。

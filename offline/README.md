@@ -1,0 +1,116 @@
+# DRPA sealed 离线运行时
+
+sealed runtime 是平台专用、不可变、可验证的构建资产，不是源码目录、pip 缓存或可跨机器复制的 venv。Windows workflow 发布 `windows-x86_64` Runtime/桌面资产；Linux 专用 workflow 在 Ubuntu 22.04 原生构建 `linux-x86_64` runtime 并内嵌到 AppImage，目前只上传 Actions artifact，正式发布验收见 [`../docs/LINUX_DEVELOPMENT.md`](../docs/LINUX_DEVELOPMENT.md)。
+
+## 运行时合同
+
+```text
+drpa-runtime-<version>-<platform>/
+├── python/                 目标平台可重定位 CPython 3.11.9
+├── tools/uv[.exe]          固定版本的离线安装器
+├── wheelhouse/             目标平台 cp311 完整 wheel closure
+├── browser/                固定 Chrome for Testing
+├── rpa/                    RPA for Python 的平台 TagUI 离线闭包与资产锁
+├── locks/runtime.txt       直接与传递依赖精确版本
+├── wheelhouse-lock.json    实际 wheel 文件、大小、平台与 SHA-256
+├── bootstrap_runtime.py    幂等离线环境初始化
+├── prepare-runtime.ps1
+├── manifest.json           平台、精确可执行路径、大小和 SHA-256
+└── SHA256SUMS
+```
+
+归档不包含已经创建的 venv。应用在最终安装位置使用 bundle 中的基础 Python、uv 和 wheelhouse 创建 `data/runtime-environment/environment`，以避免绝对路径和不可重定位环境。
+
+`manifest.json` 中的 `pythonExecutable` 与 `browserExecutable` 是唯一定位来源。禁止递归搜索第一个 `python.exe`；这种做法会误选 `Lib\\venv\\scripts\\nt\\python.exe` 并触发 `No pyvenv.cfg file`。
+
+## 依赖政策
+
+版本来源：
+
+- Python、uv、Chrome 与平台：`runtime-spec.json`
+- Python 完整依赖集合：`requirements/runtime.txt`
+- DRPA adapter：`../runtime/python/`
+
+规则：
+
+- 每一项直接和传递依赖都必须使用精确版本。
+- 禁止 VCS URL、直接下载 URL、editable、额外 index 和未固定版本。
+- 每个平台 runtime 只接受与 CPython 3.11、目标 OS 和目标架构匹配的 wheel；不同平台的 wheelhouse 不得混用。上游只发布 sdist 的 `rpa==1.50.0` 与 `tagui==1.50.0` 是显式例外：构建器按 `rpa-for-python.json` 校验源包 SHA-256、应用离线路径补丁并生成可审计的纯 Python wheel，`wheelhouse-lock.json.sourceBuilds` 记录源与产物。
+- 构建器必须生成 `wheelhouse-lock.json`；最终桌面布局必须复核其中的每个文件大小和 SHA-256，并拒绝其他 OS 或 musl wheel 混入 glibc Linux 包。
+- 离线机器永远不通过 pip 联网补依赖。
+- 基础环境是经过策划的能力集合，不等于整个 PyPI；RPA for Python 已作为默认自动化能力进入 baseline，其他 OCR 模型、额外桌面驱动和本地 AI 等大型能力仍应拆成 runtime pack。
+
+## RPA for Python 离线闭包
+
+`rpa-for-python.json` 固定四类输入：PyPI 的 `rpa`/`tagui` sdist、TagUI 平台归档、Tump 的 immutable commit、稳定 delta 文件与 Windows vcredist。构建器执行：
+
+1. 对 sdist 校验 SHA-256，不调用未锁定的在线构建后端，直接生成 `py3-none-any` wheel。
+2. 给 `tagui.py` 注入 `DRPA_RPA_HOME` 与 `DRPA_RPA_BUNDLE` 两个 Host 路径；普通项目仍使用官方 `import rpa as r` API。
+3. 解压目标平台 TagUI，覆盖固定 commit 的 delta，写入 `rpa_python_1.50.0` 标记，再生成 `rpa/rpa_python.zip`。
+4. 桌面 Host 将工作区级可写目录作为 RPA Home，将只读 runtime 资产作为 Bundle。首次 `r.init()` 从本地 ZIP 部署，不访问网络；之后复用工作区安装。
+5. `asset-lock.json`、`wheelhouse-lock.json`、runtime `manifest.json` 与 `SHA256SUMS` 共同记录源资产、补丁 wheel、最终离线包和逐文件散列。
+
+TagUI 本身与 DRPA 的 DrissionPage Chrome 是并列运行后端。Windows 归档携带 TagUI 官方 PHP 与 vcredist；Linux 的 TagUI shell 仍需要可用的 PHP CLI，UOS 发布验证需把该系统能力作为专门门禁。视觉自动化还依赖 Java、SikuliX、OpenCV/Tesseract，不在默认 smoke 中冒充已验证能力。
+
+本地政策检查：
+
+```bash
+python tools/offline/validate_requirements.py offline/requirements/runtime.txt
+python -m unittest discover -s tools/offline/tests -v
+python -m unittest discover -s tools/linux/tests -v
+python -m compileall -q tools/offline tools/linux offline/bootstrap runtime/python/src
+```
+
+## GitHub Actions 完整性证明
+
+`.github/workflows/offline-runtime.yml`、Windows desktop release 和 `.github/workflows/linux-desktop.yml` 会在各自原生 runner 上：
+
+1. 下载当前目标平台的 CPython 3.11 wheels；对 RPA for Python 的两个锁定 sdist执行受控纯 Python wheel 构建。
+2. 构建 DRPA Python adapter wheel。
+3. 安装受控 CPython，复制固定 uv，下载固定 Chrome。
+4. 使用空 uv cache、`UV_OFFLINE=1`、`--offline --no-index --find-links` 创建全新环境。
+5. 运行依赖一致性检查。
+6. 用 DrissionPage 启动内置 Chrome 并访问本地 HTML。
+7. 导入 runtime、浏览器、数据、Excel、`rpa`、`tagui`、Python Flow、`ipykernel`、`jupyter_client`、`zmq` 和 `nbformat`，并确认 Host 管理的 RPA 路径生效。
+8. 启动真实 Jupyter/ZMQ Kernel，连续执行两个单元并验证状态和输出。
+9. 生成逐文件散列、wheelhouse lock、归档并上传 Actions artifact；Windows runtime workflow另行发布 prerelease。
+10. desktop build 再在最终安装/AppImage 解包结构中执行一次 bootstrap 和关键 import；Linux 还检查 Python、uv 与 Chrome 的可执行位。
+
+任何缺 wheel、ABI 错误、路径错误、浏览器失败或锁文件不合法都会让 job 在发布前失败。
+
+## 缺依赖处理 Runbook
+
+离线机器出现 `ModuleNotFoundError`、DLL load failure 或缺少数据文件时，不要在用户机器上临时安装。按以下流程处理：
+
+1. 保存完整错误日志、RPAZ manifest、runtime bundle version、操作系统版本和架构。
+2. 判断依赖属于通用基础能力还是特定脚本包：
+   - 多数包都会使用：加入 sealed baseline。
+   - 只服务一个 RPAZ：由包携带锁定的目标平台 wheels，或建立独立 runtime pack。
+3. 在 `requirements/runtime.txt` 增加精确版本，并补齐所有传递依赖；若是 DLL/模型/浏览器数据，也必须进入清单。
+4. 更新 import/行为 smoke test，确保不是“安装成功但运行失败”。
+5. 运行本地政策检查并提交代码。
+6. 触发对应目标平台的原生 sealed runtime workflow；不得用其他平台下载的 wheel 冒充目标平台结果。
+7. 确认 air-gap 初始化、关键 import、浏览器和 Jupyter smoke 全部通过。
+8. 将新的完整 runtime、SHA-256 和依赖变更说明上传 GitHub Release，并让 desktop release 引用该版本。
+9. 在一台真正断网、无系统 Python 的目标平台测试机安装验证。
+10. 在 `CHANGELOG.md` 记录新增依赖、体积影响、兼容性和回滚方式。
+
+缺失依赖必须进入 GitHub 中可复现、可校验的 Release 资产；禁止只把文件发给单台机器而不更新锁、清单和构建流程。
+
+## 发布与校验
+
+当前发行资产统一从 <https://github.com/EthanBird/drpa-client/releases> 获取，并按 runtime tag、平台和版本匹配；不要复用文档中曾出现的旧固定 tag。
+
+传入离线网络前后均应验证配套 `.sha256`。Linux 示例：
+
+```bash
+sha256sum -c drpa-runtime-*.tar.gz.sha256
+```
+
+PowerShell 示例：
+
+```powershell
+Get-FileHash .\drpa-runtime-*.zip -Algorithm SHA256
+```
+
+当前资产尚未建立代码签名信任链，SHA-256 只能证明文件与发布记录一致。后续供应链工作需要在散列之外增加签名清单、可信公钥轮换和撤销机制。

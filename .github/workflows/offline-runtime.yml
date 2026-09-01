@@ -1,0 +1,74 @@
+name: Sealed offline runtimes
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/drpa-next-platform
+    paths:
+      - ".github/workflows/offline-runtime.yml"
+      - "offline/**"
+      - "runtime/python/**"
+      - "tools/offline/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sealed-offline-runtimes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release(windows):')
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x86_64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+          cache: pip
+      - name: Install pinned bundle tooling
+        run: python -m pip install "uv==0.11.28"
+      - name: Validate dependency policy
+        run: python tools/offline/validate_requirements.py offline/requirements/runtime.txt
+      - name: Build and air-gap test bundle
+        run: python tools/offline/build_runtime_bundle.py --platform "${{ matrix.platform }}" --work-dir "${{ runner.temp }}/drpa-offline"
+      - name: Upload sealed bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: drpa-runtime-${{ matrix.platform }}
+          path: ${{ runner.temp }}/drpa-offline/out/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub prerelease
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish immutable runtime assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="offline-runtime-v3.0.1-dev-${GITHUB_RUN_NUMBER}"
+          mapfile -t assets < <(find artifacts -type f | sort)
+          test "${#assets[@]}" -eq 2
+          gh release create "$tag" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "DRPA sealed offline runtimes · run ${GITHUB_RUN_NUMBER}" \
+            --notes "Windows x64 air-gap-tested Python 3.11.9 runtime bundle with Jupyter Kernel dependencies, SHA-256 checksum and an internal per-file manifest."

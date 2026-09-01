@@ -1,1176 +1,289 @@
-# DRPA Client 开发文档
+# DRPA Next 开发与交接手册
 
-本文档面向 DRPA Client 的开发者，说明当前项目的产品目标、代码结构、脚本包协议、运行时机制、GUI 设计、跨平台注意事项和后续开发路线。
+本文档描述 `codex/drpa-next-platform` 分支和 `3.0.0` Windows 模块化桌面基线的当前事实，供后续维护者定位代码、复现发布和继续扩展。旧 PySide6 代码与文档只是迁移参考，不能作为 DRPA Next 的实现说明。Linux 接手者还应阅读 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。
 
-DRPA Client 当前定位为一款轻量级 Python RPA 桌面客户端：
+## 1. 产品状态
 
-- 用户安装一次桌面 GUI。
-- GUI 内置或管理 Python 运行环境。
-- 开发者分发 `.rpaz` 脚本包。
-- 用户在 GUI 中导入脚本包、填写参数、点击运行。
-- 脚本可以使用 DrissionPage 完成 Web 自动化，也可以继续扩展其他 Python 自动化能力。
+当前正式交付包括 **Windows x64 Setup**，以及 **Linux x86_64 AppImage、现代 deb 与 UOS 20 专用 deb**。以下能力是两端共享的离线桌面基座，安装和更新策略按平台分离：
 
-项目不是一开始就做完整低代码 RPA 平台，而是先实现一个稳定、可扩展、易安装的 Python RPA Worker。
+- 前端：React 19、TypeScript、Vite、Monaco。
+- 桌面壳：Tauri 2。
+- 权限与控制面：Rust Host。
+- 自动化运行时：封装的 CPython 3.11.9 和 Python adapter。
+- Notebook：真实 IPython Kernel、Jupyter Client 与 ZMQ。
+- 浏览器：Chrome for Testing；Windows UI WebView 使用 Fixed Version WebView2，Linux 发行包携带私有 WebKitGTK 4.1 闭包。
+- 安装：无管理员权限、无应用注册表写入的 NSIS 引导安装器。
+- 升级：重新运行新版 Windows 全量离线 Setup；用户 `data/` 保持不变。
 
-## 1. 当前能力概览
+Linux x86_64 已完成第一轮发行适配：Rust core/Tauri Host、XDG 数据目录、`xdg-open`、平台能力协议、sealed runtime、AppImage/deb 内嵌资源定位和 Linux 进程组取消均有实现；`.github/workflows/linux-desktop.yml` 在 Ubuntu 22.04 构建 runtime-complete AppImage，再由已验证 AppDir 生成 `/opt/drpa-next` 现代 deb 和 `/opt/drpa-next-uos20` UOS 兼容 deb。现代包门禁会卸载 Runner 的系统 WebKitGTK；UOS 包还会内置固定 glibc/C++ 运行层并在 Debian 10/glibc 2.28 容器中验证 Python/Jupyter 原生扩展、Chrome 和 X11。普通 push 只上传 Actions artifact；显式发布会把三种包、SHA-256、两个 deb manifest 和 wheelhouse lock 写入 `desktop-v1.0.0`。Ubuntu 24.04、真实 UOS 20、Wayland 与人工 GUI 验收仍是持续回归项。Windows Release workflow 保持独立。
 
-首版已具备以下基础能力：
-
-| 能力 | 状态 | 说明 |
-| --- | --- | --- |
-| PySide6 GUI | 已实现 | 首页、脚本包页、运行页、设置页和暗色主题 |
-| 脚本包导入 | 已实现 | 支持 `.rpaz` 和 `.zip` |
-| manifest 解析 | 已实现 | 使用 `manifest.yaml` 描述包信息、参数和依赖 |
-| 项目统一 venv | 已实现 | 所有脚本包共享项目 `.venv`，用户无感创建和复用 |
-| 离线 wheels | 已预留并实现基础安装 | 支持 `wheels/common`、`wheels/windows`、`wheels/linux` |
-| 子进程运行 | 已实现 | GUI 不直接 import 用户脚本 |
-| JSON Lines 事件 | 已实现 | 日志、进度、产物、状态通过 stdout 传回 GUI |
-| SDK Context | 已实现 | 提供 `ctx.log`、`ctx.params`、`ctx.progress()`、`ctx.output_file()`、`ctx.browser()` |
-| DrissionPage 集成 | 已预留并实现入口 | `ctx.browser()` 创建 DrissionPage `ChromiumPage` |
-| 示例脚本包 | 已实现 | `examples/hello_web_bot` |
-| SQLite 运行历史 | 已实现 | `RunStore` 持久化任务状态、日志和输出路径 |
-| 包管理操作 | 已实现 | 支持卸载脚本包和重建脚本包 venv |
-| 进程树停止 | 已实现 | 使用 psutil 终止任务进程及其子进程 |
-| Monaco 代码编辑 | 已实现入口 | 基于 QtWebEngine 承载 Monaco Editor，参考 VS Code |
-| 浏览器录制器 | 规划中 | 详见 `docs/BROWSER_RECORDER_DESIGN.md` |
-
-## 2. 项目结构
+## 2. 仓库结构与所有权
 
 ```text
-.
-├── README.md
-├── docs/
-│   └── DEVELOPMENT.md
+apps/desktop/
+  src/                       React 页面、组件、状态和 typed gateway
+  src-tauri/src/lib.rs       Tauri commands、运行时定位、Studio/Jupyter 生命周期
+  src-tauri/src/bin/         历史 Windows 更新器实现；当前发行不打包、不暴露入口
+crates/
+  drpa-protocol/             DTO、运行事件和协议版本
+  drpa-package/              schema v2、归档与路径安全
+  drpa-host/                 包安装、运行准备、状态与历史
+runtime/python/
+  src/drpa_runner/           worker、Context、事件和 Jupyter bridge
+offline/
+  runtime-spec.json          Python/uv/Chrome 与平台声明
+  requirements/runtime.txt  完整精确依赖集合
+  bootstrap/                 离线环境初始化
+tools/offline/               sealed runtime 构建和依赖政策检查
+tools/linux/                 现代/UOS deb 构建、私有 ELF 运行层、Linux 布局与发布验证
+tools/windows/               Windows 安装库存生成和安装器策略测试
+installer/windows/           NSIS 安装脚本
+examples/                    示例项目与已构建 RPAZ
+.github/workflows/           CI、sealed runtime 与 Windows Release
+src/drpa_client/            旧 PySide6 兼容参考；不接收新功能
+```
+
+### 2.1 前端边界
+
+`apps/desktop/src/infra/gateway.ts` 是 React 与 Host 的唯一业务入口。新增功能时：
+
+1. 在领域模型中定义返回值。
+2. 扩展 `DesktopGateway`。
+3. 同时实现 `tauriGateway` 和浏览器开发用 `mockGateway`。
+4. 在 Rust command 中重新校验参数。
+5. 添加组件测试和 Host 测试。
+
+组件不能直接访问 SQLite、启动进程或拼接安装区路径。浏览器 mock 只用于 UI 开发，不是集成测试替代品。
+
+### 2.2 Host 边界
+
+Rust Host 负责：
+
+- 校验 RPAZ 和 manifest。
+- 控制安装、卸载和工作副本。
+- 定位且验证 sealed runtime 清单。
+- 生成运行配置并监督 worker 生命周期。
+- 保存包、运行、日志和产物元数据。
+- 保护安装旁 `data/`，并提供工作区导入导出。
+- 限制所有来自 WebView 的路径和参数。
+
+Python adapter 负责执行用户代码和生成结构化事件。不能把安全策略只写在 Python 或 React 中。
+
+## 3. 数据与安装布局
+
+Windows 正式安装采用应用旁数据模型：
+
+```text
+<install>/
+├── DRPA Next.exe
+├── runtime/                         只读 sealed runtime 源
+├── webview2/                        Fixed Version WebView2
 ├── examples/
-│   └── hello_web_bot/
-│       ├── README.md
-│       ├── main.py
-│       ├── manifest.yaml
-│       └── wheels/
-│           └── common/
-├── pyproject.toml
-├── src/
-│   └── drpa_client/
-│       ├── app/
-│       │   ├── main.py
-│       │   └── ui/
-│       │       ├── main_window.py
-│       │       └── themes/
-│       │           └── dark.qss
-│       ├── core/
-│       │   ├── database.py
-│       │   ├── manifest.py
-│       │   ├── models.py
-│       │   ├── package_manager.py
-│       │   ├── paths.py
-│       │   ├── runtime_manager.py
-│       │   └── task_runner.py
-│       ├── runtime/
-│       │   └── bootstrap.py
-│       ├── resources/
-│       │   └── editor/
-│       │       └── monaco.html
-│       └── sdk/
-│           └── context.py
-├── tools/
-│   └── build_example_packages.py
-└── tests/
-    └── test_manifest.py
+└── data/
+    ├── packages/                    已安装 RPAZ 版本
+    ├── projects/                    Studio 工作副本
+    ├── build/                       Studio 导出包
+    ├── runs/                        运行日志与产物
+    ├── system/drpa.sqlite3          Host 运行、事件与产物索引
+    ├── databases/workspace.sqlite3 RPAZ `ctx.sql` 与数据工作台
+    ├── runtime-environment/
+    │   └── environment/             最终位置创建的 Python 环境
+    └── updates/                     旧版更新会话兼容数据（新发行不再写入）
 ```
 
-### 2.1 `app`
+关键约束：
 
-`app` 层负责桌面应用入口和 PySide6 UI。
+- 不把业务数据默认放到 `%APPDATA%`、`%LOCALAPPDATA%` 或用户系统盘。
+- 不把预先创建的 venv 打入安装包。它包含不可移植的绝对路径，必须在最终安装位置用 `bootstrap_runtime.py` 离线创建。生成环境的 marker 分别记录 Python/requirements 与轻量 adapter wheel；仅 adapter 变化时原位重装 adapter，不重建完整依赖环境。
+- `data/` 永远不进入安装文件库存；修复运行时只重建 `data/runtime-environment/`。
+- 已安装包不可原地编辑。“在工作室打开”会复制到 `data/projects/`。
+- 用户移动整个安装目录后，应从新位置启动并执行运行环境验证；不要只移动 `runtime/`。
 
-当前入口：
+Linux 默认使用 `app.path().app_local_data_dir()/workspace`，由 Tauri 按 XDG 规则解析；开发测试应通过 `DRPA_DATA_DIR` 指向仓库内隔离目录。Linux 的只读应用布局、runtime 资源位置和 AppImage/deb 安装合同见 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)，不要照搬 Windows 的应用旁 `data/`。
 
-```text
-src/drpa_client/app/main.py
-```
+## 4. 离线运行时
 
-主窗口：
+`offline/runtime-spec.json` 固定 Python、uv、Chrome 和目标平台，当前声明 `windows-x86_64`、`linux-x86_64` 与两个 macOS 架构。`offline/requirements/runtime.txt` 必须包含直接与传递依赖的精确版本，不允许 VCS URL、editable、索引覆盖或未固定版本。构建器为每个平台生成 `wheelhouse-lock.json`，记录实际 wheel 文件、大小与 SHA-256；Linux 最终布局再由 `tools/linux/verify_runtime_layout.py` 检查 ABI 污染、散列和可执行位。任何平台都必须在原生 runner 完成 air-gap 证明后才能发布。
 
-```text
-src/drpa_client/app/ui/main_window.py
-```
+sealed runtime 的 `manifest.json` 是机器可验证合同，至少包含：
 
-主题：
+- bundle/schema/platform/version；
+- 精确的 `pythonExecutable` 和 `browserExecutable` 相对路径；
+- 每个文件的大小与 SHA-256。
 
-```text
-src/drpa_client/app/ui/themes/dark.qss
-```
+曾经的 `No pyvenv.cfg file` 根因是递归搜索命中了 CPython 自带的 venv 模板启动器。禁止重新引入“找到第一个 `python.exe`”的逻辑；只允许读取并验证 manifest 中的精确路径。
 
-设计原则：
+依赖增加、缺包诊断与重新发布流程见 [`../offline/README.md`](../offline/README.md)。
 
-- GUI 只负责展示和交互。
-- 不在窗口类中写复杂业务逻辑。
-- 脚本安装、运行、依赖处理等逻辑放在 `core` 层。
-- 长耗时操作必须放到线程或子进程，避免卡住主 UI。
+## 5. RPAZ 与运行协议
 
-### 2.2 `core`
-
-`core` 是桌面客户端的业务核心。
-
-| 文件 | 职责 |
-| --- | --- |
-| `models.py` | 共享数据模型，例如 `PackageManifest`、`InstalledPackage`、`TaskEvent` |
-| `database.py` | SQLite 运行历史存储，例如 `RunStore` |
-| `manifest.py` | 读取和校验 `manifest.yaml` |
-| `package_manager.py` | 安装、列出、查找、卸载脚本包，重建包环境 |
-| `runtime_manager.py` | 创建 venv、安装依赖、处理平台化 wheels |
-| `task_runner.py` | 启动用户脚本子进程，接收结构化事件，更新运行历史 |
-| `task_profiles.py` | 保存任务配置文件，支持多任务管理 |
-| `paths.py` | 管理项目目录下 `.drpa-data` 和 `.venv` |
-| `settings.py` | 保存高级功能开关和主题设置 |
-
-后续浏览器录制器建议新增：
-
-| 模块 | 职责 |
-| --- | --- |
-| `core/recorder/session.py` | 启动和管理 DrissionPage 录制会话 |
-| `core/recorder/events.py` | 定义录制事件模型和 schema |
-| `core/recorder/generator.py` | 将录制文件生成 `.rpaz` 草稿包 |
-| `app/ui/pages/recorder.py` | 录制器 GUI 页面 |
-
-完整规范见：
-
-```text
-docs/BROWSER_RECORDER_DESIGN.md
-```
-
-### 2.3 `runtime`
-
-`runtime` 目录包含用户脚本运行时辅助代码。
-
-当前核心文件：
-
-```text
-src/drpa_client/runtime/bootstrap.py
-```
-
-它在子进程中执行，职责是：
-
-1. 读取 GUI 生成的任务配置 JSON。
-2. 校验入口脚本路径。
-3. 加载用户脚本。
-4. 构造 `Context`。
-5. 调用用户脚本的 `main(ctx)`。
-6. 捕获异常并输出结构化错误事件。
-
-### 2.4 `sdk`
-
-`sdk` 是用户脚本可以依赖的轻量 API。
-
-当前核心类：
-
-```python
-from drpa_client.sdk import Context
-```
-
-用户脚本入口：
-
-```python
-def main(ctx):
-    ctx.log.info("任务开始")
-```
-
-SDK 的目标是让业务脚本不需要知道 GUI、数据库、子进程协议等内部实现。
-
-### 2.5 `resources`
-
-`resources` 保存应用内置资源。
-
-示例脚本包源码和 `.rpaz` 位于 `examples/`。重新构建示例包：
-
-```bash
-python3 tools/build_example_packages.py
-```
-
-代码编辑器资源：
-
-```text
-src/drpa_client/resources/editor/monaco.html
-```
-
-该页面使用 Monaco Editor CDN 资源，产品化安装包后续应考虑内置 Monaco 静态文件以支持离线编辑。
-
-## 2.6 AI Skills
-
-仓库包含给 AI 开发使用的 skill：
-
-```text
-.cursor/skills/build-rpaz-package/SKILL.md
-```
-
-该 skill 明确使用 **Python 3.11.9** 构建和验证 `.rpaz` 脚本包，并定义 manifest、入口函数、构建命令和验证清单。
-
-## 3. 脚本包协议
-
-脚本包使用 `.rpaz` 后缀，本质是 zip 压缩包。
-
-推荐结构：
-
-```text
-my_bot.rpaz
-├── manifest.yaml
-├── main.py
-├── requirements.txt
-├── wheels/
-│   ├── common/
-│   ├── windows/
-│   └── linux/
-├── assets/
-└── README.md
-```
-
-### 3.1 `manifest.yaml`
-
-`manifest.yaml` 是脚本包的元数据文件。
-
-完整示例：
-
-```yaml
-id: invoice_downloader
-name: 发票下载机器人
-version: 1.0.0
-entry: main.py
-description: 自动登录业务系统并下载发票
-author: example-team
-
-runtime:
-  python: ">=3.11,<3.13"
-  isolation: venv
-
-dependencies:
-  strategy: offline-first
-  requirements: requirements.txt
-  pip:
-    - DrissionPage
-    - openpyxl
-  local:
-    common:
-      - wheels/common/*.whl
-    windows:
-      - wheels/windows/*.whl
-    linux:
-      - wheels/linux/*.whl
-
-params:
-  - name: username
-    label: 用户名
-    type: string
-    required: true
-    description: 业务系统登录账号
-
-  - name: password
-    label: 密码
-    type: password
-    required: true
-
-  - name: headless
-    label: 无头浏览器
-    type: boolean
-    default: false
-```
-
-### 3.2 必填字段
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | string | 包唯一标识，建议使用小写字母、数字和下划线 |
-| `name` | string | GUI 展示名称 |
-| `version` | string | 包版本 |
-| `entry` | string | 入口脚本路径，相对于包根目录 |
-
-### 3.3 `runtime`
-
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `python` | `>=3.11` | Python 版本约束，使用 PEP 440 specifier |
-| `isolation` | `venv` | 保留兼容字段；当前统一使用项目 `.venv` |
-
-当前实现统一使用项目根目录 `.venv`。脚本包安装时把依赖安装进这个项目 venv，运行时也始终使用该 venv。
-
-### 3.4 `dependencies`
-
-| 字段 | 说明 |
-| --- | --- |
-| `strategy` | 依赖安装策略 |
-| `requirements` | requirements 文件路径 |
-| `pip` | 需要通过 pip 安装的依赖列表 |
-| `local.common` | 所有平台都可用的本地 wheel 匹配规则 |
-| `local.windows` | Windows 平台专用 wheel 匹配规则 |
-| `local.linux` | Linux 平台专用 wheel 匹配规则 |
-
-`strategy` 当前支持：
-
-| 值 | 行为 |
-| --- | --- |
-| `offline-first` | 优先使用包内 wheels，同时允许从默认 pip index 下载缺失依赖 |
-| `offline-only` | 使用 `--no-index`，只从包内 wheels 安装 |
-| `online` | 允许从默认 pip index 安装，仍可传入 `--find-links` |
-
-注意：当前代码中 `online` 和 `offline-first` 都不会附加 `--no-index`，差异主要是语义预留。后续可以进一步扩展为更严格的安装策略。
-
-### 3.5 参数类型
-
-当前模型支持以下参数类型：
-
-| 类型 | GUI 控件 |
-| --- | --- |
-| `string` | `QLineEdit` |
-| `password` | 密码模式 `QLineEdit` |
-| `boolean` | `QCheckBox` |
-| `integer` | 当前暂用 `QLineEdit`，后续可改为 `QSpinBox` |
-| `number` | 当前暂用 `QLineEdit`，后续可改为 `QDoubleSpinBox` |
-| `date` | 当前暂用 `QLineEdit`，后续可改为 `QDateEdit` |
-| `file` | 当前暂用 `QLineEdit`，后续可加文件选择按钮 |
-| `directory` | 当前暂用 `QLineEdit`，后续可加目录选择按钮 |
-
-后续开发应优先完善这些参数类型的专用控件和校验逻辑。
-
-## 4. 脚本包安装流程
-
-入口：
-
-```python
-PackageManager.install_archive(path)
-```
-
-也支持单个 Python 文件直接导入：
-
-```python
-PackageManager.install_python_file(path)
-```
-
-流程：
-
-```text
-选择 .rpaz/.zip
-  -> 解压到临时 staging 目录
-  -> 防 Zip Slip 安全校验
-  -> 读取 manifest.yaml
-  -> 复制到 data/packages/<id>/<version>/package
-  -> 根据 runtime.isolation 创建 venv
-  -> 根据 dependencies 安装依赖
-  -> 写入 install.lock
-  -> GUI 刷新脚本包列表
-```
-
-### 4.1 安装目录
-
-数据目录固定在项目目录下：
-
-```text
-.drpa-data/
-```
-
-典型安装结构：
-
-```text
-data/
-├── packages/
-│   └── hello_web_bot/
-│       └── 0.1.0/
-│           ├── package/
-│           ├── venv/
-│           └── install.lock
-├── logs/
-├── outputs/
-└── cache/
-```
-
-### 4.2 安全解压
-
-`package_manager.py` 中的 `_safe_extract()` 会检查 zip 内每个成员的解压目标路径，防止如下恶意路径：
-
-```text
-../../evil.py
-/absolute/path/evil.py
-```
-
-后续可以继续增强：
-
-- 限制单包大小。
-- 限制文件数量。
-- 拒绝软链接。
-- 做 SHA256 校验。
-- 支持包签名。
-
-### 4.3 单文件导入
-
-单文件导入会把 `.py` 文件复制为 `main.py`，并生成一个最小 `manifest.yaml`：
-
-```yaml
-runtime:
-  python: ">=3.11"
-  isolation: venv
-params: []
-```
-
-该功能适合快速导入已有脚本，但脚本仍必须提供：
-
-```python
-def main(ctx):
-    ...
-```
-
-## 5. 依赖安装机制
-
-入口：
-
-```python
-RuntimeManager.ensure_environment(...)
-```
-
-### 5.1 venv 创建
-
-当前所有脚本包共享项目根目录 `.venv`。
-
-首次安装需要依赖的脚本包时会创建带 pip 的项目 `.venv`。如果先安装了无依赖脚本导致 `.venv` 不带 pip，后续安装有依赖脚本时会自动重建为带 pip 的项目 `.venv`。
-
-如果 Linux 系统缺少 `python3-venv/ensurepip`，需要在产品安装包或环境准备阶段解决。
-
-### 5.2 wheels 搜索
-
-依赖安装强制离线，不允许 pip 访问网络索引。所有 pip 安装都会附加：
-
-```bash
---no-index
-```
-
-wheel 查找顺序：
-
-1. 安装/运行目录下的全局 wheelhouse：
-   - `wheelhouse/common`
-   - `wheelhouse/linux-x86_64`
-   - `wheelhouse/windows-amd64`
-2. 脚本包内的本地 wheels：
-   - `wheels/common`
-   - `wheels/windows`
-   - `wheels/linux`
-
-然后转换为 pip 参数：
-
-```bash
-python -m pip install --no-index --find-links <global-dir> --find-links <package-dir> ...
-```
-
-RuntimeManager 会自动加入仓库级 wheelhouse：
-
-```text
-wheelhouse/linux-x86_64/
-wheelhouse/windows-amd64/
-```
-
-当前 wheelhouse 面向 Python 3.11 / cp311，包含：
-
-- DrissionPage
-- requests
-- pandas
-- openpyxl
-- 上述包的完整传递依赖
-
-全局 wheelhouse 会生成 `.drpa-wheelhouse-constraints.txt`，用于锁定全局 wheelhouse 中已有包的版本。这样即使 `.rpaz` 包内也带了同名 wheel，安装目录下的 wheel 仍然优先。
-
-### 5.3 后续建议
-
-依赖安装后续应增强：
-
-1. GUI 展示详细安装进度。
-2. 单独保存 pip 安装日志。
-3. 支持依赖缓存目录。
-4. 支持重建 venv。
-5. 支持每个脚本包锁定依赖版本。
-6. 支持脚本包安装前的依赖预检。
-7. 支持嵌入式 Python runtime，不依赖系统 Python。
-
-## 6. 任务运行机制
-
-入口：
-
-```python
-TaskRunner.start(package, params, on_event)
-```
+新包使用 `manifest.yaml` schema v2。最小开发流程和 Runtime Context API 见 [`RPAZ_DEVELOPMENT.md`](RPAZ_DEVELOPMENT.md)。
 
 运行链路：
 
 ```text
-GUI
-  -> TaskRunner
-    -> 生成临时任务配置 JSON
-    -> 选择 package venv 中的 python
-    -> 启动 runtime/bootstrap.py 子进程
-      -> 加载用户 main.py
-      -> 构造 ctx
-      -> 调用 main(ctx)
-      -> stdout 输出 JSON Lines
-    -> GUI 解析事件并刷新日志
+Workbench / Studio
+  → Tauri command
+  → Rust Host prepare_run / prepare_development_run
+  → sealed environment python -I
+  → drpa_runner worker
+  → JSONL RuntimeEvent
+  → Host state / run history / UI
 ```
 
-### 6.1 为什么用子进程
+Tauri 的同步 command 会直接占用桌面主线程。凡是涉及文件、SQLite、加解密、子进程、网络或运行时探测的业务入口，都必须声明为 `#[tauri::command(async)]`，并让 Tauri 调度到异步 worker；纯内存状态读取和窗口瞬时操作才保留同步入口。`tools/linux/tests/test_tauri_command_policy.py` 固化自动化、Local Dify、Agent、知识库、插件、凭据、工作区等模块的这一约束，新增 command 时必须同步纳入策略测试。
 
-不要在 GUI 主进程中直接 import 用户脚本，原因：
+兼容性规则：
 
-- 用户脚本异常不会拖垮 GUI。
-- 可以终止任务。
-- 可以隔离 stdout/stderr。
-- 后续可加入资源限制和超时控制。
-- 不同脚本包可以使用不同 venv。
+- 协议字段只增不删时，新增字段应提供默认值。
+- 破坏性协议变化必须递增协议/schema 版本并写迁移说明。
+- entrypoint、资产、wheel 和输出路径必须 containment-check。
+- worker stdout 是结构化通道，业务日志由 Context 转成事件，不应随意打印非协议数据。
+- 包不能在线调用 pip；额外依赖只能来自 sealed baseline 或经过锁定、校验的平台 wheel 集。
 
-### 6.2 任务配置 JSON
+## 6. Studio 与 Jupyter
 
-`TaskRunner` 会为每次运行生成临时 JSON：
+Studio 项目名称允许自然语言；项目 ID 与 package ID 由 Host 生成，用户无需输入包名格式。项目可直接运行，不需要先安装。
 
-```json
-{
-  "run_id": "20260708000000000000",
-  "package_id": "hello_web_bot",
-  "package_name": "Hello Web Bot",
-  "package_dir": ".../package",
-  "entry": "main.py",
-  "params": {
-    "username": "demo",
-    "headless": true
-  },
-  "output_dir": ".../outputs/hello_web_bot/<run_id>",
-  "log_file": ".../logs/hello_web_bot/<run_id>.log"
-}
-```
+代码编辑采用项目内多文档页签。`StudioPage` 为每个打开文件保存 `content/savedContent/loading/error`，切换文件不会丢弃未保存缓冲区；重命名和删除会同步页签路径或关闭受影响页签。快捷键为 `Ctrl/Cmd+S` 保存当前页签、`Ctrl/Cmd+Shift+S` 保存当前项目全部页签、`Ctrl/Cmd+W` 或 `Ctrl/Cmd+F4` 关闭、`Ctrl/Cmd+Tab` 切换。关闭脏页签必须经过应用内保存/放弃确认。Notebook 页签通过实际路径持久化，不能再硬编码 `notebook.ipynb`。
 
-### 6.3 JSON Lines 事件协议
-
-子进程通过 stdout 输出 JSON Lines。
-
-日志事件：
-
-```json
-{"type":"log","level":"info","message":"任务开始"}
-```
-
-进度事件：
-
-```json
-{"type":"progress","value":50,"message":"已打开页面"}
-```
-
-产物事件：
-
-```json
-{"type":"artifact","path":"/path/to/result.xlsx","label":"结果文件"}
-```
-
-状态事件：
-
-```json
-{"type":"status","value":"success","message":"任务执行完成"}
-```
-
-错误事件：
-
-```json
-{"type":"error","message":"错误信息","traceback":"..."}
-```
-
-结束事件由父进程 `TaskRunner` 追加：
-
-```json
-{"type":"finished","exit_code":0}
-```
-
-### 6.4 停止任务
-
-当前 `RunningTask.stop()` 使用：
-
-```python
-process.terminate()
-```
-
-后续应增强：
-
-- Windows 下清理子进程树。
-- Linux 下使用进程组。
-- 通知脚本优雅退出。
-- 增加强制 kill 超时。
-- 清理浏览器进程。
-
-## 7. 脚本 SDK
-
-脚本入口文件必须提供：
-
-```python
-def main(ctx):
-    ...
-```
-
-### 7.1 基础用法
-
-```python
-def main(ctx):
-    username = ctx.params["username"]
-    ctx.log.info("开始处理用户：%s", username)
-
-    ctx.progress(10, "初始化完成")
-
-    output = ctx.output_file("result.txt", "结果文件")
-    output.write_text("hello\n", encoding="utf-8")
-
-    ctx.progress(100, "完成")
-```
-
-### 7.2 DrissionPage 用法
-
-```python
-def main(ctx):
-    page = ctx.browser(headless=ctx.params.get("headless", False))
-    page.get("https://example.com")
-    ctx.log.info("当前页面：%s", page.title)
-```
-
-`ctx.browser()` 当前会：
-
-1. 创建 DrissionPage `ChromiumOptions`。
-2. 设置 headless。
-3. 将下载目录设置到本次任务输出目录下的 `downloads`。
-4. 返回 `ChromiumPage`。
-
-后续建议增加：
-
-- 浏览器路径配置。
-- 用户数据目录配置。
-- 代理配置。
-- 下载目录策略。
-- 多标签页管理。
-- 自动截图。
-- 出错时自动保存页面 HTML。
-
-### 7.3 日志
-
-`ctx.log` 是标准 Python `logging.Logger`。
-
-日志会同时写入：
-
-- 子进程 stdout 的 JSON Lines 事件。
-- 本地日志文件。
-
-## 8. GUI 开发说明
-
-当前 UI 使用 PySide6 + QSS。
-
-### 8.1 页面结构
-
-主窗口使用左侧导航 + 右侧 `QStackedWidget`：
+Notebook 的进程边界：
 
 ```text
-Sidebar
-  - 首页
-  - 脚本包
-  - 运行任务
-  - 设置
-
-Stack
-  - DashboardPage
-  - PackagesPage
-  - TasksPage
-  - SettingsPage
+React notebook UI
+  → execute_studio_cell
+  → Rust StudioKernelManager（每项目一个 bridge）
+  → Python drpa_runner.kernel
+  → jupyter_client KernelManager
+  → ipykernel + ZMQ shell/iopub/control
 ```
 
-任务运行页使用列表式布局，不使用下拉框：
+Rust 与 Python bridge 之间使用 JSONL；bridge 与 IPython Kernel 之间使用真实 Jupyter wire protocol。当前支持标准 `stream`、`execute_result`、`display_data`、`error` 和变量读取。
 
-```text
-TasksPage
-  ├── 左侧：PackageList
-  │   ├── 已安装脚本包列表
-  │   └── 刷新列表
-  └── 右侧：RunDetail
-      ├── 脚本包名称/描述/Runtime
-      ├── manifest 参数表
-      ├── manifest 运行表单
-      ├── 运行/停止按钮
-      └── 实时日志
-```
+Studio Python 补全复用同一个项目 Kernel：Monaco 调用 `complete_studio_python`，Host 发送 JSONL `complete` 请求，bridge 使用 Jupyter `complete_request` 获取 IPython/Jedi 结果。前端必须在 Monaco UTF-16 offset 与 Jupyter Unicode code-point offset 之间转换，避免中文和 emoji 之前的光标范围错位。
 
-这样做的原因：
+`execute_studio_cell` 是异步 Tauri command，所有运行时定位、Kernel 创建和阻塞式 JSONL 读取都进入 blocking worker。Notebook 打开后在后台调用 `prepare_studio_kernel` 预热；React 先提交“正在运行”状态并等待一帧再 invoke。UI 使用完整的 `minmax(0, 1fr)`/`min-height: 0` 容器链和内部滚动区，大量单元格不会扩张主工作区；单个 Monaco 编辑器最高 420 px，超出部分在编辑器内滚动。
 
-- 下拉框只适合少量简单选项，不适合管理脚本包。
-- 列表可以展示更多上下文，例如 ID、版本、最近运行状态。
-- 后续可扩展搜索、收藏、分组、图标和脚本包状态。
+这不是 VS Code Extension Host。新增 notebook 能力时优先遵守 nbformat 和 Jupyter 消息规范，不要复制依赖 `NotebookController`、VS Code 命令或扩展市场的代码。详细对照见 [`JUPYTER_INTEGRATION.md`](JUPYTER_INTEGRATION.md)。
 
-### 8.2 主题
+## 6.1 运行记录与数据工作台
 
-主题由 QSS 文件驱动。
+`crates/drpa-host/src/run_store.rs` 使用 `data/system/drpa.sqlite3` 持久化 run、事件和产物。Host 启动时把上次异常退出后仍为 running/queued 的记录标记为 interrupted；运行记录页通过 `get_run_detail` 读取完整概览、日志、参数、错误回溯和产物，而不是只依赖当前进程内存。
 
-当前主题文件：
+用户数据使用独立的 `data/databases/workspace.sqlite3`。RPAZ 通过 `ctx.sql` 访问，数据工作台通过 `apps/desktop/src-tauri/src/database.rs` 访问；React 始终经过 `DesktopGateway`。实现和扩展约定见 [`DATA_WORKBENCH.md`](DATA_WORKBENCH.md)。
 
-```text
-src/drpa_client/app/ui/themes/dark.qss
-src/drpa_client/app/ui/themes/light.qss
-```
+BI 主页定义保存在工作区 `dashboard/home.json`，由 `apps/desktop/src-tauri/src/dashboard.rs` 验证和持久化。前端 `DashboardDataRuntime` 把 DRPA 内置数据与数据工作台连接统一转换为表格式 Dataset，组件渲染器不直接访问数据库。完整分层与扩展约定见 [`architecture/BI_DASHBOARD.md`](architecture/BI_DASHBOARD.md)。
 
-当前视觉方向：
+## 7. Windows 全量升级
 
-- 深色背景。
-- 卡片式布局。
-- 蓝色主按钮。
-- 圆角输入框和表格。
-- 左侧导航高亮。
+Windows 不再发布或接受 `.drpa-update`。每个正式版本重新构建 sealed runtime、JCode、Fixed Version WebView2、Host 和 NSIS Setup；用户退出旧版后把新版安装到原目录。NSIS 跳过 `data/`，所以包、项目、运行历史、知识文档和生成环境不会被安装器覆盖。
 
-主题加载入口：
+`tools/windows/build_update_package.py --catalog-only` 目前只用于生成 `install-manifest.json` 安装审计库存。完整 stage 禁止符号链接、Windows Junction 和其他 reparse point；库存生成前会逐目录检查并失败，保证 `runtime/`、`webview2/` 和应用文件全部来自当前安装 stage。
 
-```text
-src/drpa_client/app/ui/theme.py
-```
+普通开发提交不发布 Windows 资产。只有手工运行 `.github/workflows/desktop-release.yml`，或提交信息以 `release(windows):` 开头时，才构建并发布 Setup、库存与示例 RPAZ 三个文件。
 
-应用启动时读取 `SettingsStore().load().theme`，并加载对应 QSS。设置页保存主题后会立即重新应用样式。
+## 8. AI Agent
 
-后续美化建议：
+Agent UI 位于基础设施导航。`run_agent_turn` 使用后台 Rust worker 调用 OpenAI-compatible Chat Completions；单次请求默认最多执行 64 轮 function tools，用户可在 Agent 页面或全局设置中配置 1–256 轮，Rust Host 会再次校验范围。三个知识库工具始终可用；绑定项目后再启用六个项目文件、manifest、构建和 30 秒 sealed Python 工具。API key 只保存在前端会话内。前端持久化最多 50 个本地对话及每个对话最近 120 条消息，支持逐会话项目绑定和配置面板折叠。实现与约束见 [`AI_AGENT_DESIGN.md`](AI_AGENT_DESIGN.md)。
 
-1. 引入图标。
-2. 增加更多主题变量。
-3. 支持跟随系统主题。
-4. 增加 Toast 通知。
-5. 增加空状态插画。
-6. 增加安装进度弹窗。
-7. 日志按 level 着色。
-8. 表格增加状态 Badge。
+这里的循环上限是单次用户请求内部的模型/工具循环，不是整段对话的消息数限制。进一步加入取消、时间/工具预算、持久 Jupyter Kernel 和 DrissionPage 调试会话的设计见 [`AI_AGENT_JUPYTER_BROWSER_DESIGN.md`](AI_AGENT_JUPYTER_BROWSER_DESIGN.md)。
 
-### 8.3 线程规则
+“知识文档”使用安装数据目录 `knowledge/` 作为 Markdown 工作区。Rust Host 提供列表、UTF-8 读写、内联创建、重命名、递归删除、导入和导出命令，并对相对路径、扩展名、符号链接和 8 MiB 单文档上限做校验；写入使用同目录临时文件和替换。`apps/desktop/src-tauri/knowledge_seed/` 通过 `include_str!` 编译进 Host，首次初始化为 `RPAZ 开发指南/`，marker 存在后不覆盖用户修改。前端 `DocsPage.tsx` 提供树、搜索、自动保存、预览/编辑/分栏、GFM 渲染、相对文档跳转和拖拽导入。
 
-PySide6 中不能在后台线程直接修改 UI。
+当前 Windows 升级统一使用从 Release 下载的全量 Setup。
 
-当前脚本包安装使用：
+## 9. 开发与验证
 
-```python
-PackageInstallWorker + QThread + Signal
-```
-
-任务运行事件使用：
-
-```python
-TaskEventBridge(QObject)
-```
-
-后续新增长耗时操作时，应保持：
-
-- 后台执行耗时逻辑。
-- 使用 Signal 回到主线程更新 UI。
-- 不在子线程中直接访问 QWidget。
-
-## 9. 跨平台开发注意事项
-
-目标平台：
-
-- Windows
-- Linux
-
-### 9.1 路径
-
-统一使用：
-
-```python
-from pathlib import Path
-```
-
-不要硬编码：
-
-```text
-C:\...
-/home/...
-```
-
-数据目录固定在项目根目录：
-
-```text
-.drpa-data/
-```
-
-### 9.2 Python 命令
-
-开发环境中可能只有 `python3`，没有 `python`。
-
-文档中面向用户可以写：
+### 9.1 前端
 
 ```bash
-python -m pip install -e .
+npm ci
+npm run typecheck
+npm run test
+npm run build
 ```
 
-CI 或 Linux 验证脚本建议使用：
+### 9.2 Rust
 
 ```bash
-python3 -m compileall src tests examples
+cargo fmt --all --check
+cargo clippy -p drpa-protocol -p drpa-package -p drpa-host --all-targets -- -D warnings
+cargo test -p drpa-protocol -p drpa-package -p drpa-host
+cargo check -p drpa-desktop
 ```
 
-### 9.3 venv 和 ensurepip
-
-Linux 最小环境可能缺少：
-
-```text
-python3-venv
-ensurepip
-```
-
-当前代码对“无依赖脚本包”做了兼容，但需要安装依赖的脚本包仍要求可用 pip。
-
-产品化安装包建议：
-
-- 自带 Python runtime。
-- 自带 pip。
-- 不依赖系统 Python。
-
-### 5.4 项目统一 venv
-
-DRPA Client 不再让用户选择 Python 环境。安装和运行都使用项目根目录下的：
-
-```text
-.venv/
-```
-
-这个 venv 由应用自动创建、自动复用。所有脚本包依赖集中安装，所有任务运行集中复用，减少重复 venv 和用户配置成本。
-
-如果检测到系统可用 `uv`，依赖安装会使用：
+### 9.3 Python 与离线政策
 
 ```bash
-uv pip install --python .venv/.../python --no-index --find-links ...
+python -m pip install -e "./runtime/python[test]"
+python -m pytest -q runtime/python/tests
+python tools/offline/validate_requirements.py offline/requirements/runtime.txt
+python -m unittest discover -s tools/offline/tests -v
+python -m compileall -q tools/offline offline/bootstrap runtime/python/src
 ```
 
-这样可以正确修改 uv 管理的项目 `.venv`，避免 `externally-managed-environment`。
-
-### 9.4 浏览器
-
-DrissionPage 控制 Chromium 内核浏览器。
-
-第一版建议：
-
-- 优先使用系统 Chrome / Edge / Chromium。
-- 在设置页提供浏览器路径检测和手动选择。
-- 不默认内置 Chromium，避免安装包过大和 Linux 依赖复杂。
-
-后续可选：
-
-- Windows 附带 portable Chromium。
-- Linux 提供浏览器检测诊断。
-- 让脚本包声明浏览器能力需求。
-
-## 10. 本地开发
-
-### 10.1 安装
-
-```bash
-python3 -m pip install -e .
-```
-
-如果需要开发工具：
-
-```bash
-python3 -m pip install -e ".[dev]"
-```
-
-### 10.2 启动 GUI
-
-```bash
-drpa-client
-```
-
-或：
-
-```bash
-python3 -m drpa_client.app.main
-```
-
-### 10.3 编译检查
-
-```bash
-python3 -m compileall src tests examples
-```
-
-### 10.4 单元测试
-
-如果安装了 pytest：
-
-```bash
-python3 -m pytest
-```
-
-当前环境未必预装 pytest，可以直接执行测试函数：
-
-```bash
-PYTHONPATH=src:. python3 - <<'PY'
-from tests.test_manifest import (
-    test_parse_manifest_requires_entry,
-    test_parse_manifest_with_offline_dependencies,
-)
-
-test_parse_manifest_with_offline_dependencies()
-test_parse_manifest_requires_entry()
-print("manifest-tests-ok")
-PY
-```
-
-### 10.5 端到端验证示例包
-
-```bash
-PYTHONPATH=src python3 - <<'PY'
-import json
-import os
-import shutil
-import time
-import zipfile
-from pathlib import Path
-
-shutil.rmtree("/tmp/drpa-client-test-data", ignore_errors=True)
-archive = Path("examples/hello_web_bot.rpaz")
-source = Path("examples/hello_web_bot")
-
-if archive.exists():
-    archive.unlink()
-
-with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
-    for path in source.rglob("*"):
-        if path.is_file():
-            zf.write(path, path.relative_to(source))
-
-from drpa_client.core.package_manager import PackageManager
-from drpa_client.core.task_runner import TaskRunner
-
-manager = PackageManager()
-package = manager.install_archive(archive, install_dependencies=True)
-
-events = []
-runner = TaskRunner()
-task = runner.start(package, {"username": "tester", "headless": True}, events.append)
-
-while task.process.poll() is None:
-    time.sleep(0.1)
-
-time.sleep(0.2)
-print(json.dumps([event.type for event in events], ensure_ascii=False))
-
-if not any(event.type == "finished" and event.payload.get("exit_code") == 0 for event in events):
-    raise SystemExit("task did not finish successfully")
-
-archive.unlink(missing_ok=True)
-PY
-```
-
-## 11. 打包设计建议
-
-当前项目还没有正式打包脚本。后续建议按以下方向推进。
-
-### 11.1 Windows
-
-推荐结构：
-
-```text
-DRPA Client/
-├── drpa-client.exe
-├── runtime/
-│   └── python/
-├── app/
-├── data/
-└── resources/
-```
-
-可选工具：
-
-- PyInstaller 或 Nuitka 打包 GUI。
-- Windows embeddable Python 作为脚本运行 runtime。
-- NSIS / Inno Setup 生成安装包。
-
-注意：
-
-- GUI exe 和脚本 runtime 最好分开。
-- 不建议把所有用户脚本都打进 GUI exe。
-- 需要保留可被 `TaskRunner` 调用的 Python 解释器。
-
-### 11.2 Linux
-
-推荐先支持：
-
-- tar.gz portable 包。
-- 后续再支持 AppImage。
-
-Linux 需要重点处理：
-
-- Python runtime。
-- Qt platform plugin。
-- 系统字体。
-- Chromium/Chrome 检测。
-- 沙盒和权限问题。
-
-## 12. 数据与持久化
-
-当前实现同时使用文件结构、`install.lock` 和 SQLite：
-
-- 脚本包安装状态：仍使用 `install.lock`，方便包目录可迁移和排障。
-- 任务运行历史：使用 `drpa-client.sqlite3`，方便按时间倒序查询和统计。
-
-当前已实现表：
-
-```text
-task_runs
-```
-
-后续建议继续扩展 SQLite，管理：
-
-```text
-packages
-package_versions
-tasks
-schedules
-settings
-credentials
-```
-
-当前 `task_runs` 表：
-
-```sql
-task_runs(
-  id text primary key,
-  package_id text not null,
-  package_name text not null,
-  package_version text not null,
-  status text not null,
-  params_json text,
-  output_dir text,
-  log_file text,
-  started_at text,
-  finished_at text,
-  exit_code integer
-);
-```
-
-## 13. 安全设计
-
-Python 脚本包本质上可以执行任意代码，因此安全边界要明确。
-
-当前已有：
-
-- 安全解压，防 Zip Slip。
-- 入口脚本路径越界检查。
-- 项目统一 venv。
-
-后续建议：
-
-1. 安装前显示包信息、作者、版本、依赖。
-2. 计算并展示 SHA256。
-3. 支持包签名。
-4. 支持可信发布者。
-5. 密码参数加密存储。
-6. 安装和运行审计日志。
-7. 可选禁用网络、文件系统等权限的声明机制。
-8. 企业版可接入私有脚本仓库。
-
-## 14. 近期开发路线
-
-建议按以下顺序推进：
-
-### 阶段 1：打磨当前 MVP
-
-- 完善参数控件。
-- 安装依赖时显示实时 pip 日志。
-- 任务运行日志按颜色高亮。
-- 支持任务停止时清理进程树。
-- 设置页增加浏览器路径配置。
-- 增加运行历史。
-
-### 阶段 2：脚本包安装体验
-
-- 安装确认页。
-- 展示 manifest 摘要。
-- 展示依赖列表。
-- 支持重建 venv。
-- 支持卸载脚本包。
-- 支持升级脚本包。
-
-### 阶段 3：DrissionPage 能力增强
-
-- 浏览器 profile 管理。
-- 自动截图。
-- 出错自动保存截图和 HTML。
-- 下载文件记录。
-- 代理配置。
-- headless/headful 切换。
-
-### 阶段 4：产品化打包
-
-- Windows 安装包。
-- Linux portable 包。
-- 内置 Python runtime。
-- 首次启动环境诊断。
-- 自动更新预留接口。
-
-### 阶段 5：小型 Commander 能力
-
-- 定时任务。
-- 文件夹触发。
-- Webhook/API 触发。
-- 多任务队列。
-- 任务失败重试。
-- 本地 Web 控制台。
-
-## 15. 贡献约定
-
-### 15.1 代码风格
-
-- 使用 Python 3.11+。
-- 优先使用 `pathlib.Path`。
-- 业务逻辑放 `core`，GUI 只做展示。
-- 用户脚本运行必须保持子进程隔离。
-- 新增脚本包协议字段时，同时更新本文档。
-
-### 15.2 提交前检查
-
-至少运行：
-
-```bash
-python3 -m compileall src tests examples
-```
-
-如果安装了测试依赖：
-
-```bash
-python3 -m pytest
-```
-
-对涉及脚本包安装或任务运行的改动，建议执行端到端示例包验证。
-
-### 15.3 不要提交的内容
-
-`.gitignore` 已排除：
-
-```text
-__pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
-.ruff_cache/
-.venv/
-venv/
-dist/
-build/
-*.rpaz
-```
-
-不要提交本地生成的脚本包、虚拟环境、构建产物和缓存文件。
-
-## 16. 常见问题
-
-### 16.1 为什么不直接运行用户脚本？
-
-因为用户脚本可能崩溃、阻塞、修改全局状态或依赖不同版本的第三方库。子进程运行更稳定，也更容易停止和记录日志。
-
-### 16.2 为什么使用项目统一 venv？
-
-当前产品目标是用户无感运行脚本包。项目统一 `.venv` 可以避免每个脚本包反复创建环境，依赖集中安装和复用，界面上也不需要暴露 Python 环境选择。
-
-### 16.3 为什么 `.rpaz` 本质还是 zip？
-
-zip 易于生成、解压和检查，跨平台支持好。使用 `.rpaz` 后缀可以让 GUI 识别这是 DRPA 脚本包。
-
-### 16.4 为什么 GUI 不直接做低代码流程编辑器？
-
-当前产品目标是轻量 Python RPA Worker。先把脚本包安装、运行、依赖隔离和日志做好，比一开始做复杂低代码编辑器更容易形成稳定产品。
-
-### 16.5 DrissionPage 是否是唯一自动化引擎？
-
-不是。DrissionPage 是默认 Web-RPA 引擎。SDK 应保持开放，后续可以支持 `pyautogui`、`pywinauto`、OCR、Excel 等能力。
+### 9.4 Linux 源码联调
+
+Ubuntu/Debian 的系统依赖、开发 Python、环境变量和真实 Tauri 启动命令见 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md)。最小联调顺序是：
+
+1. `npm run dev` 验证浏览器 mock UI；
+2. `cargo check -p drpa-desktop` 验证 WebKitGTK 链接；
+3. 使用 `DRPA_RUNTIME_PYTHON`、`DRPA_RUNTIME_PYTHONPATH` 和隔离的 `DRPA_DATA_DIR` 启动 `npm run tauri:dev`；
+4. 跑通普通 RPAZ、Bing 示例、两个 Notebook 单元、知识文档和目录打开；
+5. 再切换到 `DRPA_RUNTIME_ROOT` 验证 `linux-x86_64` sealed runtime。
+
+源码联调通过不等于 Linux 包可发布。当前 AppImage 与两种 deb 都把 runtime 放入只读 resource，并由 CI 验证断网初始化；deb 还必须证明 WebKitGTK/JavaScriptCoreGTK/GTK 私有闭包完整、`Depends` 不含系统 WebKitGTK，并通过真实安装、启动、卸载和用户数据保留检查。UOS 包还必须验证私有加载器、glibc/C++ 库、全部 ELF 的解释器/RPATH，并在 glibc 2.28 用户态运行 Python/Jupyter、Chrome 和 GUI。跨发行版、断网、只读应用目录、X11 与 Wayland 条件仍需持续验收。
+
+### 9.5 必须在 Windows runner 验证的内容
+
+- GUI subsystem 不弹 CMD。
+- Fixed Version WebView2 可启动。
+- runtime manifest 解析到基础 Python，而不是 venv 模板。
+- 在最终安装布局创建环境并导入所有关键依赖。
+- 真实 Jupyter/ZMQ 两单元执行。
+- NSIS 编译与注册表指令守卫。
+- 全量 Setup、安装库存和示例 RPAZ 的三资产门禁。
+
+## 10. CI 与发布
+
+- `.github/workflows/ci.yml`：前端、Python adapter、离线政策、Rust core 和桌面 Host 编译检查；Ubuntu 目前只做到 Host 编译，没有 GUI/runtime 最终包验收。
+- `.github/workflows/offline-runtime.yml`：Windows sealed runtime 原生构建、air-gap smoke 和 prerelease。
+- `.github/workflows/desktop-release.yml`：仅在手工运行或 `release(windows):` 提交时组合 runtime、WebView2、Host、JCode、示例和 NSIS 全量安装器。
+- `.github/workflows/linux-desktop.yml`：Ubuntu 22.04 构建 AppImage、现代 deb `2.1.1-1` 与 UOS deb `2.1.1-1+uos20.4`，验证 sealed runtime、私有 WebKitGTK/Mesa llvmpipe 闭包、GTK 模块隔离与 X11 core input，以及 Debian 10 与 Deepin 20.8/glibc 2.28 的真实输入点击/键入/后续交互、React/IPC、Dify2API 健康检查、非白屏 UI、卸载和发布资产；可见文字组件由有系统字体的 Debian 10 门禁负责。
+
+发布前检查：
+
+1. 更新 `CHANGELOG.md`。
+2. 修改版本时同步 root/npm/Tauri/NSIS/runtime package/runtime spec/示例包/desktop workflow/offline workflow 中的版本来源，避免只改文件名。
+3. 确认 `offline/requirements/runtime.txt` 已通过精确依赖政策检查。
+4. 观察 runtime bootstrap、Jupyter/Agent import smoke、WebView2 展开和 NSIS guard。
+5. Windows Release 只包含 Setup、`install-manifest.json` 与示例 RPAZ，禁止出现 `.drpa-update`。
+6. 在独立 Windows 测试机安装到非系统盘，执行环境验证、Bing 示例和 Notebook 两单元。
+7. 资产未签名时必须在发行说明中显式说明，不得因版本号进入稳定版就省略供应链状态。
+
+## 11. 新功能设计规则
+
+- 先定义领域状态和失败恢复，再画页面。
+- 把“已实现”“实验性”“仅设计”显示在文档和 UI 中。
+- 离线优先：新功能不得隐式下载 Python 包、浏览器、模型或前端 CDN。
+- Windows 优先不等于把平台判断散落到业务层；平台差异应隔离在 adapter。
+- UI 必须根据 Host 暴露的平台能力决定功能是否显示，不能让 Linux 用户点击 Windows-only 更新入口后才得到错误。
+- 长任务必须可取消、可恢复或明确不可恢复，并产生日志和审计事件。
+- 密钥不写入 manifest、任务参数快照、日志或命令行。
+- AI Agent 只能通过受策略控制的工具调用 Host，不能获得任意 Tauri invoke 或任意 shell 权限。
+
+## 12. 接手清单
+
+接手开发前建议依次完成：
+
+1. 阅读本文件、`ROADMAP.md`、`offline/README.md` 和 `JUPYTER_INTEGRATION.md`；Linux 开发者额外完整阅读 `LINUX_DEVELOPMENT.md`。
+2. 查看分支、PR、最新提交和工作区状态，先区分当前 Tauri 实现与冻结的 PySide6 参考代码。
+3. Windows 维护者安装 `2.1.1` 到非系统盘；Linux 维护者使用隔离的 `DRPA_DATA_DIR` 启动真实 Tauri Host，确认数据目录实际位置。
+4. 安装并运行 Bing 每日一图示例，检查实时日志、进度、输出目录和产物。
+5. 在 Studio 新建中文名称项目，运行源码、Markdown 单元和两个 Python notebook 单元。
+6. 阅读 `apps/desktop/src/infra/gateway.ts` 与 `apps/desktop/src-tauri/src/lib.rs` 的对应 command，确认参数在 Host 重新验证。
+7. 运行第 9 节全部本地检查，并对目标平台执行原生 GUI/runtime 测试。
+8. 查看 `desktop-v2.1.1` Release，确认 Setup、AppImage、现代/UOS deb、wheelhouse lock 和对应清单均来自成功的原生 runner；两个 Linux deb manifest 版本应分别为 `2.1.1-1` 与 `2.1.1-1+uos20.4`，且 `depends` 都不含 `libwebkit2gtk-4.1-0`。
+9. 开始新功能前建立 ADR 或更新 `ROADMAP.md` 的对应阶段与验收条件。
+
+当前主开发分支：`codex/drpa-next-platform`。当前交接 PR：<https://github.com/EthanBird/drpa-client/pull/2>。`2.1.1` 发布基线由 `desktop-v2.1.1` 标签指向通过 Windows 全量安装器和 Linux/UOS 原生打包门禁的提交；后续继续完成 [`LINUX_DEVELOPMENT.md`](LINUX_DEVELOPMENT.md) 中的 Ubuntu 24.04、Wayland 和人工 GUI 回归。

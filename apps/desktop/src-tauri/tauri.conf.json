@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DRPA Next",
+  "version": "3.0.1",
+  "identifier": "com.drpa.next",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; frame-src 'self' http://127.0.0.1:* http://[::1]:*"
+    },
+    "windows": [
+      {
+        "label": "splashscreen",
+        "title": "DRPA Next",
+        "url": "splash.html",
+        "width": 880,
+        "height": 550,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "decorations": false,
+        "transparent": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu --disable-background-networking --disable-component-update --disable-default-apps --disable-domain-reliability --disable-extensions --disable-sync --no-first-run",
+        "alwaysOnTop": false,
+        "skipTaskbar": true,
+        "center": true
+      },
+      {
+        "label": "main",
+        "title": "DRPA Next",
+        "visible": false,
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true,
+        "decorations": false,
+        "transparent": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu --disable-background-networking --disable-component-update --disable-default-apps --disable-domain-reliability --disable-extensions --disable-sync --no-first-run",
+        "center": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Cross-platform code package runtime workspace",
+    "longDescription": "Install, configure, run, observe and govern executable automation packages."
+  }
+}
