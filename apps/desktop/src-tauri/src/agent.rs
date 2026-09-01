@@ -1897,8 +1897,8 @@ fn agent_tool_definitions(
     if policy.database_connections {
         tools.push(tool_definition(
             "data_create_connection",
-            "在数据工作台创建连接配置，支持 postgresql、mysql、sqlite、excel；只保存连接元数据，不保存密码，也不测试或修改数据。",
-            json!({"type":"object","properties":{"name":{"type":"string"},"engine":{"type":"string","enum":["postgresql","mysql","sqlite","excel"]},"host":{"type":"string"},"port":{"type":"integer","minimum":0,"maximum":65535},"database":{"type":"string","description":"PostgreSQL/MySQL 数据库名，或 SQLite/Excel 文件绝对路径"},"username":{"type":"string"},"tlsMode":{"type":"string","enum":["disable","prefer","require"]}},"required":["name","engine","database"],"additionalProperties":false}),
+            "在数据工作台创建连接配置，支持 postgresql、mysql、mariadb、sqlite、excel、csv、json；只保存连接元数据，不保存密码，也不测试或修改数据。",
+            json!({"type":"object","properties":{"name":{"type":"string"},"engine":{"type":"string","enum":["postgresql","mysql","mariadb","sqlite","excel","csv","json"]},"host":{"type":"string"},"port":{"type":"integer","minimum":0,"maximum":65535},"database":{"type":"string","description":"远程数据库名，或 SQLite/Excel/CSV/JSON 文件绝对路径"},"username":{"type":"string"},"tlsMode":{"type":"string","enum":["disable","prefer","require"]}},"required":["name","engine","database"],"additionalProperties":false}),
         ));
     }
     if policy.knowledge_base_read {
@@ -2418,7 +2418,7 @@ fn execute_tool(
             let engine = argument_string(arguments, "engine")?;
             let default_port = match engine {
                 "postgresql" => 5432,
-                "mysql" => 3306,
+                "mysql" | "mariadb" => 3306,
                 _ => 0,
             };
             let port = arguments

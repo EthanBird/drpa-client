@@ -245,6 +245,7 @@ mod tests {
                 version: "2.1.1".to_owned(),
                 platform: current_platform().to_owned(),
                 display_name: "DRPA Desktop".to_owned(),
+                description: String::new(),
                 provides: vec!["desktop.ui".to_owned()],
                 requires: BTreeMap::new(),
                 entrypoints: BTreeMap::from([(

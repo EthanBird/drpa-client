@@ -4,6 +4,8 @@ import {
   CircleAlert,
   Cpu,
   Database,
+  Download,
+  FileArchive,
   Globe2,
   HardDrive,
   MemoryStick,
@@ -20,6 +22,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigationSurfaceActive } from "../app/NavigationSurface";
 import type {
   PlatformCapabilities,
+  RuntimeBrowserConfiguration,
   RuntimePythonPackageCatalog,
   RuntimeStatus,
   SystemDiskVolume,
@@ -36,10 +39,17 @@ export function RuntimePage() {
   const [metrics, setMetrics] = useState<SystemMetricsSnapshot | null>(null);
   const [metricsError, setMetricsError] = useState("");
   const [packageCatalog, setPackageCatalog] = useState<RuntimePythonPackageCatalog | null>(null);
+  const [browserConfiguration, setBrowserConfiguration] = useState<RuntimeBrowserConfiguration | null>(null);
+  const [browserBusy, setBrowserBusy] = useState(false);
   const [packageNotice, setPackageNotice] = useState("");
   const [packageQuery, setPackageQuery] = useState("");
   const [requirement, setRequirement] = useState("");
   const [packageBusy, setPackageBusy] = useState(false);
+  const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportDisplayName, setExportDisplayName] = useState("");
+  const [exportDescription, setExportDescription] = useState("");
+  const [exportBusy, setExportBusy] = useState(false);
   const [notice, setNotice] = useState("正在读取封装运行环境…");
   const [busy, setBusy] = useState(false);
   const [repairConfirmationOpen, setRepairConfirmationOpen] = useState(false);
@@ -77,10 +87,19 @@ export function RuntimePage() {
     }
   }, []);
 
+  const loadBrowsers = useCallback(async () => {
+    try {
+      setBrowserConfiguration(await desktopGateway.listRuntimeBrowsers());
+    } catch (error) {
+      setPackageNotice(`无法读取浏览器环境：${String(error)}`);
+    }
+  }, []);
+
   useEffect(() => {
     void loadRuntime();
+    void loadBrowsers();
     void desktopGateway.getPlatformCapabilities().then(setPlatform);
-  }, [loadRuntime]);
+  }, [loadBrowsers, loadRuntime]);
 
   useEffect(() => {
     if (!pageActive) return;
@@ -101,10 +120,39 @@ export function RuntimePage() {
     if (status?.state === "ready") void loadPackages();
   }, [loadPackages, status?.profileId, status?.state]);
 
+  useEffect(() => {
+    const available = new Set(packageCatalog?.packages.filter((item) => item.removable).map((item) => item.name) ?? []);
+    setSelectedPackages((current) => current.filter((name) => available.has(name)));
+  }, [packageCatalog]);
+
   const refreshAll = () => {
     void loadRuntime();
     void loadMetrics();
+    void loadBrowsers();
     if (status?.state === "ready") void loadPackages();
+  };
+
+  const selectBrowser = async (path?: string, family?: "chromium" | "firefox") => {
+    if (browserBusy) return;
+    setBrowserBusy(true);
+    setPackageNotice("正在切换浏览器环境并重置复用中的浏览器 Host…");
+    try {
+      const next = await desktopGateway.selectRuntimeBrowser(path, family);
+      setBrowserConfiguration(next);
+      await loadRuntime();
+      setPackageNotice(next.message);
+    } catch (error) {
+      setPackageNotice(`切换浏览器失败：${String(error)}`);
+    } finally {
+      setBrowserBusy(false);
+    }
+  };
+
+  const selectManualBrowser = async () => {
+    const path = await desktopGateway.selectBrowserExecutable();
+    if (!path) return;
+    const family = /firefox/i.test(path.split(/[\\/]/).at(-1) ?? "") ? "firefox" : "chromium";
+    await selectBrowser(path, family);
   };
 
   const initialize = async () => {
@@ -195,6 +243,53 @@ export function RuntimePage() {
     }
   };
 
+  const uninstallSelectedPackages = async () => {
+    if (selectedPackages.length === 0) return;
+    setPackageBusy(true);
+    setPackageNotice(`正在从当前 Profile 批量移除 ${selectedPackages.length} 个用户包…`);
+    try {
+      const next = await desktopGateway.uninstallRuntimePythonPackages(selectedPackages);
+      setPackageCatalog(next);
+      setSelectedPackages([]);
+      setPackageNotice(`已批量移除 ${selectedPackages.length} 个用户包；基础 Runtime 未被修改`);
+    } catch (error) {
+      setPackageNotice(`批量卸载失败：${String(error)}`);
+    } finally {
+      setPackageBusy(false);
+    }
+  };
+
+  const openExportDialog = () => {
+    if (!selectedProfile) return;
+    const userPackageCount = packageCatalog?.packages.filter((item) => item.removable).length ?? 0;
+    setExportDisplayName(`${selectedProfile.name} 离线组件`);
+    setExportDescription(`基于 ${selectedProfile.name} 导出，包含当前 Profile 及 ${userPackageCount} 个用户安装包，可用于内网离线安装。`);
+    setExportDialogOpen(true);
+  };
+
+  const exportProfile = async () => {
+    const name = exportDisplayName.trim();
+    const description = exportDescription.trim();
+    if (!name || !description || exportBusy) return;
+    const suggestedName = name.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").slice(0, 80) || "python-profile";
+    const targetPath = await desktopGateway.selectRuntimeProfileExportPath(suggestedName);
+    if (!targetPath) {
+      setPackageNotice("已取消导出 Python Profile");
+      return;
+    }
+    setExportBusy(true);
+    setPackageNotice("正在合并 Runtime 与用户包并生成 .drpac，较大的环境可能需要几分钟…");
+    try {
+      const exported = await desktopGateway.exportRuntimeProfileComponent(targetPath, name, description);
+      setExportDialogOpen(false);
+      setPackageNotice(`已导出 ${exported.packageCount} 个用户包、${exported.fileCount} 个文件：${exported.path}`);
+    } catch (error) {
+      setPackageNotice(`导出失败：${String(error)}`);
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
   const visiblePackages = packageCatalog?.packages.filter((item) => {
     const query = packageQuery.trim().toLocaleLowerCase();
     return !query || item.name.toLocaleLowerCase().includes(query) || item.version.toLocaleLowerCase().includes(query);
@@ -250,6 +345,11 @@ export function RuntimePage() {
                 </div>
                 <footer>
                   <small>{profile.inUse > 0 ? `${profile.inUse} 个活动租约` : `组件 ${profile.componentVersion}`}</small>
+                  {profile.selected && (
+                    <button className="button secondary" type="button" disabled={busy || packageBusy || exportBusy} onClick={openExportDialog}>
+                      <FileArchive size={14} /> 导出 .drpac
+                    </button>
+                  )}
                   <button
                     className={profile.selected ? "button secondary" : "button primary"}
                     type="button"
@@ -319,17 +419,47 @@ export function RuntimePage() {
                 aria-label="筛选 Python 包"
               />
             </label>
-            <span>
-              {packageCatalog
-                ? `${packageCatalog.packages.filter((item) => item.removable).length} 个用户包 · ${packageCatalog.packages.length} 个包`
-                : "等待包清单"}
-            </span>
+            <div className="runtime-package-selection-tools">
+              <button
+                className="button secondary"
+                type="button"
+                disabled={packageBusy || visiblePackages.every((item) => !item.removable)}
+                onClick={() => {
+                  const visible = visiblePackages.filter((item) => item.removable).map((item) => item.name);
+                  const allSelected = visible.length > 0 && visible.every((name) => selectedPackages.includes(name));
+                  setSelectedPackages((current) => allSelected
+                    ? current.filter((name) => !visible.includes(name))
+                    : [...new Set([...current, ...visible])]);
+                }}
+              >
+                全选用户包
+              </button>
+              <button className="button danger" type="button" disabled={packageBusy || selectedPackages.length === 0} onClick={() => void uninstallSelectedPackages()}>
+                <Trash2 size={13} /> 删除所选 {selectedPackages.length || ""}
+              </button>
+              <span>
+                {packageCatalog
+                  ? `${packageCatalog.packages.filter((item) => item.removable).length} 个用户包 · ${packageCatalog.packages.length} 个包`
+                  : "等待包清单"}
+              </span>
+            </div>
           </div>
 
           {packageNotice && <p className="runtime-package-notice" role="status">{packageNotice}</p>}
           <div className="runtime-package-list">
             {visiblePackages.map((item) => (
               <article key={`${item.source}:${item.name}`}>
+                {item.removable ? (
+                  <input
+                    type="checkbox"
+                    aria-label={`选择 ${item.name}`}
+                    checked={selectedPackages.includes(item.name)}
+                    disabled={packageBusy}
+                    onChange={(event) => setSelectedPackages((current) => event.target.checked
+                      ? [...new Set([...current, item.name])]
+                      : current.filter((name) => name !== item.name))}
+                  />
+                ) : <span className="runtime-package-checkbox-placeholder" />}
                 <span>
                   <strong>{item.name}</strong>
                   <small title={item.location}>{item.version || "未知版本"}</small>
@@ -360,6 +490,37 @@ export function RuntimePage() {
           )}
         </section>
       )}
+
+      <section className="runtime-browsers panel" aria-label="浏览器运行环境">
+        <header>
+          <div>
+            <strong>浏览器运行环境</strong>
+            <small>自动发现系统与组件浏览器，也可固定到自定义可执行文件</small>
+          </div>
+          <div className="runtime-browser-actions">
+            <button className="button secondary" type="button" disabled={browserBusy || browserConfiguration?.mode === "auto"} onClick={() => void selectBrowser()}>自动选择</button>
+            <button className="button secondary" type="button" disabled={browserBusy} onClick={() => void selectManualBrowser()}><Search size={13} /> 手动选择</button>
+          </div>
+        </header>
+        {browserConfiguration ? (
+          <>
+            <div className="runtime-browser-current">
+              <span className={browserConfiguration.automationCompatible ? "ready" : browserConfiguration.activeFamily === "firefox" ? "warning" : "missing"}><Globe2 size={17} /></span>
+              <div><strong>{browserConfiguration.activeName}</strong><small title={browserConfiguration.activeExecutable}>{browserConfiguration.activeExecutable || "尚未配置可执行文件"}</small></div>
+              <em>{browserConfiguration.activeFamily === "firefox" ? "Firefox" : browserConfiguration.activeFamily === "chromium" ? "Chromium" : "未配置"}</em>
+            </div>
+            <div className="runtime-browser-candidates">
+              {browserConfiguration.candidates.map((candidate) => (
+                <button className={candidate.selected ? "selected" : ""} type="button" key={candidate.id} disabled={browserBusy || candidate.selected} onClick={() => void selectBrowser(candidate.executable, candidate.family === "firefox" ? "firefox" : "chromium")}>
+                  <span><strong>{candidate.name}</strong><small>{candidate.source} · {candidate.family === "firefox" ? "Firefox" : "Chromium"}</small></span>
+                  <em>{candidate.selected ? "当前" : "切换"}</em>
+                </button>
+              ))}
+            </div>
+            <p className={browserConfiguration.automationCompatible ? "runtime-browser-message" : "runtime-browser-message warning"}>{browserConfiguration.message}</p>
+          </>
+        ) : <p className="runtime-browser-message">正在检测 Chrome、Edge、Chromium、Brave、Vivaldi、Opera 与 Firefox…</p>}
+      </section>
 
       <div className={`runtime-banner ${status?.state ?? "loading"}`}>
         <span>{status?.state === "ready" ? <CheckCircle2 size={20} /> : <Cpu size={20} />}</span>
@@ -394,8 +555,8 @@ export function RuntimePage() {
           <RuntimeCard
             icon={<Globe2 size={18} />}
             title="浏览器自动化"
-            value={status.browserExecutable.includes("未安装") ? "未配置浏览器" : "Chromium 兼容浏览器"}
-            detail="自动兼容系统浏览器或已安装的可拔插浏览器组件"
+            value={status.browserName || (status.browserExecutable.includes("未安装") ? "未配置浏览器" : "Chromium 兼容浏览器")}
+            detail={status.browserFamily === "firefox" ? "Firefox 已选中；DrissionPage 工具需要切换到 Chromium 浏览器" : "系统浏览器、可拔插组件与手动路径均可切换"}
             path={status.browserExecutable}
           />
         </div>
@@ -442,6 +603,26 @@ export function RuntimePage() {
             <footer>
               <button className="button secondary" type="button" onClick={() => setRepairConfirmationOpen(false)}>取消</button>
               <button className="button danger" type="button" onClick={confirmRepair}>确认重建</button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {exportDialogOpen && (
+        <div className="knowledge-confirm-overlay" role="dialog" aria-modal="true" aria-label="导出 Python Profile" onMouseDown={() => { if (!exportBusy) setExportDialogOpen(false); }}>
+          <section className="knowledge-confirm runtime-export-dialog" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="knowledge-confirm-icon"><Download size={18} /></div>
+            <div>
+              <h2>导出为离线 .drpac 组件</h2>
+              <p>会复制当前 Python Runtime，并把用户包层合并进组件；源 Profile 和用户包目录不会被修改。</p>
+              <label><span>组件名称</span><input value={exportDisplayName} maxLength={120} disabled={exportBusy} onChange={(event) => setExportDisplayName(event.target.value)} /></label>
+              <label><span>组件描述</span><textarea value={exportDescription} maxLength={1000} rows={4} disabled={exportBusy} onChange={(event) => setExportDescription(event.target.value)} /></label>
+            </div>
+            <footer>
+              <button className="button secondary" type="button" disabled={exportBusy} onClick={() => setExportDialogOpen(false)}>取消</button>
+              <button className="button primary" type="button" disabled={exportBusy || !exportDisplayName.trim() || !exportDescription.trim()} onClick={() => void exportProfile()}>
+                <FileArchive size={14} /> {exportBusy ? "正在打包…" : "选择位置并导出"}
+              </button>
             </footer>
           </section>
         </div>

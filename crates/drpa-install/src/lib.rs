@@ -104,6 +104,8 @@ pub struct ComponentManifest {
     pub platform: String,
     pub display_name: String,
     #[serde(default)]
+    pub description: String,
+    #[serde(default)]
     pub provides: Vec<String>,
     #[serde(default)]
     pub requires: BTreeMap<String, String>,
@@ -1139,6 +1141,9 @@ fn validate_component_manifest(manifest: &ComponentManifest) -> Result<()> {
     if manifest.display_name.trim().is_empty() || manifest.display_name.chars().count() > 120 {
         return Err(InstallError::InvalidManifest("组件名称无效".to_owned()));
     }
+    if manifest.description.chars().count() > 1_000 || manifest.description.contains('\0') {
+        return Err(InstallError::InvalidManifest("组件描述无效".to_owned()));
+    }
     if manifest.files.len() > MAX_COMPONENT_FILES {
         return Err(InstallError::InvalidManifest(
             "组件文件数量超过上限".to_owned(),
@@ -1488,6 +1493,7 @@ mod tests {
             version: "1.0.0".to_owned(),
             platform: current_platform().to_owned(),
             display_name: "测试组件".to_owned(),
+            description: String::new(),
             provides: vec!["test.capability".to_owned()],
             requires: BTreeMap::new(),
             entrypoints: BTreeMap::from([("main".to_owned(), "bin/tool.txt".to_owned())]),

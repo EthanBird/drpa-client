@@ -26,6 +26,7 @@ import {
   Search,
   Sparkles,
   Settings2,
+  TableProperties,
   Table2,
   Trash2,
   X,
@@ -78,6 +79,8 @@ export function DataPage() {
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
   const [tableMenu, setTableMenu] = useState<TableContextMenu | null>(null);
+  const [connectionMenu, setConnectionMenu] = useState<ConnectionContextMenu | null>(null);
+  const [schemaAction, setSchemaAction] = useState<SchemaAction | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [executing, setExecuting] = useState(false);
@@ -155,9 +158,9 @@ export function DataPage() {
   const connectDroppedFiles = useCallback(async (paths: string[]) => {
     const sources = paths
       .map((path) => ({ path, engine: fileDatabaseEngine(path) }))
-      .filter((source): source is { path: string; engine: "sqlite" | "excel" } => source.engine !== null);
+      .filter((source): source is { path: string; engine: FileDatabaseEngine } => source.engine !== null);
     if (sources.length === 0) {
-      setError("请拖入 SQLite（.db/.sqlite/.sqlite3）或 Excel（.xls/.xlsx/.xlsb/.ods）文件");
+      setError("请拖入 SQLite、Excel、CSV/TSV 或 JSON/JSONL 数据文件");
       return;
     }
     setConnectionBusy(true);
@@ -204,8 +207,8 @@ export function DataPage() {
   }, [pageSize]);
 
   useEffect(() => {
-    if (!tableMenu) return;
-    const close = () => setTableMenu(null);
+    if (!tableMenu && !connectionMenu) return;
+    const close = () => { setTableMenu(null); setConnectionMenu(null); };
     const closeOnKey = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
     window.addEventListener("pointerdown", close);
     window.addEventListener("blur", close);
@@ -217,7 +220,7 @@ export function DataPage() {
       window.removeEventListener("resize", close);
       window.removeEventListener("keydown", closeOnKey);
     };
-  }, [tableMenu]);
+  }, [connectionMenu, tableMenu]);
 
   const inspectTable = async (table: DatabaseTable) => {
     setSelectedTable(table.name);
@@ -349,9 +352,11 @@ export function DataPage() {
         baseUrl: config.agentBaseUrl.trim(),
         model: config.agentModel.trim(),
         mode: "sql",
-        databaseDialect: activeProfile?.engine === "postgresql" || activeProfile?.engine === "mysql"
-          ? activeProfile.engine
-          : "sqlite",
+        databaseDialect: activeProfile?.engine === "postgresql"
+          ? "postgresql"
+          : activeProfile?.engine === "mysql" || activeProfile?.engine === "mariadb"
+            ? "mysql"
+            : "sqlite",
         apiKey: config.agentApiKey,
         projectId: "",
         stream: config.agentStreamEnabled,
@@ -475,6 +480,14 @@ export function DataPage() {
     }
   };
 
+  const duplicateConnection = (profile: RemoteDatabaseProfile) => {
+    setConnectionMenu(null);
+    setConnectionDraft({ ...profile, id: `database-${Date.now()}-${Math.random().toString(16).slice(2)}`, name: `${profile.name} 副本` });
+    setConnectionPassword("");
+    setConnectionError("");
+    setConnectionTest(null);
+  };
+
   const currentPage = result ? Math.floor(result.offset / Math.max(1, result.limit)) + 1 : 1;
   const displayedRows = useMemo(() => {
     if (!result) return [];
@@ -573,11 +586,50 @@ export function DataPage() {
     window.setTimeout(() => editorRef.current?.focus(), 0);
   };
 
+  const openSchemaAction = (kind: SchemaActionKind, table?: DatabaseTable) => {
+    setTableMenu(null);
+    const defaults: Record<SchemaActionKind, Pick<SchemaAction, "name" | "definition">> = {
+      create: { name: "new_table", definition: "id INTEGER PRIMARY KEY,\nname TEXT" },
+      rename: { name: table?.name.split(".").at(-1) ?? "", definition: "" },
+      addColumn: { name: "new_column", definition: "TEXT" },
+      truncate: { name: "", definition: "" },
+      drop: { name: "", definition: "" },
+    };
+    setSchemaAction({ kind, table: table ?? null, ...defaults[kind] });
+  };
+
+  const applySchemaAction = async () => {
+    if (!schemaAction || executing) return;
+    const engine = activeProfile?.engine;
+    const table = schemaAction.table;
+    let statement = "";
+    if (schemaAction.kind === "create") {
+      if (!schemaAction.name.trim() || !schemaAction.definition.trim()) return;
+      statement = `CREATE TABLE ${quoteTableIdentifier(schemaAction.name.trim(), engine)} (\n  ${schemaAction.definition.trim().replace(/\n/g, "\n  ")}\n);`;
+    } else if (schemaAction.kind === "rename" && table) {
+      if (!schemaAction.name.trim()) return;
+      statement = `ALTER TABLE ${quoteTableIdentifier(table.name, engine)}\nRENAME TO ${quoteTableIdentifier(schemaAction.name.trim(), engine)};`;
+    } else if (schemaAction.kind === "addColumn" && table) {
+      if (!schemaAction.name.trim() || !schemaAction.definition.trim()) return;
+      statement = `ALTER TABLE ${quoteTableIdentifier(table.name, engine)}\nADD COLUMN ${quoteTableIdentifier(schemaAction.name.trim(), engine)} ${schemaAction.definition.trim()};`;
+    } else if (schemaAction.kind === "truncate" && table) {
+      statement = (!activeProfile || engine === "sqlite")
+        ? `DELETE FROM ${quoteTableIdentifier(table.name, engine)};`
+        : `TRUNCATE TABLE ${quoteTableIdentifier(table.name, engine)};`;
+    } else if (schemaAction.kind === "drop" && table) {
+      statement = `DROP ${table.kind === "view" ? "VIEW" : "TABLE"} ${quoteTableIdentifier(table.name, engine)};`;
+    }
+    if (!statement) return;
+    setSql(`${statement}\n`);
+    setSchemaAction(null);
+    await executeStatement(statement, 1, pageSize);
+  };
+
   return (
     <div className="page data-page">
       <header className="page-header data-header">
         <div>
-          <div className="eyebrow">SQLite · PostgreSQL · MySQL · Excel · AI SQL</div>
+          <div className="eyebrow">SQLite · PostgreSQL · MySQL / MariaDB · Excel · CSV · JSON · AI SQL</div>
           <h1>数据工作台</h1>
           <p>连接本地或远程数据库、浏览结构并直接编写和执行 SQL。</p>
         </div>
@@ -592,15 +644,15 @@ export function DataPage() {
       <div className={`data-workspace${schemaCollapsed ? " schema-collapsed" : ""}${inspectorCollapsed ? " inspector-collapsed" : ""}`}>
         {schemaCollapsed ? <SidebarToggle id="data-schema" side="left" label="数据连接侧边栏" restore /> : <aside className="data-schema-pane collapsible-sidebar">
           <SidebarToggle id="data-schema" side="left" label="数据连接侧边栏" />
-          <div className="data-pane-title"><Database size={15} /> 连接 <button type="button" aria-label="新建数据库连接" title="新建 PostgreSQL / MySQL / SQLite / Excel 数据源" onClick={() => editConnection()}><Plus size={13} /></button></div>
+          <div className="data-pane-title"><Database size={15} /> 连接 <button type="button" aria-label="新建数据库连接" title="新建远程数据库或文件数据源" onClick={() => editConnection()}><Plus size={13} /></button></div>
           <div className="database-connections-list">
-            <button className={`database-connection ${activeConnectionId === "local" ? "active" : ""}`} type="button" onClick={() => { setActiveConnectionId("local"); setResult(null); setError(""); }}>
+            <button className={`database-connection ${activeConnectionId === "local" ? "active" : ""}`} type="button" onClick={() => { setActiveConnectionId("local"); setResult(null); setError(""); }} onContextMenu={(event) => { event.preventDefault(); setConnectionMenu({ profile: null, x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 220) }); }}>
               <span className="database-icon"><Database size={16} /></span>
               <span><strong>工作区数据库</strong><small>SQLite · 本地脚本共享</small></span>
               <span className="connection-state" title="连接正常" />
             </button>
             {remoteProfiles.map((profile) => (
-              <div className={`remote-connection-row ${activeConnectionId === profile.id ? "active" : ""}`} key={profile.id}>
+              <div className={`remote-connection-row ${activeConnectionId === profile.id ? "active" : ""}`} key={profile.id} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setConnectionMenu({ profile, x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 240) }); }}>
                 <button className="remote-connection-select" type="button" onClick={() => selectRemoteConnection(profile)}>
                   <span className="database-icon remote"><Cable size={15} /></span>
                   <span><strong>{profile.name}</strong><small>{databaseEngineLabel(profile.engine)} · {connectionLocation(profile)}</small></span>
@@ -610,7 +662,7 @@ export function DataPage() {
               </div>
             ))}
           </div>
-          <div className="data-pane-section"><span>数据表</span><em>{visibleTables.length === tables.length ? tables.length : `${visibleTables.length}/${tables.length}`}</em></div>
+          <div className="data-pane-section" onContextMenu={(event) => { event.preventDefault(); if (!isReadOnlyFileDatabase(activeProfile?.engine)) openSchemaAction("create"); }}><span>数据表</span><button type="button" aria-label="新建数据表" title={isReadOnlyFileDatabase(activeProfile?.engine) ? "文件数据源只读" : "新建数据表"} disabled={isReadOnlyFileDatabase(activeProfile?.engine)} onClick={() => openSchemaAction("create")}><Plus size={12} /></button><em>{visibleTables.length === tables.length ? tables.length : `${visibleTables.length}/${tables.length}`}</em></div>
           <label className="database-table-search"><Search size={12} /><input value={tableFilter} onChange={(event) => setTableFilter(event.target.value)} placeholder="搜索表或视图" /></label>
           <div className="database-tables">
             {loading && <div className="data-loading"><LoaderCircle className="spin" size={14} /> 正在读取结构</div>}
@@ -626,7 +678,7 @@ export function DataPage() {
                 onContextMenu={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  setTableMenu({ table, x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 300) });
+                  setTableMenu({ table, x: Math.min(event.clientX, window.innerWidth - 230), y: Math.max(10, Math.min(event.clientY, window.innerHeight - 520)) });
                 }}
                 title="单击查看字段，双击生成查询，右键打开表操作"
               >
@@ -718,12 +770,43 @@ export function DataPage() {
           <button type="button" role="menuitem" onClick={() => { void inspectTable(tableMenu.table); setTableMenu(null); }}><Rows3 size={14} /><span>查看字段结构</span></button>
           <div className="context-menu-separator" />
           <button type="button" role="menuitem" onClick={() => setTableStatement(tableMenu.table, `SELECT *\nFROM ${quoteTableIdentifier(tableMenu.table.name, activeProfile?.engine)};`)}><FileCode2 size={14} /><span>生成 SELECT</span></button>
-          <button type="button" role="menuitem" disabled={tableMenu.table.kind === "view" || activeProfile?.engine === "excel"} onClick={() => void createMutationTemplate(tableMenu.table, "insert")}><Plus size={14} /><span>生成 INSERT</span></button>
-          <button type="button" role="menuitem" disabled={tableMenu.table.kind === "view" || activeProfile?.engine === "excel"} onClick={() => void createMutationTemplate(tableMenu.table, "update")}><FileCode2 size={14} /><span>生成 UPDATE</span></button>
+          <button type="button" role="menuitem" disabled={tableMenu.table.kind === "view" || isReadOnlyFileDatabase(activeProfile?.engine)} onClick={() => void createMutationTemplate(tableMenu.table, "insert")}><Plus size={14} /><span>生成 INSERT</span></button>
+          <button type="button" role="menuitem" disabled={tableMenu.table.kind === "view" || isReadOnlyFileDatabase(activeProfile?.engine)} onClick={() => void createMutationTemplate(tableMenu.table, "update")}><FileCode2 size={14} /><span>生成 UPDATE</span></button>
           {(activeProfile?.engine === "sqlite" || !activeProfile) && <button type="button" role="menuitem" onClick={() => setTableStatement(tableMenu.table, `SELECT type, name, sql\nFROM sqlite_master\nWHERE name = '${escapeSqlString(tableMenu.table.name)}';`)}><Braces size={14} /><span>查看建表 SQL</span></button>}
+          <div className="context-menu-separator" />
+          <button type="button" role="menuitem" disabled={tableMenu.table.kind === "view" || isReadOnlyFileDatabase(activeProfile?.engine)} onClick={() => openSchemaAction("addColumn", tableMenu.table)}><TableProperties size={14} /><span>新增字段</span></button>
+          <button type="button" role="menuitem" disabled={tableMenu.table.kind === "view" || isReadOnlyFileDatabase(activeProfile?.engine)} onClick={() => openSchemaAction("rename", tableMenu.table)}><Settings2 size={14} /><span>重命名数据表</span></button>
+          <button type="button" role="menuitem" disabled={tableMenu.table.kind === "view" || isReadOnlyFileDatabase(activeProfile?.engine)} onClick={() => openSchemaAction("truncate", tableMenu.table)}><Trash2 size={14} /><span>清空表数据</span></button>
+          <button className="danger" type="button" role="menuitem" disabled={isReadOnlyFileDatabase(activeProfile?.engine)} onClick={() => openSchemaAction("drop", tableMenu.table)}><Trash2 size={14} /><span>删除表 / 视图</span></button>
           <div className="context-menu-separator" />
           <button type="button" role="menuitem" onClick={() => { void navigator.clipboard.writeText(tableMenu.table.name); setTableMenu(null); }}><ClipboardCopy size={14} /><span>复制表名</span></button>
           <button type="button" role="menuitem" onClick={() => { setTableMenu(null); void refreshSchema(); }}><RefreshCw size={14} /><span>刷新数据库结构</span></button>
+        </div>
+      )}
+
+      {connectionMenu && (
+        <div className="data-table-context-menu" style={{ left: connectionMenu.x, top: connectionMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+          <header><Database size={14} /><span><strong>{connectionMenu.profile?.name ?? "工作区数据库"}</strong><small>连接与结构操作</small></span></header>
+          <button type="button" role="menuitem" onClick={() => { if (connectionMenu.profile) selectRemoteConnection(connectionMenu.profile); else setActiveConnectionId("local"); setConnectionMenu(null); }}><Cable size={14} /><span>连接并浏览</span></button>
+          <button type="button" role="menuitem" disabled={Boolean(connectionMenu.profile && isReadOnlyFileDatabase(connectionMenu.profile.engine))} onClick={() => { const profile = connectionMenu.profile; if (profile) setActiveConnectionId(profile.id); setConnectionMenu(null); openSchemaAction("create"); }}><Plus size={14} /><span>新建数据表</span></button>
+          <button type="button" role="menuitem" onClick={() => { setConnectionMenu(null); void refreshSchema(); }}><RefreshCw size={14} /><span>刷新结构</span></button>
+          {connectionMenu.profile && <><div className="context-menu-separator" /><button type="button" role="menuitem" onClick={() => { const profile = connectionMenu.profile; setConnectionMenu(null); if (profile) editConnection(profile); }}><Settings2 size={14} /><span>修改连接配置</span></button><button type="button" role="menuitem" onClick={() => { const profile = connectionMenu.profile; if (profile) duplicateConnection(profile); }}><Copy size={14} /><span>复制连接配置</span></button><button className="danger" type="button" role="menuitem" onClick={() => { const profile = connectionMenu.profile; setConnectionMenu(null); if (profile) editConnection(profile); }}><Trash2 size={14} /><span>删除连接…</span></button></>}
+        </div>
+      )}
+
+      {schemaAction && (
+        <div className="database-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !executing) setSchemaAction(null); }}>
+          <form className="database-dialog database-schema-dialog" role="dialog" aria-modal="true" aria-labelledby="database-schema-dialog-title" onSubmit={(event) => { event.preventDefault(); void applySchemaAction(); }}>
+            <header><span className="sql-ai-icon"><TableProperties size={17} /></span><div><h2 id="database-schema-dialog-title">{schemaActionTitle(schemaAction.kind)}</h2><p>{schemaAction.table ? `目标：${schemaAction.table.name}` : `数据源：${database?.name ?? "工作区数据库"}`}</p></div><button type="button" aria-label="关闭表结构操作" onClick={() => setSchemaAction(null)} disabled={executing}><X size={16} /></button></header>
+            <div className="database-dialog-fields">
+              {schemaAction.kind === "create" && <><label><span>表名</span><input autoFocus required value={schemaAction.name} onChange={(event) => setSchemaAction({ ...schemaAction, name: event.target.value })} /></label><label><span>字段定义</span><textarea required rows={7} value={schemaAction.definition} onChange={(event) => setSchemaAction({ ...schemaAction, definition: event.target.value })} placeholder="id INTEGER PRIMARY KEY,&#10;name TEXT NOT NULL" /></label></>}
+              {schemaAction.kind === "rename" && <label><span>新名称</span><input autoFocus required value={schemaAction.name} onChange={(event) => setSchemaAction({ ...schemaAction, name: event.target.value })} /></label>}
+              {schemaAction.kind === "addColumn" && <div className="database-field-row"><label><span>字段名称</span><input autoFocus required value={schemaAction.name} onChange={(event) => setSchemaAction({ ...schemaAction, name: event.target.value })} /></label><label><span>字段类型 / 约束</span><input required value={schemaAction.definition} onChange={(event) => setSchemaAction({ ...schemaAction, definition: event.target.value })} placeholder="TEXT NOT NULL DEFAULT ''" /></label></div>}
+              {schemaAction.kind === "truncate" && <div className="database-destructive-note"><Trash2 size={16} /><span><strong>将删除表中的全部数据</strong><small>表结构会保留；该操作执行后不能由 DRPA 自动撤销。</small></span></div>}
+              {schemaAction.kind === "drop" && <div className="database-destructive-note"><Trash2 size={16} /><span><strong>将永久删除该{schemaAction.table?.kind === "view" ? "视图" : "表"}</strong><small>结构及数据会一同删除；请先确认已经备份。</small></span></div>}
+            </div>
+            <footer><span /><button className="button secondary" type="button" onClick={() => setSchemaAction(null)} disabled={executing}>取消</button><button className={schemaAction.kind === "drop" || schemaAction.kind === "truncate" ? "button danger" : "button primary"} type="submit" disabled={executing}>{executing ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} {schemaAction.kind === "drop" ? "确认删除" : schemaAction.kind === "truncate" ? "确认清空" : "执行变更"}</button></footer>
+          </form>
         </div>
       )}
 
@@ -732,19 +815,19 @@ export function DataPage() {
           <form className="database-dialog" role="dialog" aria-modal="true" aria-labelledby="database-dialog-title" onSubmit={(event) => { event.preventDefault(); void saveAndConnect(); }}>
             <header>
               <span className="sql-ai-icon"><Cable size={17} /></span>
-              <div><h2 id="database-dialog-title">{remoteProfiles.some((profile) => profile.id === connectionDraft.id) ? "编辑数据源" : "新建数据源"}</h2><p>{isFileDatabase(connectionDraft.engine) ? "文件路径保存在工作区；Excel 工作簿以只读方式查询。" : "连接信息保存在工作区，密码仅保留到本次应用退出。"}</p></div>
+              <div><h2 id="database-dialog-title">{remoteProfiles.some((profile) => profile.id === connectionDraft.id) ? "编辑数据源" : "新建数据源"}</h2><p>{isFileDatabase(connectionDraft.engine) ? "文件路径保存在工作区；Excel、CSV 与 JSON 以只读方式查询。" : "连接信息保存在工作区，密码仅保留到本次应用退出。"}</p></div>
               <button type="button" aria-label="关闭数据库连接设置" onClick={() => setConnectionDraft(null)} disabled={connectionBusy}><X size={16} /></button>
             </header>
             <div className="database-dialog-fields">
               <label><span>连接名称</span><input required maxLength={80} value={connectionDraft.name} onChange={(event) => setConnectionDraft({ ...connectionDraft, name: event.target.value })} placeholder="例如：业务分析库" /></label>
               <div className={`database-field-row ${isFileDatabase(connectionDraft.engine) ? "single" : ""}`}>
-                <label><span>数据源类型</span><select value={connectionDraft.engine} onChange={(event) => { const engine = event.target.value as RemoteDatabaseProfile["engine"]; setConnectionDraft({ ...connectionDraft, engine, port: engine === "postgresql" ? 5432 : engine === "mysql" ? 3306 : 0, host: isFileDatabase(engine) ? "" : connectionDraft.host || "localhost", username: isFileDatabase(engine) ? "" : connectionDraft.username, database: "" }); setConnectionTest(null); setConnectionError(""); }}><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite 文件</option><option value="excel">Excel 工作簿（只读）</option></select></label>
+                <label><span>数据源类型</span><select value={connectionDraft.engine} onChange={(event) => { const engine = event.target.value as RemoteDatabaseProfile["engine"]; setConnectionDraft({ ...connectionDraft, engine, port: engine === "postgresql" ? 5432 : ["mysql", "mariadb"].includes(engine) ? 3306 : 0, host: isFileDatabase(engine) ? "" : connectionDraft.host || "localhost", username: isFileDatabase(engine) ? "" : connectionDraft.username, database: "" }); setConnectionTest(null); setConnectionError(""); }}><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="sqlite">SQLite 文件</option><option value="excel">Excel 工作簿（只读）</option><option value="csv">CSV / TSV（只读）</option><option value="json">JSON / JSONL（只读）</option></select></label>
                 {!isFileDatabase(connectionDraft.engine) && <label><span>TLS</span><select value={connectionDraft.tlsMode} onChange={(event) => setConnectionDraft({ ...connectionDraft, tlsMode: event.target.value as RemoteDatabaseProfile["tlsMode"] })}><option value="require">必须</option><option value="prefer">优先</option><option value="disable">关闭</option></select></label>}
               </div>
               {isFileDatabase(connectionDraft.engine) ? (
                 <>
-                  <label><span>{connectionDraft.engine === "excel" ? "工作簿文件" : "SQLite 数据库文件"}</span><div className="database-file-input"><input required value={connectionDraft.database} onChange={(event) => setConnectionDraft({ ...connectionDraft, database: event.target.value })} placeholder={connectionDraft.engine === "excel" ? "选择 .xls / .xlsx / .xlsb / .ods 文件" : "选择 .db / .sqlite / .sqlite3 文件"} /><button className="button secondary" type="button" onClick={() => void pickConnectionFile()}><FolderOpen size={14} /> 浏览</button></div></label>
-                  <div className="database-source-note"><Database size={14} /><span>{connectionDraft.engine === "excel" ? "首行作为字段名，每个工作表映射为一张只读表，可使用 SELECT 查询。" : "直接连接已有 SQLite 文件，支持结构浏览和 SQL 读写。"}</span></div>
+                  <label><span>{fileSourceFieldLabel(connectionDraft.engine)}</span><div className="database-file-input"><input required value={connectionDraft.database} onChange={(event) => setConnectionDraft({ ...connectionDraft, database: event.target.value })} placeholder={fileSourcePlaceholder(connectionDraft.engine)} /><button className="button secondary" type="button" onClick={() => void pickConnectionFile()}><FolderOpen size={14} /> 浏览</button></div></label>
+                  <div className="database-source-note"><Database size={14} /><span>{fileSourceDescription(connectionDraft.engine)}</span></div>
                 </>
               ) : (
                 <>
@@ -836,6 +919,23 @@ interface TableContextMenu {
   y: number;
 }
 
+interface ConnectionContextMenu {
+  profile: RemoteDatabaseProfile | null;
+  x: number;
+  y: number;
+}
+
+type SchemaActionKind = "create" | "rename" | "addColumn" | "truncate" | "drop";
+
+interface SchemaAction {
+  kind: SchemaActionKind;
+  table: DatabaseTable | null;
+  name: string;
+  definition: string;
+}
+
+type FileDatabaseEngine = "sqlite" | "excel" | "csv" | "json";
+
 type ResultSort = { column: number; direction: "asc" | "desc" } | null;
 
 function queryHistoryStorageKey(): string {
@@ -854,7 +954,7 @@ function queryPageSizeStorageKey(): string {
 }
 
 function quoteTableIdentifier(value: string, engine?: RemoteDatabaseProfile["engine"]): string {
-  return value.split(".").map((part) => engine === "mysql"
+  return value.split(".").map((part) => engine === "mysql" || engine === "mariadb"
     ? `\`${part.replaceAll("`", "``")}\``
     : `"${part.replaceAll('"', '""')}"`).join(".");
 }
@@ -866,7 +966,7 @@ function createRemoteProfile(engine: RemoteDatabaseProfile["engine"] = "postgres
     name: fileName,
     engine,
     host: isFileDatabase(engine) ? "" : "localhost",
-    port: engine === "postgresql" ? 5432 : engine === "mysql" ? 3306 : 0,
+    port: engine === "postgresql" ? 5432 : engine === "mysql" || engine === "mariadb" ? 3306 : 0,
     database: sourcePath,
     username: "",
     tlsMode: "prefer",
@@ -895,21 +995,56 @@ function compareResultValues(left: unknown, right: unknown): number {
   return formatCell(left).localeCompare(formatCell(right), "zh-CN", { numeric: true, sensitivity: "base" });
 }
 
-function isFileDatabase(engine: RemoteDatabaseProfile["engine"]): engine is "sqlite" | "excel" {
-  return engine === "sqlite" || engine === "excel";
+function isFileDatabase(engine: RemoteDatabaseProfile["engine"]): engine is FileDatabaseEngine {
+  return ["sqlite", "excel", "csv", "json"].includes(engine);
 }
 
-function fileDatabaseEngine(path: string): "sqlite" | "excel" | null {
+function isReadOnlyFileDatabase(engine?: RemoteDatabaseProfile["engine"]): boolean {
+  return engine === "excel" || engine === "csv" || engine === "json";
+}
+
+function fileDatabaseEngine(path: string): FileDatabaseEngine | null {
   if (/\.(db|sqlite|sqlite3)$/i.test(path)) return "sqlite";
   if (/\.(xls|xlsx|xlsb|ods)$/i.test(path)) return "excel";
+  if (/\.(csv|tsv)$/i.test(path)) return "csv";
+  if (/\.(json|jsonl|ndjson)$/i.test(path)) return "json";
   return null;
 }
 
 function databaseEngineLabel(engine: RemoteDatabaseProfile["engine"]): string {
   if (engine === "postgresql") return "PostgreSQL";
   if (engine === "mysql") return "MySQL";
+  if (engine === "mariadb") return "MariaDB";
   if (engine === "excel") return "Excel";
+  if (engine === "csv") return "CSV / TSV";
+  if (engine === "json") return "JSON / JSONL";
   return "SQLite";
+}
+
+function fileSourceFieldLabel(engine: FileDatabaseEngine): string {
+  return ({ sqlite: "SQLite 数据库文件", excel: "工作簿文件", csv: "CSV / TSV 文件", json: "JSON / JSONL 文件" })[engine];
+}
+
+function fileSourcePlaceholder(engine: FileDatabaseEngine): string {
+  return ({
+    sqlite: "选择 .db / .sqlite / .sqlite3 文件",
+    excel: "选择 .xls / .xlsx / .xlsb / .ods 文件",
+    csv: "选择 .csv / .tsv 文件",
+    json: "选择 .json / .jsonl / .ndjson 文件",
+  })[engine];
+}
+
+function fileSourceDescription(engine: FileDatabaseEngine): string {
+  return ({
+    sqlite: "直接连接已有 SQLite 文件，支持结构浏览和 SQL 读写。",
+    excel: "首行作为字段名，每个工作表映射为一张只读表，可使用 SELECT 查询。",
+    csv: "首行作为字段名，文件映射为一张只读表，并自动推断数字字段。",
+    json: "支持对象数组、单个对象以及 JSONL/NDJSON，每个对象映射为一行只读数据。",
+  })[engine];
+}
+
+function schemaActionTitle(kind: SchemaActionKind): string {
+  return ({ create: "新建数据表", rename: "重命名表 / 视图", addColumn: "新增字段", truncate: "清空表数据", drop: "删除表 / 视图" })[kind];
 }
 
 function connectionLocation(profile: RemoteDatabaseProfile): string {

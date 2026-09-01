@@ -1756,7 +1756,11 @@ fn component_card(
                         status_badge(ui, &item.status, item.system_satisfied);
                     });
                     ui.label(
-                        RichText::new(component_description(&item.manifest.id))
+                        RichText::new(if item.manifest.description.trim().is_empty() {
+                            component_description(&item.manifest.id)
+                        } else {
+                            item.manifest.description.as_str()
+                        })
                             .size(12.0)
                             .color(MUTED),
                     );

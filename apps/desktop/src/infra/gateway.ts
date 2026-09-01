@@ -63,6 +63,8 @@ import type {
   PluginToolWorkbenchResult,
   SystemMetricsSnapshot,
   RuntimePythonPackageCatalog,
+  RuntimeProfileExportResult,
+  RuntimeBrowserConfiguration,
   RuntimeStatus,
   RunDetail,
   StudioCellResult,
@@ -137,7 +139,7 @@ export interface DesktopGateway {
   exportDatabaseQueryResult(result: DatabaseQueryResult, format: DatabaseExportFormat, targetPath: string, tableName: string): Promise<DatabaseExportResult>;
   getDatabaseSchemaContext(): Promise<string>;
   openWorkspaceDatabaseDirectory(): Promise<void>;
-  selectDatabaseSourceFile(engine: "sqlite" | "excel"): Promise<string | null>;
+  selectDatabaseSourceFile(engine: "sqlite" | "excel" | "csv" | "json"): Promise<string | null>;
   listRemoteDatabaseProfiles(): Promise<RemoteDatabaseProfile[]>;
   saveRemoteDatabaseProfile(profile: RemoteDatabaseProfile): Promise<RemoteDatabaseProfile>;
   deleteRemoteDatabaseProfile(profileId: string): Promise<void>;
@@ -216,6 +218,12 @@ export interface DesktopGateway {
   listRuntimePythonPackages(): Promise<RuntimePythonPackageCatalog>;
   installRuntimePythonPackage(requirement: string): Promise<RuntimePythonPackageCatalog>;
   uninstallRuntimePythonPackage(packageName: string): Promise<RuntimePythonPackageCatalog>;
+  uninstallRuntimePythonPackages(packageNames: string[]): Promise<RuntimePythonPackageCatalog>;
+  selectRuntimeProfileExportPath(suggestedName: string): Promise<string | null>;
+  exportRuntimeProfileComponent(targetPath: string, displayName: string, description: string): Promise<RuntimeProfileExportResult>;
+  listRuntimeBrowsers(): Promise<RuntimeBrowserConfiguration>;
+  selectRuntimeBrowser(path?: string, family?: "chromium" | "firefox"): Promise<RuntimeBrowserConfiguration>;
+  selectBrowserExecutable(): Promise<string | null>;
   getSystemMetrics(): Promise<SystemMetricsSnapshot>;
   getPlatformCapabilities(): Promise<PlatformCapabilities>;
   initializeRuntime(): Promise<RuntimeStatus>;
@@ -1151,8 +1159,11 @@ const mockGateway: DesktopGateway = {
     const versions: Record<RemoteDatabaseProfile["engine"], string> = {
       postgresql: "PostgreSQL 17.2",
       mysql: "MySQL 8.4",
+      mariadb: "MariaDB 11.4",
       sqlite: "SQLite 3.49",
       excel: "Excel 工作簿 · 2 个工作表（只读）",
+      csv: "CSV / TSV · 1 张表（只读）",
+      json: "JSON / JSONL · 1 张表（只读）",
     };
     return { serverVersion: versions[profile.engine], latencyMs: 12 };
   },
@@ -1697,6 +1708,7 @@ const mockGateway: DesktopGateway = {
     return {
       state: "ready", bundleVersion: "浏览器预览", pythonVersion: "3.11.9",
       runtimeRoot: "内存预览", environmentRoot: "内存预览", browserExecutable: "内存预览",
+      browserName: "Google Chrome", browserFamily: "chromium", browserAutomationCompatible: true,
       message: "浏览器预览使用模拟运行环境", profileId: "org.drpa.python-runtime",
       profileName: "Python 3.11 Full", features: ["jupyter", "documents", "browser.drissionpage"],
       profiles: [{
@@ -1733,6 +1745,37 @@ const mockGateway: DesktopGateway = {
     catalog.packages = catalog.packages.filter((item) => item.name !== packageName);
     return catalog;
   },
+  async uninstallRuntimePythonPackages(packageNames) {
+    const catalog = await this.listRuntimePythonPackages();
+    return { ...catalog, packages: catalog.packages.filter((item) => !packageNames.includes(item.name)) };
+  },
+  async selectRuntimeProfileExportPath() { return null; },
+  async exportRuntimeProfileComponent(targetPath, displayName, description) {
+    const catalog = await this.listRuntimePythonPackages();
+    return {
+      path: targetPath,
+      componentId: "org.drpa.python-profile.preview",
+      displayName,
+      description,
+      packageCount: catalog.packages.filter((item) => item.removable).length,
+      fileCount: 0,
+      bytes: 0,
+    };
+  },
+  async listRuntimeBrowsers() {
+    return {
+      mode: "auto", activeName: "Google Chrome", activeFamily: "chromium",
+      activeExecutable: "浏览器预览", automationCompatible: true,
+      message: "浏览器预览使用模拟 Chromium。",
+      candidates: [{ id: "preview", name: "Google Chrome", family: "chromium", source: "浏览器预览", executable: "浏览器预览", selected: true, automationCompatible: true }],
+    };
+  },
+  async selectRuntimeBrowser(path, family) {
+    const current = await this.listRuntimeBrowsers();
+    if (!path) return current;
+    return { ...current, mode: "manual", activeExecutable: path, activeFamily: family ?? "chromium", automationCompatible: family !== "firefox" };
+  },
+  async selectBrowserExecutable() { return null; },
   async getSystemMetrics() {
     return {
       sampledAt: Date.now(),
@@ -2164,13 +2207,19 @@ const tauriGateway: DesktopGateway = {
   getDatabaseSchemaContext: () => invoke<string>("get_database_schema_context"),
   openWorkspaceDatabaseDirectory: () => invoke<void>("open_workspace_database_directory"),
   selectDatabaseSourceFile: async (engine) => {
-    const excel = engine === "excel";
+    const fileTypes = {
+      sqlite: { name: "SQLite 数据库", extensions: ["db", "sqlite", "sqlite3"] },
+      excel: { name: "Excel 工作簿", extensions: ["xls", "xlsx", "xlsb", "ods"] },
+      csv: { name: "CSV / TSV 数据", extensions: ["csv", "tsv"] },
+      json: { name: "JSON / JSONL 数据", extensions: ["json", "jsonl", "ndjson"] },
+    } as const;
+    const fileType = fileTypes[engine];
     const selected = await open({
       multiple: false,
       directory: false,
       filters: [{
-        name: excel ? "Excel 工作簿" : "SQLite 数据库",
-        extensions: excel ? ["xls", "xlsx", "xlsb", "ods"] : ["db", "sqlite", "sqlite3"],
+        name: fileType.name,
+        extensions: [...fileType.extensions],
       }],
     });
     return typeof selected === "string" ? selected : null;
@@ -2307,6 +2356,21 @@ const tauriGateway: DesktopGateway = {
   listRuntimePythonPackages: () => invoke<RuntimePythonPackageCatalog>("list_runtime_python_packages"),
   installRuntimePythonPackage: (requirement) => invoke<RuntimePythonPackageCatalog>("install_runtime_python_package", { requirement }),
   uninstallRuntimePythonPackage: (packageName) => invoke<RuntimePythonPackageCatalog>("uninstall_runtime_python_package", { packageName }),
+  uninstallRuntimePythonPackages: (packageNames) => invoke<RuntimePythonPackageCatalog>("uninstall_runtime_python_packages", { packageNames }),
+  selectRuntimeProfileExportPath: async (suggestedName) => {
+    const selected = await import("@tauri-apps/plugin-dialog").then(({ save }) => save({
+      defaultPath: `${suggestedName}.drpac`,
+      filters: [{ name: "DRPA 组件包", extensions: ["drpac"] }],
+    }));
+    return selected ?? null;
+  },
+  exportRuntimeProfileComponent: (targetPath, displayName, description) => invoke<RuntimeProfileExportResult>("export_runtime_profile_component", { targetPath, displayName, description }),
+  listRuntimeBrowsers: () => invoke<RuntimeBrowserConfiguration>("list_runtime_browsers"),
+  selectRuntimeBrowser: (path, family) => invoke<RuntimeBrowserConfiguration>("select_runtime_browser", { path: path ?? null, family: family ?? null }),
+  selectBrowserExecutable: async () => {
+    const selected = await open({ multiple: false, directory: false });
+    return typeof selected === "string" ? selected : null;
+  },
   getSystemMetrics: () => invoke<SystemMetricsSnapshot>("get_system_metrics"),
   getPlatformCapabilities: () => invoke<PlatformCapabilities>("get_platform_capabilities"),
   initializeRuntime: () => invoke<RuntimeStatus>("initialize_runtime"),

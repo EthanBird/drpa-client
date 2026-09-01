@@ -28,6 +28,7 @@ fn real_launcher_starts_the_active_desktop_component_from_install_root() {
             version: "2.1.1".to_owned(),
             platform: current_platform().to_owned(),
             display_name: "Desktop Test".to_owned(),
+            description: String::new(),
             provides: vec!["desktop.ui".to_owned()],
             requires: BTreeMap::new(),
             entrypoints: BTreeMap::from([("desktop".to_owned(), "desktop-test.exe".to_owned())]),

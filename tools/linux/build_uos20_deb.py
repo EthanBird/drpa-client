@@ -343,7 +343,31 @@ export GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0"
 unset GTK_MODULES GTK3_MODULES
 export NO_AT_BRIDGE=1
 export GTK_IM_MODULE_FILE="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache"
-export GTK_IM_MODULE=gtk-im-context-simple
+DRPA_REQUESTED_GTK_IM_MODULE="${{DRPA_GTK_IM_MODULE:-${{GTK_IM_MODULE:-}}}}"
+case "$DRPA_REQUESTED_GTK_IM_MODULE" in
+  fcitx|fcitx5|ibus)
+    DRPA_SYSTEM_GTK_IM_CACHE=/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache
+    if [ -r "$DRPA_SYSTEM_GTK_IM_CACHE" ] && grep -Fq "\\\"$DRPA_REQUESTED_GTK_IM_MODULE\\\"" "$DRPA_SYSTEM_GTK_IM_CACHE"; then
+      export GTK_IM_MODULE="$DRPA_REQUESTED_GTK_IM_MODULE"
+      export GTK_IM_MODULE_FILE="$DRPA_SYSTEM_GTK_IM_CACHE"
+      export GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0:/usr/lib/x86_64-linux-gnu/gtk-3.0"
+    else
+      export GTK_IM_MODULE=xim
+    fi
+    ;;
+  xim)
+    export GTK_IM_MODULE=xim
+    ;;
+  *)
+    export GTK_IM_MODULE=gtk-im-context-simple
+    ;;
+esac
+if [ "$DRPA_REQUESTED_GTK_IM_MODULE" = "fcitx" ] || [ "$DRPA_REQUESTED_GTK_IM_MODULE" = "fcitx5" ]; then
+  export XMODIFIERS="${{XMODIFIERS:-@im=fcitx}}"
+elif [ "$DRPA_REQUESTED_GTK_IM_MODULE" = "ibus" ]; then
+  export XMODIFIERS="${{XMODIFIERS:-@im=ibus}}"
+fi
+unset DRPA_REQUESTED_GTK_IM_MODULE DRPA_SYSTEM_GTK_IM_CACHE
 export GDK_CORE_DEVICE_EVENTS=1
 export GDK_PIXBUF_MODULE_FILE="$APPDIR/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 export GIO_EXTRA_MODULES="$APPDIR/usr/lib/x86_64-linux-gnu/gio/modules"

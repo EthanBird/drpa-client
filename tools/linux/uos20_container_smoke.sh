@@ -175,10 +175,13 @@ test -n "$host_pid"
 runuser -u drpa-smoke -- cat "/proc/$host_pid/environ" \
   | tr '\0' '\n' \
   | sort >"$host_environment"
-grep -Fxq 'GTK_IM_MODULE=gtk-im-context-simple' "$host_environment"
+if ! grep -Eq '^GTK_IM_MODULE=(fcitx|xim)$' "$host_environment"; then
+  cat "$host_environment"
+  exit 1
+fi
 grep -Fxq 'GDK_CORE_DEVICE_EVENTS=1' "$host_environment"
 grep -Fxq 'NO_AT_BRIDGE=1' "$host_environment"
-grep -Fxq 'GTK_PATH=/opt/drpa-next-uos20/usr/lib/x86_64-linux-gnu/gtk-3.0' "$host_environment"
+grep -Eq '^GTK_PATH=/opt/drpa-next-uos20/usr/lib/x86_64-linux-gnu/gtk-3.0(:/usr/lib/x86_64-linux-gnu/gtk-3.0)?$' "$host_environment"
 if grep -Eq '^GTK3?_MODULES=' "$host_environment"; then
   cat "$host_environment"
   exit 1

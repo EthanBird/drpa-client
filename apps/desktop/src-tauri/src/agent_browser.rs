@@ -122,6 +122,20 @@ impl AgentBrowserManager {
         }
         Ok(())
     }
+
+    pub(crate) fn reset_hosts(&self) -> Result<(), String> {
+        let mut bridges = self
+            .bridges
+            .lock()
+            .map_err(|_| "Agent 浏览器 Host 索引已损坏".to_owned())?;
+        for bridge in bridges.values() {
+            if let Ok(mut host) = bridge.lock() {
+                *host = None;
+            }
+        }
+        bridges.clear();
+        Ok(())
+    }
 }
 
 impl AgentBrowserSession {

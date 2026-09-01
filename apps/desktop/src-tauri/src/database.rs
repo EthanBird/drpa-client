@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -29,6 +29,8 @@ const EXCEL_FILE_BYTE_LIMIT: u64 = 100 * 1024 * 1024;
 const EXCEL_SHEET_LIMIT: usize = 100;
 const EXCEL_ROW_LIMIT: usize = 100_000;
 const EXCEL_COLUMN_LIMIT: usize = 512;
+const TABULAR_FILE_BYTE_LIMIT: u64 = 256 * 1024 * 1024;
+const TABULAR_ROW_LIMIT: usize = 1_000_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -260,12 +262,9 @@ pub(crate) async fn agent_get_database_schema(
         let connection = open_external_database_read_only(Path::new(&profile.database))?;
         return schema_context_with_connection(&connection, "SQLite 外部数据库结构");
     }
-    if profile.engine == "excel" {
-        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
-        return schema_context_with_connection(
-            &connection,
-            "Excel 工作簿结构（工作表映射为只读表）",
-        );
+    if is_tabular_file_engine(&profile.engine) {
+        let connection = open_tabular_file_as_sqlite(&profile)?;
+        return schema_context_with_connection(&connection, tabular_schema_label(&profile.engine));
     }
     let pool = connect_remote_database(&profile, password).await?;
     let result = remote_schema_context_with_pool(&profile, &pool).await;
@@ -289,8 +288,8 @@ pub(crate) async fn agent_execute_read_only_query(
         let connection = open_external_database_read_only(Path::new(&profile.database))?;
         return execute_sql_with_connection_mode(&connection, sql, true);
     }
-    if profile.engine == "excel" {
-        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+    if is_tabular_file_engine(&profile.engine) {
+        let connection = open_tabular_file_as_sqlite(&profile)?;
         return execute_sql_with_connection_mode(&connection, sql, true);
     }
     let pool = connect_remote_database(&profile, password).await?;
@@ -342,18 +341,21 @@ pub(crate) async fn test_remote_database_connection(
             latency_ms: started.elapsed().as_millis() as u64,
         });
     }
-    if profile.engine == "excel" {
-        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
-        let sheet_count = list_tables_with_connection(&connection)?.len();
+    if is_tabular_file_engine(&profile.engine) {
+        let connection = open_tabular_file_as_sqlite(&profile)?;
+        let table_count = list_tables_with_connection(&connection)?.len();
         return Ok(RemoteConnectionTest {
-            server_version: format!("Excel 工作簿 · {sheet_count} 个工作表（只读）"),
+            server_version: format!(
+                "{} · {table_count} 张表（只读）",
+                database_engine_name(&profile.engine)
+            ),
             latency_ms: started.elapsed().as_millis() as u64,
         });
     }
     let pool = connect_remote_database(&profile, &password).await?;
     let version_sql = match profile.engine.as_str() {
         "postgresql" => "SELECT version()",
-        "mysql" => "SELECT VERSION()",
+        "mysql" | "mariadb" => "SELECT VERSION()",
         _ => return Err("远程数据库类型无效".to_owned()),
     };
     let version = sqlx::query_scalar::<_, String>(version_sql)
@@ -377,8 +379,8 @@ pub(crate) async fn list_remote_database_tables(
     if profile.engine == "sqlite" {
         return list_tables_external(Path::new(&profile.database));
     }
-    if profile.engine == "excel" {
-        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+    if is_tabular_file_engine(&profile.engine) {
+        let connection = open_tabular_file_as_sqlite(&profile)?;
         return list_tables_with_connection(&connection);
     }
     let pool = connect_remote_database(&profile, &password).await?;
@@ -398,8 +400,8 @@ pub(crate) async fn describe_remote_database_table(
     if profile.engine == "sqlite" {
         return describe_table_external(Path::new(&profile.database), &table_name);
     }
-    if profile.engine == "excel" {
-        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+    if is_tabular_file_engine(&profile.engine) {
+        let connection = open_tabular_file_as_sqlite(&profile)?;
         return describe_table_with_connection(&connection, &table_name);
     }
     let pool = connect_remote_database(&profile, &password).await?;
@@ -422,17 +424,18 @@ pub(crate) async fn execute_remote_database_sql(
     if profile.engine == "sqlite" {
         return execute_sql_external_window(Path::new(&profile.database), &sql, window);
     }
-    if profile.engine == "excel" {
+    if is_tabular_file_engine(&profile.engine) {
         let statement_type = first_sql_keyword(&sql);
         if !matches!(
             statement_type.as_str(),
             "SELECT" | "WITH" | "EXPLAIN" | "PRAGMA"
         ) {
-            return Err(
-                "Excel 工作簿是只读数据源，仅支持 SELECT、WITH、EXPLAIN 或 PRAGMA 查询".to_owned(),
-            );
+            return Err(format!(
+                "{} 是只读数据源，仅支持 SELECT、WITH、EXPLAIN 或 PRAGMA 查询",
+                database_engine_name(&profile.engine)
+            ));
         }
-        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
+        let connection = open_tabular_file_as_sqlite(&profile)?;
         return execute_sql_with_connection_window(&connection, &sql, window);
     }
     let pool = connect_remote_database(&profile, &password).await?;
@@ -451,12 +454,9 @@ pub(crate) async fn get_remote_database_schema_context(
     if profile.engine == "sqlite" {
         return schema_context_external(Path::new(&profile.database), "SQLite 外部数据库结构");
     }
-    if profile.engine == "excel" {
-        let connection = open_excel_as_sqlite(Path::new(&profile.database))?;
-        return schema_context_with_connection(
-            &connection,
-            "Excel 工作簿结构（工作表映射为只读表）",
-        );
+    if is_tabular_file_engine(&profile.engine) {
+        let connection = open_tabular_file_as_sqlite(&profile)?;
+        return schema_context_with_connection(&connection, tabular_schema_label(&profile.engine));
     }
     let pool = connect_remote_database(&profile, &password).await?;
     let result = remote_schema_context_with_pool(&profile, &pool).await;
@@ -536,11 +536,14 @@ fn validate_remote_profile(profile: &RemoteDatabaseProfile) -> Result<(), String
     }
     if !matches!(
         profile.engine.as_str(),
-        "postgresql" | "mysql" | "sqlite" | "excel"
+        "postgresql" | "mysql" | "mariadb" | "sqlite" | "excel" | "csv" | "json"
     ) {
-        return Err("仅支持 PostgreSQL、MySQL、SQLite 或 Excel 数据源".to_owned());
+        return Err(
+            "仅支持 PostgreSQL、MySQL、MariaDB、SQLite、Excel、CSV/TSV 或 JSON/JSONL 数据源"
+                .to_owned(),
+        );
     }
-    if matches!(profile.engine.as_str(), "sqlite" | "excel") {
+    if profile.engine == "sqlite" || is_tabular_file_engine(&profile.engine) {
         let source = profile.database.trim();
         if source.is_empty() || source.len() > 32_767 {
             return Err("数据源文件路径无效".to_owned());
@@ -550,16 +553,20 @@ fn validate_remote_profile(profile: &RemoteDatabaseProfile) -> Result<(), String
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let valid_extension = if profile.engine == "sqlite" {
-            matches!(extension.as_str(), "db" | "sqlite" | "sqlite3")
-        } else {
-            matches!(extension.as_str(), "xls" | "xlsx" | "xlsb" | "ods")
+        let valid_extension = match profile.engine.as_str() {
+            "sqlite" => matches!(extension.as_str(), "db" | "sqlite" | "sqlite3"),
+            "excel" => matches!(extension.as_str(), "xls" | "xlsx" | "xlsb" | "ods"),
+            "csv" => matches!(extension.as_str(), "csv" | "tsv"),
+            "json" => matches!(extension.as_str(), "json" | "jsonl" | "ndjson"),
+            _ => false,
         };
         if !valid_extension {
-            return Err(if profile.engine == "sqlite" {
-                "SQLite 文件应使用 .db、.sqlite 或 .sqlite3 扩展名".to_owned()
-            } else {
-                "工作簿应使用 .xls、.xlsx、.xlsb 或 .ods 扩展名".to_owned()
+            return Err(match profile.engine.as_str() {
+                "sqlite" => "SQLite 文件应使用 .db、.sqlite 或 .sqlite3 扩展名".to_owned(),
+                "excel" => "工作簿应使用 .xls、.xlsx、.xlsb 或 .ods 扩展名".to_owned(),
+                "csv" => "分隔文本应使用 .csv 或 .tsv 扩展名".to_owned(),
+                "json" => "JSON 数据应使用 .json、.jsonl 或 .ndjson 扩展名".to_owned(),
+                _ => unreachable!(),
             });
         }
         return Ok(());
@@ -593,7 +600,7 @@ fn remote_connection_url(
     validate_remote_profile(profile)?;
     let scheme = match profile.engine.as_str() {
         "postgresql" => "postgresql",
-        "mysql" => "mysql",
+        "mysql" | "mariadb" => "mysql",
         _ => return Err("远程数据库类型无效".to_owned()),
     };
     let mut url = Url::parse(&format!("{scheme}://localhost"))
@@ -609,7 +616,7 @@ fn remote_connection_url(
     url.set_path(&format!("/{}", profile.database));
     let (key, value) = match profile.engine.as_str() {
         "postgresql" => ("sslmode", profile.tls_mode.as_str()),
-        "mysql" => (
+        "mysql" | "mariadb" => (
             "ssl-mode",
             match profile.tls_mode.as_str() {
                 "disable" => "disabled",
@@ -649,7 +656,7 @@ async fn list_remote_tables_with_pool(
              WHERE table_schema NOT IN ('pg_catalog', 'information_schema') \
              ORDER BY table_schema, table_name LIMIT 2000"
         }
-        "mysql" => {
+        "mysql" | "mariadb" => {
             "SELECT table_name AS qualified_name, table_type \
              FROM information_schema.tables WHERE table_schema = DATABASE() \
              ORDER BY table_name LIMIT 2000"
@@ -699,7 +706,7 @@ async fn describe_remote_table_with_pool(
              FROM information_schema.columns \
              WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position"
         }
-        "mysql" => {
+        "mysql" | "mariadb" => {
             "SELECT CAST(ordinal_position AS SIGNED) AS ordinal_position, column_name, column_type AS data_type, is_nullable, column_default \
              FROM information_schema.columns \
              WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position"
@@ -765,11 +772,7 @@ async fn remote_schema_context_with_pool(
     let tables = list_remote_tables_with_pool(profile, pool).await?;
     let mut output = format!(
         "-- {} 数据库结构：{} / {}\n",
-        if profile.engine == "postgresql" {
-            "PostgreSQL"
-        } else {
-            "MySQL"
-        },
+        database_engine_name(&profile.engine),
         profile.name,
         profile.database
     );
@@ -811,7 +814,7 @@ async fn remote_schema_context_with_pool(
 }
 
 fn quote_remote_identifier(profile: &RemoteDatabaseProfile, value: &str) -> String {
-    if profile.engine == "mysql" {
+    if matches!(profile.engine.as_str(), "mysql" | "mariadb") {
         format!("`{}`", value.replace('`', "``"))
     } else {
         format!("\"{}\"", value.replace('"', "\"\""))
@@ -928,7 +931,7 @@ async fn execute_remote_read_only_with_pool(
         .map_err(|error| format!("获取只读数据库连接失败：{error}"))?;
     let begin = match profile.engine.as_str() {
         "postgresql" => "BEGIN READ ONLY",
-        "mysql" => "START TRANSACTION READ ONLY",
+        "mysql" | "mariadb" => "START TRANSACTION READ ONLY",
         _ => return Err("远程数据库类型无效".to_owned()),
     };
     sqlx::query(begin)
@@ -1517,6 +1520,393 @@ fn open_excel_as_sqlite(path: &Path) -> Result<Connection, String> {
         .commit()
         .map_err(|error| format!("提交工作簿查询环境失败：{error}"))?;
     Ok(connection)
+}
+
+fn is_tabular_file_engine(engine: &str) -> bool {
+    matches!(engine, "excel" | "csv" | "json")
+}
+
+fn database_engine_name(engine: &str) -> &'static str {
+    match engine {
+        "postgresql" => "PostgreSQL",
+        "mysql" => "MySQL",
+        "mariadb" => "MariaDB",
+        "sqlite" => "SQLite",
+        "excel" => "Excel 工作簿",
+        "csv" => "CSV / TSV",
+        "json" => "JSON / JSONL",
+        _ => "数据源",
+    }
+}
+
+fn tabular_schema_label(engine: &str) -> &'static str {
+    match engine {
+        "excel" => "Excel 工作簿结构（工作表映射为只读表）",
+        "csv" => "CSV / TSV 结构（文件映射为只读表）",
+        "json" => "JSON / JSONL 结构（对象字段映射为只读表）",
+        _ => "文件数据源结构",
+    }
+}
+
+fn open_tabular_file_as_sqlite(profile: &RemoteDatabaseProfile) -> Result<Connection, String> {
+    let path = Path::new(&profile.database);
+    match profile.engine.as_str() {
+        "excel" => open_excel_as_sqlite(path),
+        "csv" => open_delimited_as_sqlite(path),
+        "json" => open_json_as_sqlite(path),
+        _ => Err("不是可映射为查询表的文件数据源".to_owned()),
+    }
+}
+
+fn validate_tabular_file(path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("读取数据文件失败（{}）：{error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("数据文件不存在：{}", path.display()));
+    }
+    if metadata.len() > TABULAR_FILE_BYTE_LIMIT {
+        return Err(format!(
+            "数据文件超过 {} MB 的读取限制",
+            TABULAR_FILE_BYTE_LIMIT / 1024 / 1024
+        ));
+    }
+    Ok(())
+}
+
+fn open_delimited_as_sqlite(path: &Path) -> Result<Connection, String> {
+    validate_tabular_file(path)?;
+    let delimiter = if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("tsv"))
+    {
+        b'\t'
+    } else {
+        b','
+    };
+    let bytes = fs::read(path).map_err(|error| format!("读取分隔文本失败：{error}"))?;
+    let source = std::str::from_utf8(&bytes)
+        .map_err(|error| format!("分隔文本不是 UTF-8 编码：{error}"))?
+        .trim_start_matches('\u{feff}');
+    let mut records = parse_delimited_records(source, char::from(delimiter))?;
+    if records.is_empty() {
+        return Err("分隔文本为空".to_owned());
+    }
+    let headers = unique_text_headers(records.remove(0));
+    if headers.is_empty() || headers.len() > EXCEL_COLUMN_LIMIT {
+        return Err(format!("分隔文本字段数应为 1 到 {EXCEL_COLUMN_LIMIT}"));
+    }
+    if records.len() > TABULAR_ROW_LIMIT {
+        return Err(format!("分隔文本超过 {TABULAR_ROW_LIMIT} 行的读取限制"));
+    }
+    let rows = records
+        .into_iter()
+        .map(|record| {
+            (0..headers.len())
+                .map(|index| record.get(index).cloned().unwrap_or_default())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let types = infer_text_column_types(&rows, headers.len());
+    let values = rows
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .enumerate()
+                .map(|(index, value)| text_value(value, types[index]))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    create_tabular_connection(path, &headers, &types, values)
+}
+
+fn parse_delimited_records(source: &str, delimiter: char) -> Result<Vec<Vec<String>>, String> {
+    let mut records = Vec::new();
+    let mut record = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut characters = source.chars().peekable();
+    while let Some(character) = characters.next() {
+        if quoted {
+            if character == '"' {
+                if characters.peek() == Some(&'"') {
+                    characters.next();
+                    field.push('"');
+                } else {
+                    quoted = false;
+                }
+            } else {
+                field.push(character);
+            }
+            continue;
+        }
+        match character {
+            '"' if field.is_empty() => quoted = true,
+            value if value == delimiter => {
+                record.push(std::mem::take(&mut field));
+            }
+            '\r' if characters.peek() == Some(&'\n') => {
+                characters.next();
+                record.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut record));
+            }
+            '\n' => {
+                record.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut record));
+            }
+            value => field.push(value),
+        }
+    }
+    if quoted {
+        return Err("分隔文本包含未闭合的引号字段".to_owned());
+    }
+    if !field.is_empty() || !record.is_empty() {
+        record.push(field);
+        records.push(record);
+    }
+    while records
+        .last()
+        .is_some_and(|record| record.iter().all(String::is_empty))
+    {
+        records.pop();
+    }
+    Ok(records)
+}
+
+fn open_json_as_sqlite(path: &Path) -> Result<Connection, String> {
+    validate_tabular_file(path)?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let records = if matches!(extension.as_str(), "jsonl" | "ndjson") {
+        let file = fs::File::open(path).map_err(|error| format!("打开 JSONL 失败：{error}"))?;
+        let mut records = Vec::new();
+        for (index, line) in BufReader::new(file).lines().enumerate() {
+            let line =
+                line.map_err(|error| format!("读取 JSONL 第 {} 行失败：{error}", index + 1))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            if records.len() >= TABULAR_ROW_LIMIT {
+                return Err(format!("JSONL 超过 {TABULAR_ROW_LIMIT} 行的读取限制"));
+            }
+            records.push(
+                serde_json::from_str::<serde_json::Value>(&line)
+                    .map_err(|error| format!("解析 JSONL 第 {} 行失败：{error}", index + 1))?,
+            );
+        }
+        records
+    } else {
+        let value: serde_json::Value = serde_json::from_slice(
+            &fs::read(path).map_err(|error| format!("读取 JSON 失败：{error}"))?,
+        )
+        .map_err(|error| format!("解析 JSON 失败：{error}"))?;
+        match value {
+            serde_json::Value::Array(records) => records,
+            value => vec![value],
+        }
+    };
+    if records.len() > TABULAR_ROW_LIMIT {
+        return Err(format!("JSON 数据超过 {TABULAR_ROW_LIMIT} 行的读取限制"));
+    }
+    let mut headers = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for record in &records {
+        if let serde_json::Value::Object(object) = record {
+            for key in object.keys() {
+                if seen.insert(key.to_ascii_lowercase()) {
+                    headers.push(key.clone());
+                    if headers.len() > EXCEL_COLUMN_LIMIT {
+                        return Err(format!("JSON 字段数超过 {EXCEL_COLUMN_LIMIT} 个的读取限制"));
+                    }
+                }
+            }
+        } else if seen.insert("value".to_owned()) {
+            headers.push("value".to_owned());
+        }
+    }
+    if headers.is_empty() {
+        return Err("JSON 数据中没有可映射的记录".to_owned());
+    }
+    let types = infer_json_column_types(&records, &headers);
+    let values = records
+        .iter()
+        .map(|record| {
+            headers
+                .iter()
+                .map(|header| match record {
+                    serde_json::Value::Object(object) => {
+                        object.get(header).unwrap_or(&serde_json::Value::Null)
+                    }
+                    value if header == "value" => value,
+                    _ => &serde_json::Value::Null,
+                })
+                .map(json_sqlite_value)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    create_tabular_connection(path, &headers, &types, values)
+}
+
+fn create_tabular_connection(
+    path: &Path,
+    headers: &[String],
+    types: &[&str],
+    rows: Vec<Vec<SqliteValue>>,
+) -> Result<Connection, String> {
+    let table_name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("data");
+    let mut connection =
+        Connection::open_in_memory().map_err(|error| format!("创建文件查询环境失败：{error}"))?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("初始化文件查询环境失败：{error}"))?;
+    let definitions = headers
+        .iter()
+        .zip(types.iter())
+        .map(|(name, data_type)| format!("{} {data_type}", quote_sqlite_identifier(name)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    transaction
+        .execute(
+            &format!(
+                "CREATE TABLE {} ({definitions})",
+                quote_sqlite_identifier(table_name)
+            ),
+            [],
+        )
+        .map_err(|error| format!("创建文件映射表失败：{error}"))?;
+    let placeholders = (1..=headers.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut insert = transaction
+        .prepare(&format!(
+            "INSERT INTO {} VALUES ({placeholders})",
+            quote_sqlite_identifier(table_name)
+        ))
+        .map_err(|error| format!("准备导入文件数据失败：{error}"))?;
+    for row in rows {
+        insert
+            .execute(params_from_iter(row))
+            .map_err(|error| format!("导入文件数据失败：{error}"))?;
+    }
+    drop(insert);
+    transaction
+        .commit()
+        .map_err(|error| format!("提交文件查询环境失败：{error}"))?;
+    Ok(connection)
+}
+
+fn unique_text_headers(headers: Vec<String>) -> Vec<String> {
+    let mut used = std::collections::HashSet::new();
+    headers
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let base = if value.trim().is_empty() {
+                format!("column_{}", index + 1)
+            } else {
+                value
+            };
+            let mut candidate = base.clone();
+            let mut suffix = 2;
+            while !used.insert(candidate.to_ascii_lowercase()) {
+                candidate = format!("{base}_{suffix}");
+                suffix += 1;
+            }
+            candidate
+        })
+        .collect()
+}
+
+fn infer_text_column_types(rows: &[Vec<String>], column_count: usize) -> Vec<&'static str> {
+    let mut types = vec!["INTEGER"; column_count];
+    for row in rows.iter().take(1_000) {
+        for (index, value) in row.iter().enumerate() {
+            if value.trim().is_empty() {
+                continue;
+            }
+            if value.parse::<i64>().is_ok() && types[index] == "INTEGER" {
+                continue;
+            }
+            if value.parse::<f64>().is_ok() && matches!(types[index], "INTEGER" | "REAL") {
+                types[index] = "REAL";
+            } else {
+                types[index] = "TEXT";
+            }
+        }
+    }
+    types
+}
+
+fn text_value(value: String, data_type: &str) -> SqliteValue {
+    if value.trim().is_empty() {
+        SqliteValue::Null
+    } else if data_type == "INTEGER" {
+        value
+            .parse::<i64>()
+            .map(SqliteValue::Integer)
+            .unwrap_or(SqliteValue::Text(value))
+    } else if data_type == "REAL" {
+        value
+            .parse::<f64>()
+            .map(SqliteValue::Real)
+            .unwrap_or(SqliteValue::Text(value))
+    } else {
+        SqliteValue::Text(value)
+    }
+}
+
+fn infer_json_column_types(records: &[serde_json::Value], headers: &[String]) -> Vec<&'static str> {
+    headers
+        .iter()
+        .map(|header| {
+            let mut kind = "INTEGER";
+            for value in records.iter().take(1_000).map(|record| match record {
+                serde_json::Value::Object(object) => {
+                    object.get(header).unwrap_or(&serde_json::Value::Null)
+                }
+                value if header == "value" => value,
+                _ => &serde_json::Value::Null,
+            }) {
+                kind = match value {
+                    serde_json::Value::Null
+                    | serde_json::Value::Bool(_)
+                    | serde_json::Value::Number(_)
+                        if kind == "INTEGER" =>
+                    {
+                        kind
+                    }
+                    serde_json::Value::Number(_) if kind == "REAL" => kind,
+                    serde_json::Value::Null => kind,
+                    _ => "TEXT",
+                };
+                if kind == "TEXT" {
+                    break;
+                }
+            }
+            kind
+        })
+        .collect()
+}
+
+fn json_sqlite_value(value: &serde_json::Value) -> SqliteValue {
+    match value {
+        serde_json::Value::Null => SqliteValue::Null,
+        serde_json::Value::Bool(value) => SqliteValue::Integer(i64::from(*value)),
+        serde_json::Value::Number(value) if value.is_i64() => {
+            SqliteValue::Integer(value.as_i64().unwrap_or_default())
+        }
+        serde_json::Value::Number(value) => SqliteValue::Real(value.as_f64().unwrap_or_default()),
+        serde_json::Value::String(value) => SqliteValue::Text(value.clone()),
+        value => SqliteValue::Text(value.to_string()),
+    }
 }
 
 fn excel_headers(row: &[Data], column_count: usize) -> Vec<String> {
@@ -2332,6 +2722,48 @@ mod tests {
             tls_mode: "prefer".to_owned(),
         };
         validate_remote_profile(&profile).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn maps_csv_tsv_and_json_files_to_read_only_query_tables() {
+        let root = std::env::temp_dir().join(format!("drpa-tabular-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let csv_path = root.join("orders.csv");
+        fs::write(
+            &csv_path,
+            "id,name,note\n1,alpha,\"line, one\"\n2,beta,\"two \"\"quotes\"\"\"\n",
+        )
+        .unwrap();
+        let csv = open_delimited_as_sqlite(&csv_path).unwrap();
+        let result =
+            execute_sql_with_connection(&csv, "SELECT id, name, note FROM orders ORDER BY id")
+                .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], 1);
+        assert_eq!(result.rows[0][2], "line, one");
+        assert_eq!(result.rows[1][2], "two \"quotes\"");
+
+        let tsv_path = root.join("metrics.tsv");
+        fs::write(&tsv_path, "name\tvalue\norders\t42\n").unwrap();
+        let tsv = open_delimited_as_sqlite(&tsv_path).unwrap();
+        let result = execute_sql_with_connection(&tsv, "SELECT value FROM metrics").unwrap();
+        assert_eq!(result.rows[0][0], 42);
+
+        let json_path = root.join("events.jsonl");
+        fs::write(
+            &json_path,
+            "{\"id\":1,\"name\":\"created\"}\n{\"id\":2,\"name\":\"finished\",\"ok\":true}\n",
+        )
+        .unwrap();
+        let json = open_json_as_sqlite(&json_path).unwrap();
+        let result =
+            execute_sql_with_connection(&json, "SELECT id, name, ok FROM events ORDER BY id")
+                .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[1][1], "finished");
+        assert_eq!(result.rows[1][2], 1);
+
         let _ = fs::remove_dir_all(root);
     }
 

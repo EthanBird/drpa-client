@@ -46,6 +46,10 @@ class ModularUosBuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workspace = root / "workspace"
+            icon_root = workspace / "apps/desktop/src-tauri/icons"
+            icon_root.mkdir(parents=True)
+            for name in ("32x32.png", "128x128.png", "128x128@2x.png"):
+                (icon_root / name).write_bytes(b"png")
             binaries = root / "binaries"
             binaries.mkdir(parents=True)
             for name in ("drpa", "drpa-launcher", "drpa-component-installer"):
@@ -73,6 +77,16 @@ class ModularUosBuildTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn("Exec=/usr/bin/drpa-next", desktop)
+            self.assertIn("Icon=drpa-next", desktop)
+            self.assertIn("StartupWMClass=drpa-desktop", desktop)
+            for icon_name in ("drpa-next.png", "drpa-desktop.png"):
+                self.assertTrue(
+                    (
+                        extracted
+                        / "usr/share/icons/hicolor/128x128/apps"
+                        / icon_name
+                    ).is_file()
+                )
             control = subprocess.run(
                 ["dpkg-deb", "-f", str(output), "Package", "Depends"],
                 check=True,
@@ -154,6 +168,9 @@ class ModularUosBuildTests(unittest.TestCase):
             )
             apprun = (root / "AppRun").read_text(encoding="utf-8")
             self.assertIn("LIBGL_DRIVERS_PATH", apprun)
+            self.assertIn("DRPA_GTK_IM_MODULE", apprun)
+            self.assertIn("DRPA_SYSTEM_GTK_IM_CACHE", apprun)
+            self.assertIn("GTK_IM_MODULE=xim", apprun)
             self.assertEqual(provenance["legacyCompatibilityLinks"], ["usr", "uos-runtime"])
             self.assertEqual(provenance["interpreterElfCount"], 0)
 

@@ -41,10 +41,16 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn('LIBGL_DRIVERS_PATH="$APPDIR/uos-runtime/dri"', source)
         self.assertIn("__EGL_VENDOR_LIBRARY_FILENAMES=", source)
         self.assertIn('GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0"', source)
-        self.assertNotIn('gtk-3.0:/usr/lib', source)
+        self.assertIn(
+            'GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0:/usr/lib/x86_64-linux-gnu/gtk-3.0"',
+            source,
+        )
         self.assertIn("unset GTK_MODULES GTK3_MODULES", source)
         self.assertIn("NO_AT_BRIDGE=1", source)
-        self.assertIn("GTK_IM_MODULE=gtk-im-context-simple", source)
+        self.assertIn("DRPA_GTK_IM_MODULE", source)
+        self.assertIn("DRPA_SYSTEM_GTK_IM_CACHE", source)
+        self.assertIn("GTK_IM_MODULE=xim", source)
+        self.assertIn('export GTK_IM_MODULE="$DRPA_REQUESTED_GTK_IM_MODULE"', source)
         self.assertIn("GDK_CORE_DEVICE_EVENTS=1", source)
 
     def test_container_smoke_runs_the_builtin_dify2api_service(self) -> None:
@@ -67,7 +73,8 @@ class Uos20PackagePolicyTests(unittest.TestCase):
         self.assertIn("drpa-uos20-host-environment.txt", source)
         self.assertIn('runuser -u drpa-smoke -- cat "/proc/$host_pid/environ"', source)
         self.assertIn('[ -n "$dify_sidecar" ] && [ -x "$dify_sidecar" ]', source)
-        self.assertIn("GTK_IM_MODULE=gtk-im-context-simple", source)
+        self.assertIn("GTK_IM_MODULE=fcitx", source)
+        self.assertIn("DRPA_GTK_IM_MODULE", launcher_source())
         self.assertIn("GDK_CORE_DEVICE_EVENTS=1", source)
         self.assertIn("NO_AT_BRIDGE=1", source)
 

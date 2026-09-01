@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-cli"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "drpa-host",
  "drpa-install",
@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-component-installer"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "drpa-install",
  "eframe",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-desktop"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -1308,7 +1308,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-host"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "chrono",
  "drpa-package",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-install"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "hex",
  "libc",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-kernel"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "drpa-host",
  "drpa-install",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-launcher"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "drpa-install",
  "tempfile",
@@ -1371,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-package"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "drpa-protocol"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "serde",
  "serde_json",

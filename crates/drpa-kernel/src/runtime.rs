@@ -786,6 +786,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 platform: current_platform().to_owned(),
                 display_name: name.to_owned(),
+                description: String::new(),
                 provides: vec!["runtime.python".to_owned()],
                 requires: BTreeMap::new(),
                 entrypoints: BTreeMap::from([("python".to_owned(), "python".to_owned())]),

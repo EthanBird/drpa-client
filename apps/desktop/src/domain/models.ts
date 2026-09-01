@@ -298,7 +298,7 @@ export interface VaultCredentialInput {
 export interface RemoteDatabaseProfile {
   id: string;
   name: string;
-  engine: "postgresql" | "mysql" | "sqlite" | "excel";
+  engine: "postgresql" | "mysql" | "mariadb" | "sqlite" | "excel" | "csv" | "json";
   host: string;
   port: number;
   database: string;
@@ -509,6 +509,9 @@ export interface RuntimeStatus {
   runtimeRoot: string;
   environmentRoot: string;
   browserExecutable: string;
+  browserName: string;
+  browserFamily: "chromium" | "firefox" | "none" | string;
+  browserAutomationCompatible: boolean;
   message: string;
   profileId: string;
   profileName: string;
@@ -547,6 +550,36 @@ export interface RuntimePythonPackageCatalog {
   backendPath: string;
   overlayRoot: string;
   packages: RuntimePythonPackage[];
+}
+
+export interface RuntimeProfileExportResult {
+  path: string;
+  componentId: string;
+  displayName: string;
+  description: string;
+  packageCount: number;
+  fileCount: number;
+  bytes: number;
+}
+
+export interface RuntimeBrowserCandidate {
+  id: string;
+  name: string;
+  family: "chromium" | "firefox" | string;
+  source: string;
+  executable: string;
+  selected: boolean;
+  automationCompatible: boolean;
+}
+
+export interface RuntimeBrowserConfiguration {
+  mode: "auto" | "manual" | string;
+  activeName: string;
+  activeFamily: "chromium" | "firefox" | "none" | string;
+  activeExecutable: string;
+  automationCompatible: boolean;
+  message: string;
+  candidates: RuntimeBrowserCandidate[];
 }
 
 export interface SystemResourceMetric {

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Upload the verified Linux/UOS assets to desktop-v2.1.1
+        description: Upload the verified Linux/UOS assets to desktop-v3.0.1
         required: true
         default: false
         type: boolean
@@ -40,10 +40,10 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      DRPA_VERSION: 2.1.1
-      DRPA_DEB_VERSION: 2.1.1-1
-      DRPA_UOS20_DEB_VERSION: 2.1.1-1+uos20.4
-      DRPA_RELEASE_TAG: desktop-v2.1.1
+      DRPA_VERSION: 3.0.1
+      DRPA_DEB_VERSION: 3.0.1-1
+      DRPA_UOS20_DEB_VERSION: 3.0.1-1+uos20.1
+      DRPA_RELEASE_TAG: desktop-v3.0.1
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux desktop and smoke-test libraries

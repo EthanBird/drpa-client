@@ -418,7 +418,7 @@ describe("DRPA Next desktop shell", () => {
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(await screen.findByRole("heading", { name: "关于 DRPA Next" })).toBeVisible();
-    expect(screen.getByText("v3.0.0")).toBeVisible();
+    expect(screen.getByText("v3.0.1")).toBeVisible();
     const darkTheme = await screen.findByRole("radio", { name: "暗色" });
     fireEvent.click(darkTheme);
 
@@ -609,6 +609,9 @@ describe("DRPA Next desktop shell", () => {
       runtimeRoot: "runtime",
       environmentRoot: "environment",
       browserExecutable: "browser",
+      browserName: "Google Chrome",
+      browserFamily: "chromium",
+      browserAutomationCompatible: true,
       message: "ready",
       profileId: "org.drpa.python-runtime",
       profileName: "Python 3.11 Full",

@@ -74,14 +74,15 @@ def install_icons(workspace: Path, package_root: Path) -> None:
         source = icon_root / name
         if not source.is_file():
             continue
-        target = (
-            package_root
-            / "usr/share/icons/hicolor"
-            / (str(size) + "x" + str(size))
-            / "apps/drpa-next.png"
-        )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(source), str(target))
+        for icon_name in ("drpa-next.png", "drpa-desktop.png"):
+            target = (
+                package_root
+                / "usr/share/icons/hicolor"
+                / (str(size) + "x" + str(size))
+                / ("apps/" + icon_name)
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(source), str(target))
 
 
 def build_core_deb(
@@ -136,6 +137,8 @@ Comment[zh_CN]=数据 · 运行 · 流程 · AI
 Exec=/usr/bin/drpa-next
 TryExec=/usr/bin/drpa-next
 Icon=drpa-next
+StartupWMClass=drpa-desktop
+X-GNOME-WMClass=drpa-desktop
 Terminal=false
 Categories=Development;Utility;
 StartupNotify=true
@@ -268,6 +271,40 @@ GALLIUM_DRIVER=${GALLIUM_DRIVER:-llvmpipe}
 EGL_PLATFORM=${EGL_PLATFORM:-x11}
 LIBGL_DRIVERS_PATH=${LIBGL_DRIVERS_PATH:-$this_dir/uos-runtime/dri}
 export LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER EGL_PLATFORM LIBGL_DRIVERS_PATH
+
+# Preserve the DDE session input method. The old package forced GTK's simple
+# context, which disabled Chinese composition even while Fcitx was running.
+DRPA_REQUESTED_GTK_IM_MODULE=${DRPA_GTK_IM_MODULE:-${GTK_IM_MODULE:-}}
+case "$DRPA_REQUESTED_GTK_IM_MODULE" in
+  fcitx|fcitx5|ibus)
+    DRPA_SYSTEM_GTK_IM_CACHE=/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache
+    if [ -r "$DRPA_SYSTEM_GTK_IM_CACHE" ] && grep -Fq "\"$DRPA_REQUESTED_GTK_IM_MODULE\"" "$DRPA_SYSTEM_GTK_IM_CACHE"; then
+      GTK_IM_MODULE=$DRPA_REQUESTED_GTK_IM_MODULE
+      GTK_IM_MODULE_FILE=$DRPA_SYSTEM_GTK_IM_CACHE
+      GTK_PATH="$this_dir/usr/lib/x86_64-linux-gnu/gtk-3.0:/usr/lib/x86_64-linux-gnu/gtk-3.0"
+      export GTK_IM_MODULE GTK_IM_MODULE_FILE GTK_PATH
+    else
+      GTK_IM_MODULE=xim
+      export GTK_IM_MODULE
+    fi
+    ;;
+  xim)
+    GTK_IM_MODULE=xim
+    export GTK_IM_MODULE
+    ;;
+  *)
+    GTK_IM_MODULE=gtk-im-context-simple
+    export GTK_IM_MODULE
+    ;;
+esac
+if [ "$DRPA_REQUESTED_GTK_IM_MODULE" = fcitx ] || [ "$DRPA_REQUESTED_GTK_IM_MODULE" = fcitx5 ]; then
+  XMODIFIERS=${XMODIFIERS:-@im=fcitx}
+  export XMODIFIERS
+elif [ "$DRPA_REQUESTED_GTK_IM_MODULE" = ibus ]; then
+  XMODIFIERS=${XMODIFIERS:-@im=ibus}
+  export XMODIFIERS
+fi
+unset DRPA_REQUESTED_GTK_IM_MODULE DRPA_SYSTEM_GTK_IM_CACHE
 '''
     apprun.write_text(source.replace(anchor, anchor + environment, 1), encoding="utf-8")
 
@@ -574,8 +611,8 @@ def main() -> int:
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
-    parser.add_argument("--version", default="2.1.1")
-    parser.add_argument("--package-version", default="2.1.1-1+uos20.modular1")
+    parser.add_argument("--version", default="3.0.1")
+    parser.add_argument("--package-version", default="3.0.1-1+uos20.modular1")
     parser.add_argument("--core-only", action="store_true")
     parser.add_argument(
         "--manifest-only",

@@ -741,7 +741,7 @@ function WidgetInspector({ widget, dataset, profiles, password, onPassword, onCh
 }) {
   const source = widget.source;
   const selectedProfile = source?.kind === "database" ? profiles.find((profile) => profile.id === source.profileId) : undefined;
-  const needsPassword = selectedProfile && !["sqlite", "excel"].includes(selectedProfile.engine);
+  const needsPassword = selectedProfile && !["sqlite", "excel", "csv", "json"].includes(selectedProfile.engine);
   const update = <K extends keyof DashboardWidget>(key: K, value: DashboardWidget[K]) => onChange((current) => ({ ...current, [key]: value }));
   const updateEncoding = (key: keyof DashboardWidget["encoding"], value: string) => onChange((current) => ({ ...current, encoding: { ...current.encoding, [key]: value } }));
   const updateOptions = <K extends keyof DashboardWidget["options"]>(key: K, value: DashboardWidget["options"][K]) => onChange((current) => ({ ...current, options: { ...current.options, [key]: value } }));

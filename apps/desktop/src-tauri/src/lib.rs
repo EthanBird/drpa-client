@@ -18,7 +18,6 @@ use base64::Engine as _;
 use drpa_host::{HostState, RunLaunch};
 use drpa_install::{
     BrowserSource, ComponentLeaseGuard, ComponentManifest, ComponentSelection, InstallLayout,
-    resolve_browser,
 };
 use drpa_package::{Entrypoint, PackageManifest, safe_relative_path, validate_package_id};
 use drpa_protocol::{
@@ -55,6 +54,7 @@ mod native_splash;
 mod plugins;
 mod provider;
 mod python_flow;
+mod runtime_browsers;
 mod runtime_packages;
 mod system_metrics;
 mod workspaces;
@@ -2449,6 +2449,9 @@ struct RuntimeStatus {
     runtime_root: String,
     environment_root: String,
     browser_executable: String,
+    browser_name: String,
+    browser_family: String,
+    browser_automation_compatible: bool,
     message: String,
     profile_id: String,
     profile_name: String,
@@ -3330,7 +3333,7 @@ fn decode_runtime_event_line(bytes: &[u8]) -> String {
 fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
     if let Some(python) = std::env::var_os("DRPA_RUNTIME_PYTHON") {
         let python = PathBuf::from(python);
-        let (browser, browser_lease) = resolve_preferred_browser_with_lease()?;
+        let (browser, browser_lease) = resolve_preferred_browser_with_lease(paths)?;
         return Ok(RuntimeEnvironment {
             python: python.clone(),
             python_path: std::env::var_os("DRPA_RUNTIME_PYTHONPATH").map(PathBuf::from),
@@ -3378,17 +3381,18 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
             .join("vendor")
             .is_dir()
             .then(|| candidate.root.join("vendor"));
-        let (preferred_browser, browser_lease) = resolve_preferred_browser_with_lease()?;
+        let (preferred_browser, browser_lease) = resolve_preferred_browser_with_lease(paths)?;
         let browser = preferred_browser.or_else(|| {
-            (!candidate.manifest.browser_executable.trim().is_empty())
-                .then(|| {
-                    resolve_runtime_manifest_path(
-                        &candidate.root,
-                        &candidate.manifest.browser_executable,
-                    )
-                    .ok()
-                })
-                .flatten()
+            (runtime_browsers::allows_runtime_manifest_fallback(paths)
+                && !candidate.manifest.browser_executable.trim().is_empty())
+            .then(|| {
+                resolve_runtime_manifest_path(
+                    &candidate.root,
+                    &candidate.manifest.browser_executable,
+                )
+                .ok()
+            })
+            .flatten()
         });
         return Ok(RuntimeEnvironment {
             python,
@@ -3417,7 +3421,7 @@ fn locate_runtime(paths: &AppPaths) -> Result<RuntimeEnvironment, String> {
         if source.is_dir() {
             let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
             let venv_python = environment_python_path(&workspace.join(".venv"));
-            let (browser, browser_lease) = resolve_preferred_browser_with_lease()?;
+            let (browser, browser_lease) = resolve_preferred_browser_with_lease(paths)?;
             return Ok(RuntimeEnvironment {
                 python: if venv_python.is_file() {
                     venv_python
@@ -3736,10 +3740,12 @@ fn inspect_runtime_status(paths: &AppPaths) -> Result<RuntimeStatus, String> {
     let candidate = selected_runtime_candidate(paths)?;
     let root = &candidate.root;
     let manifest = &candidate.manifest;
-    let browser = resolve_preferred_browser().or_else(|| {
-        (!manifest.browser_executable.trim().is_empty())
-            .then(|| resolve_runtime_manifest_path(root, &manifest.browser_executable).ok())
-            .flatten()
+    let browser_configuration = runtime_browsers::browser_configuration(paths)?;
+    let browser = resolve_preferred_browser(paths).or_else(|| {
+        (runtime_browsers::allows_runtime_manifest_fallback(paths)
+            && !manifest.browser_executable.trim().is_empty())
+        .then(|| resolve_runtime_manifest_path(root, &manifest.browser_executable).ok())
+        .flatten()
     });
     let environment_root = &candidate.environment_root;
     let python = if manifest.environment_mode == "frozen" {
@@ -3756,7 +3762,7 @@ fn inspect_runtime_status(paths: &AppPaths) -> Result<RuntimeStatus, String> {
         materialized_ready
     };
     let (state, message) = if ready {
-        if browser.is_some() {
+        if browser_configuration.automation_compatible {
             ("ready", "所选 Python Profile 与浏览器自动化入口已就绪")
         } else {
             (
@@ -3823,7 +3829,14 @@ fn inspect_runtime_status(paths: &AppPaths) -> Result<RuntimeStatus, String> {
         environment_root: environment_root.display().to_string(),
         browser_executable: browser
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "未安装可选 Chromium 浏览器组件".to_owned()),
+            .or_else(|| {
+                (!browser_configuration.active_executable.is_empty())
+                    .then(|| browser_configuration.active_executable.clone())
+            })
+            .unwrap_or_else(|| "未安装可选浏览器组件".to_owned()),
+        browser_name: browser_configuration.active_name,
+        browser_family: browser_configuration.active_family,
+        browser_automation_compatible: browser_configuration.automation_compatible,
         message: message.to_owned(),
         profile_id: candidate.profile_id,
         profile_name: candidate.profile_name,
@@ -3935,20 +3948,21 @@ fn resolve_runtime_manifest_path(root: &Path, relative: &str) -> Result<PathBuf,
     }
 }
 
-fn resolve_preferred_browser() -> Option<PathBuf> {
+fn resolve_preferred_browser(paths: &AppPaths) -> Option<PathBuf> {
     let install_root = installation_root_from_process().ok()?;
     let layout = InstallLayout::open(install_root).ok();
-    resolve_browser(layout.as_ref())
+    runtime_browsers::resolve_automation_browser(paths, layout.as_ref())
         .ok()
         .flatten()
         .map(|browser| browser.executable)
 }
 
-fn resolve_preferred_browser_with_lease()
--> Result<(Option<PathBuf>, Option<ComponentLeaseGuard>), String> {
+fn resolve_preferred_browser_with_lease(
+    paths: &AppPaths,
+) -> Result<(Option<PathBuf>, Option<ComponentLeaseGuard>), String> {
     let install_root = installation_root_from_process()?;
     let layout = InstallLayout::open(install_root).ok();
-    let browser = resolve_browser(layout.as_ref()).map_err(|error| error.to_string())?;
+    let browser = runtime_browsers::resolve_automation_browser(paths, layout.as_ref())?;
     let lease = match (&layout, browser.as_ref().map(|item| &item.source)) {
         (Some(layout), Some(BrowserSource::Component(id))) => layout
             .active_component(id)
@@ -4525,6 +4539,10 @@ pub fn run() {
             runtime_packages::list_runtime_python_packages,
             runtime_packages::install_runtime_python_package,
             runtime_packages::uninstall_runtime_python_package,
+            runtime_packages::uninstall_runtime_python_packages,
+            runtime_packages::export_runtime_profile_component,
+            runtime_browsers::list_runtime_browsers,
+            runtime_browsers::select_runtime_browser,
             system_metrics::get_system_metrics,
             get_platform_capabilities,
             initialize_runtime,

@@ -492,6 +492,7 @@ fn component_pack(context: &Context, args: &[String]) -> Result<(), String> {
             version: version.to_owned(),
             platform: platform.to_owned(),
             display_name: display_name.to_owned(),
+            description: String::new(),
             provides: provides.into_iter().map(str::to_owned).collect(),
             requires: BTreeMap::new(),
             entrypoints,

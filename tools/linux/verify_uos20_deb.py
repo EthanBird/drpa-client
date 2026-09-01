@@ -276,14 +276,16 @@ def verify_uos20_deb(deb: Path, expected_version: str, extract_root: Path) -> di
             'GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0"',
             "unset GTK_MODULES GTK3_MODULES",
             "NO_AT_BRIDGE=1",
-            "GTK_IM_MODULE=gtk-im-context-simple",
+            "DRPA_GTK_IM_MODULE",
+            "DRPA_SYSTEM_GTK_IM_CACHE",
+            "GTK_IM_MODULE=xim",
             "GDK_CORE_DEVICE_EVENTS=1",
         )
         for setting in required_gtk_isolation_settings:
             if setting not in launcher_text:
                 errors.append(f"UOS launcher is missing private-GTK isolation setting: {setting}")
-        if 'GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0:/usr/' in launcher_text:
-            errors.append("UOS launcher must not load target-system GTK modules")
+        if 'GTK_PATH="$APPDIR/usr/lib/x86_64-linux-gnu/gtk-3.0:/usr/' not in launcher_text:
+            errors.append("UOS launcher does not expose the system input-method module path")
 
     runtime_manifests = [
         path for path in app_root.rglob("manifest.json") if path.parent.name == "runtime"
